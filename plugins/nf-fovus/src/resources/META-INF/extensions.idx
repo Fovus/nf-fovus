@@ -1,2 +1,3 @@
 nextflow.fovus.HelloFactory
 nextflow.fovus.HelloExtension
+nextflow.fovus.FovusExecutor
