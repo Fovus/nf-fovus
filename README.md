@@ -27,7 +27,7 @@ See the [Nextflow documentation](https://nextflow.io/docs/latest/plugins.html) f
 
 - `plugins/nf-hello/src/resources/META-INF/MANIFEST.MF` 
     
-    Manifest file defining the plugin attributes e.g. name, version, etc. The attribute `Plugin-Class` declares the plugin main class. This class should extend the base class `nextflow.plugin.BasePlugin` e.g. `nextflow.hello.HelloPlugin`.
+    Manifest file defining the plugin attributes e.g. name, version, etc. The attribute `Plugin-Class` declares the plugin main class. This class should extend the base class `nextflow.plugin.BasePlugin` e.g. `nextflow.fovus.FovusPlugin`.
 
 - `plugins/nf-hello/src/resources/META-INF/extensions.idx`
     

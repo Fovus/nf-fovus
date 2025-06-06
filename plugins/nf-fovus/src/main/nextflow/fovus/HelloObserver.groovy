@@ -14,24 +14,29 @@
  * limitations under the License.
  */
 
-package nextflow.hello
+package nextflow.fovus
 
 import groovy.transform.CompileStatic
+import groovy.util.logging.Slf4j
 import nextflow.Session
 import nextflow.trace.TraceObserver
-import nextflow.trace.TraceObserverFactory
+
 /**
- * Implements the validation observer factory
+ * Example workflow events observer
  *
  * @author Paolo Di Tommaso <paolo.ditommaso@gmail.com>
  */
+@Slf4j
 @CompileStatic
-class HelloFactory implements TraceObserverFactory {
+class HelloObserver implements TraceObserver {
 
     @Override
-    Collection<TraceObserver> create(Session session) {
-        final result = new ArrayList()
-        result.add( new HelloObserver() )
-        return result
+    void onFlowCreate(Session session) {
+        log.info "Pipeline is starting! 🚀"
+    }
+
+    @Override
+    void onFlowComplete() {
+        log.info "Pipeline complete! 👋"
     }
 }

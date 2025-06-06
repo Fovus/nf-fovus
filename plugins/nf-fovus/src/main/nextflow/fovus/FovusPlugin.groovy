@@ -14,29 +14,21 @@
  * limitations under the License.
  */
 
-package nextflow.hello
+package nextflow.fovus
 
 import groovy.transform.CompileStatic
-import groovy.util.logging.Slf4j
-import nextflow.Session
-import nextflow.trace.TraceObserver
+import nextflow.plugin.BasePlugin
+import org.pf4j.PluginWrapper
 
 /**
- * Example workflow events observer
+ * Implements the Hello plugins entry point
  *
  * @author Paolo Di Tommaso <paolo.ditommaso@gmail.com>
  */
-@Slf4j
 @CompileStatic
-class HelloObserver implements TraceObserver {
+class FovusPlugin extends BasePlugin {
 
-    @Override
-    void onFlowCreate(Session session) {
-        log.info "Pipeline is starting! 🚀"
-    }
-
-    @Override
-    void onFlowComplete() {
-        log.info "Pipeline complete! 👋"
+    FovusPlugin(PluginWrapper wrapper) {
+        super(wrapper)
     }
 }
