@@ -40,23 +40,27 @@ class FovusJobConfig {
     }
 
     private Environment createEnvironment() {
+
+        def Containerized containerized = new Containerized()
+
         if (task.container) {
-            def imagePath = task.container
+            def imagePath = task.container ?: ""
             def engine = task.containerConfig.engine
 
             if (engine != 'docker' && engine != 'apptainer') {
                 throw new IllegalArgumentException("Unsupported container engine: ${engine}")
             }
 
-            if (engine == 'docker') {
-                return new Containerized(container: engine, imagePath: imagePath, version: "20.10.8")
+            if (engine == 'apptainer') {
+                containerized = new Containerized(container: 'Apptainer', imagePath: imagePath, version: "1.3.4")
             } else {
-                return new Containerized(container: engine, imagePath: imagePath, version: "1.3.4")
+                // Default to docker
+                containerized = new Containerized(container: 'Docker', imagePath: imagePath, version: "20.10.8")
             }
         }
 
         // TODO: Add support for adding monolithic software
-        return new Containerized(container: "Docker", imagePath: "", version: "20.10.8")
+        return new Environment(containerized: containerized)
     }
 
     private JobConstraints createJobConstraints() {
@@ -79,8 +83,10 @@ class FovusJobConfig {
             }
         }
 
-        // TODO: Add support for other configurations such as spot instances
-        return new JobConstraints(benchmarkingProfileName: benchmarkingProfileName)
+        def computingDevice = isGpuUsed ? "gpu" : "cpu"
+
+        // TODO: Add support for other configurations such as spot instances, supported architectures, etc.
+        return new JobConstraints(benchmarkingProfileName: benchmarkingProfileName, computingDevice: computingDevice)
     }
 
     private TaskConstraints createTaskConstraints() {
@@ -125,7 +131,10 @@ class FovusJobConfig {
         )
     }
 
-    void toJson() {
+    /**
+     * Save the job config to a JSON file and return the file path.
+     */
+    String toJson() {
         final workDir = task.workDir
         final jobConfigFile = workDir.resolve("${jobName}_config.json")
 
@@ -134,15 +143,21 @@ class FovusJobConfig {
         Files.write(jobConfigFile, jsonString.bytes)
 
         log.trace "[FOVUS] Job config file for ${task.name} saved to ${jobConfigFile.toString()}"
+
+        return jobConfigFile.toString()
     }
 }
 
 @Canonical
-abstract class Environment {}
+@MapConstructor
+class Environment {
+    Containerized containerized
+    Monolithic monolithic
+}
 
 @Canonical
 @MapConstructor
-class Containerized extends Environment {
+class Containerized {
     String container = "Docker"
     String version = "20.10.8"
     String imagePath = ""
@@ -150,7 +165,7 @@ class Containerized extends Environment {
 
 @Canonical
 @MapConstructor
-class Monolithic extends Environment {
+class Monolithic {
     @Canonical
     @MapConstructor
     class MonolithicSoftware {
@@ -181,8 +196,9 @@ class Constraints {
 @Canonical
 @MapConstructor
 class JobConstraints {
+    String computingDevice = "cpu"
     String benchmarkingProfileName = "Default CPU"
-    List<String> supportedCpuArchitectures = ["x86-64"]
+    List<String> supportedCpuArchitectures = ["x86-64", "arm-64"]
     boolean isHybridStrategyAllowed = false
     boolean enableHyperthreading = false
     boolean allowPreemptible = false

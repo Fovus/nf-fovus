@@ -15,12 +15,22 @@ import org.pf4j.ExtensionPoint
 @ServiceName('fovus')
 @CompileStatic
 class FovusExecutor extends Executor implements ExtensionPoint {
+
+    protected FovusConfig config
+
     /**
      * @return The monitor instance that monitor submitted Fovus jobs
      */
     @Override
     protected TaskMonitor createTaskMonitor() {
-        return TaskPollingMonitor.create(session, name, 100, Duration.of("5 sec"))
+        return TaskPollingMonitor.create(session, name, 1000, Duration.of("10 sec"))
+    }
+
+    @Override
+    protected void register() {
+        super.register()
+
+        config = new FovusConfig(session.config.navigate('fovus') as Map)
     }
 
     /**
@@ -34,6 +44,6 @@ class FovusExecutor extends Executor implements ExtensionPoint {
         assert task
         assert task.workDir
         log.trace "[FOVUS] Launching process > ${task.name} -- work folder: ${task.workDir}"
-        new FovusTaskHandler(task, this)
+        return new FovusTaskHandler(task, this)
     }
 }
