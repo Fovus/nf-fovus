@@ -132,14 +132,18 @@ class FovusTaskHandler extends TaskHandler {
 
         final jobDirectoryPath = task.workDir.getParent().toString()
         jobClient.downloadJobOutputs(jobDirectoryPath)
-        
         return true
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     protected void killTask() {
-        // TODO: Implement endpoint for terminating tasks
-        log.trace "[FOVUS] Killing job > $task"
+        assert jobId
+
+        log.trace "[FOVUS] Terminating job > $task"
+        jobClient.terminateJob(jobId)
     }
 
     @Override
