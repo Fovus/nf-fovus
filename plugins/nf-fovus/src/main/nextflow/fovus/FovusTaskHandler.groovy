@@ -129,6 +129,10 @@ class FovusTaskHandler extends TaskHandler {
         }
 
         status = TaskStatus.COMPLETED
+
+        final jobDirectoryPath = task.workDir.getParent().toString()
+        jobClient.downloadJobOutputs(jobDirectoryPath)
+        
         return true
     }
 

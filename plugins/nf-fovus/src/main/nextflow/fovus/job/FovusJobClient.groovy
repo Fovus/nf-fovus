@@ -108,6 +108,16 @@ class FovusJobClient {
         return new CliExecutionResult(exitCode: process.exitValue(), output: stdout.toString(), error: stderr.toString())
     }
 
+    public void downloadJobOutputs(String jobDirectoryPath) {
+        def downloadJobCommand = [config.getCliPath(), 'job', 'download', jobDirectoryPath,]
+
+        log.trace "[FOVUS] Download job outputs"
+        def result = executeCommand(downloadJobCommand.join(' '))
+
+        if (result.exitCode != 0) {
+            throw new RuntimeException("Failed to download Fovus job outputs: ${result.error}")
+        }
+    }
 }
 
 enum FovusJobStatus {
