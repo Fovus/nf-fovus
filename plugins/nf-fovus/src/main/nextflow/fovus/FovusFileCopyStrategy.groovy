@@ -28,44 +28,12 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
      */
     @Override
     String stageInputFile(Path path, String targetName) {
-        def fovusRemotePath = getFovusRemotePath(path)
-        if (fovusRemotePath == path) {
+        def fovusRemotePath = FovusUtil.getFovusRemotePath(executor, this.workDir, path)
+        if (fovusRemotePath == null) {
             return 'true'
         }
 
         return super.stageInputFile(fovusRemotePath, targetName)
-    }
-
-    /**
-     * Get the workDir of a file (eg, an output of a previous task) based on the workDir of the
-     * current task
-     *
-     */
-    private Path getWorkDirOfFile(Path file) {
-        final sessionWorkDir = executor.getWorkDir()
-        final relativePath = sessionWorkDir.relativize(file);
-        final fileWorkDir = sessionWorkDir.resolve(relativePath.subpath(0, 2))
-
-        return fileWorkDir
-    }
-
-    private Path getFovusRemotePath(Path path) {
-        final jobIdMap = executor.getJobIdMap()
-        final inputWorkDir = getWorkDirOfFile(path)
-
-        final jobId = jobIdMap.get(inputWorkDir.toString())
-
-        if (!jobId) {
-            // This could be a local input files, return the original path
-            return path
-        }
-
-        // Replace the workDir in path with /fovus-storage/jobs/jobId
-        final fovusStorageRemotePath = path.toString().replace(inputWorkDir.parent.toString(),
-                "/fovus-storage/jobs/$jobId")
-
-        log.trace "[FOVUS] Fovus remote path for file ${path} is ${fovusStorageRemotePath}"
-        return Path.of(fovusStorageRemotePath)
     }
 
     /**
@@ -96,7 +64,7 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
      */
     @Override
     String copyFile(String name, Path target) {
-        final targetWorkDir = getWorkDirOfFile(target)
+        final targetWorkDir = FovusUtil.getWorkDirOfFile(executor.getWorkDir(), target)
         final remoteTargetPath = target.toString().replace(targetWorkDir.parent.toString(),
                 "/compute_workspace")
 
