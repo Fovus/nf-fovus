@@ -122,7 +122,7 @@ class FovusJobConfig {
         def parallelismConfigFiles = []
 
         // Get the script file and run it
-        final runCommand = "./${TaskRun.CMD_SCRIPT}"
+        final runCommand = "./${TaskRun.CMD_RUN}"
 
         return new Workload(
                 runCommand: runCommand,
