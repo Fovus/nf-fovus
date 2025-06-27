@@ -152,7 +152,7 @@ class FovusTaskHandler extends TaskHandler {
     }
 
     protected BashWrapperBuilder createTaskWrapper() {
-        return new BashWrapperBuilder(task)
+        return new FovusScriptLauncher(task.toTaskBean(), executor)
     }
 
     @Override
@@ -164,6 +164,8 @@ class FovusTaskHandler extends TaskHandler {
         jobId = jobClient.createJob(jobConfigFilePath, jobDirectory, jobConfig.jobName)
 
         status = TaskStatus.SUBMITTED
+
+        executor.jobIdMap.put(task.workDir.toString(), jobId);
     }
 
     private int readExitFile() {
