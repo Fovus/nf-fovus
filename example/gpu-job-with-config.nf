@@ -29,7 +29,7 @@ process sayHello {
 
 process greeting {
     ext (
-        benchmarkingProfileName: 'GROMACS MD Multi-GPU', // Use the 'GROMACS MD' benchmarking profile
+        benchmarkingProfileName: 'GROMACS MD Multi GPU', // Use the 'GROMACS MD' benchmarking profile
         timeToCostPriorityRatio: '0.2/0.8',
         walltimeHours: 6
     )
@@ -38,7 +38,7 @@ process greeting {
     // A limit and a request attributes can be specified:
     // limit: The maximum number of GPUs that can be used for this task
     // request: The minimum number of GPUs that must be available
-    accelerator limit: 1, request: 4
+    accelerator limit: 4, request: 1
 
 
     cpus 4          // The number of CPUs required for this task
