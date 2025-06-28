@@ -62,7 +62,7 @@ class FovusJobConfig {
         }
 
         // TODO: Add support for adding monolithic software
-        return new Environment(containerized: containerized)
+        return new ContainerizedEnvironment(containerized: containerized)
     }
 
     private JobConstraints createJobConstraints() {
@@ -171,11 +171,18 @@ class FovusJobConfig {
     }
 }
 
+interface Environment {}
+
 @Canonical
 @MapConstructor
-class Environment {
+class ContainerizedEnvironment implements Environment {
     Containerized containerized
-    Monolithic monolithic
+}
+
+@Canonical
+@MapConstructor
+class MonolithicEnvironment implements Environment {
+    List<MonolithicSoftware> monolithicList = []
 }
 
 @Canonical
@@ -188,25 +195,19 @@ class Containerized {
 
 @Canonical
 @MapConstructor
-class Monolithic {
-    @Canonical
-    @MapConstructor
-    class MonolithicSoftware {
-        // Required fields
-        String softwareName
-        String vendorName
-        String softwareVersion
-        String licenseFeature
+class MonolithicSoftware {
+    // Required fields
+    String softwareName
+    String vendorName
+    String softwareVersion
+    String licenseFeature
 
-        // Optional fields
-        String licenseAddress
-        String licenseName
-        String licenseConsumptionProfileName
-        String licenseId
-        int licenseCountPerTask
-    }
-
-    List<MonolithicSoftware> monolithicList = []
+    // Optional fields
+    String licenseAddress
+    String licenseName
+    String licenseConsumptionProfileName
+    String licenseId
+    int licenseCountPerTask
 }
 
 @Canonical
