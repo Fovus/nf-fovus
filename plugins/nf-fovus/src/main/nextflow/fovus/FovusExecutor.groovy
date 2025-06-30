@@ -3,6 +3,8 @@ package nextflow.fovus
 import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
+import nextflow.file.FileHelper
+import nextflow.file.FileHolder
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskMonitor
 import nextflow.processor.TaskPollingMonitor
@@ -10,6 +12,9 @@ import nextflow.processor.TaskRun
 import nextflow.util.Duration
 import nextflow.util.ServiceName
 import org.pf4j.ExtensionPoint
+import nextflow.util.ArrayBag
+
+import java.nio.file.Path
 
 @Slf4j
 @ServiceName('fovus')
@@ -17,6 +22,7 @@ import org.pf4j.ExtensionPoint
 class FovusExecutor extends Executor implements ExtensionPoint {
 
     protected FovusConfig config
+    protected String taskDir
 
     /**
      * Map the local work directory with Fovus job id
@@ -50,6 +56,12 @@ class FovusExecutor extends Executor implements ExtensionPoint {
     TaskHandler createTaskHandler(TaskRun task) {
         assert task
         assert task.workDir
+        assert task.inputs
+        this.taskDir = task.getWorkDir();
+
+        log.trace "[FOVUS] Moving local files > ${task.name}"
+        FovusUtil.moveLocalFilesToTaskDir(task, this);
+
         log.trace "[FOVUS] Launching process > ${task.name} -- work folder: ${task.workDir}"
         return new FovusTaskHandler(task, this)
     }

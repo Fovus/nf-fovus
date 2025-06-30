@@ -3,6 +3,10 @@ package nextflow.fovus
 import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
+import nextflow.file.FileHelper
+import nextflow.file.FileHolder
+import nextflow.processor.TaskRun
+import nextflow.util.ArrayBag
 
 import java.nio.file.Path
 
@@ -27,6 +31,11 @@ class FovusUtil {
         return sessionWorkDir.resolve(relativeTaskWorkDir.subpath(0, 2))
     }
 
+    static String getJobId(FovusExecutor executor, Path inputWorkDir, Path path){
+        final jobIdMap = executor.getJobIdMap()
+        return jobIdMap.get(inputWorkDir.toString())
+    }
+
     /**
      * Get the Fovus remote path of a file
      *
@@ -35,15 +44,11 @@ class FovusUtil {
      * @param remoteFilePath The output file from previous task or a local input file of the current task
      * @return The Fovus remote path start with /fovus-storage if the file is remote. Otherwise, return null.
      */
-    static Path getFovusRemotePath(FovusExecutor executor, Path currentTaskWorkDir, Path remoteFilePath) {
-        final jobIdMap = executor.getJobIdMap()
+    static Path getFovusRemotePath(FovusExecutor executor, Path remoteFilePath) {
         final inputWorkDir = getWorkDirOfFile(executor.getWorkDir(), remoteFilePath)
-
-        final jobId = jobIdMap.get(inputWorkDir.toString())
-
-        if (!jobId) {
-            // This could be a local input files, return the original path
-            return null
+        final jobId = getJobId(executor, inputWorkDir, remoteFilePath)
+        if(jobId == null){
+            return null;
         }
 
         final fovusStorageRemotePath = remoteFilePath.toString().replace(inputWorkDir.parent.toString(), "/fovus-storage/jobs/$jobId")
@@ -70,7 +75,35 @@ class FovusUtil {
             return false
         }
 
-        final fovusRemotePath = getFovusRemotePath(executor, currentTaskWorkDir, remoteFilePath)
+        final fovusRemotePath = getFovusRemotePath(executor, remoteFilePath)
         return fovusRemotePath != null
+    }
+
+    /**
+     * Method to move local input files under task directory
+     */
+    static boolean moveLocalFilesToTaskDir(TaskRun task, FovusExecutor executor) {
+        final jobIdMap = executor.getJobIdMap()
+
+        log.trace "[FOVUS] Task Inputs: ${task.inputs}";
+        for( def it : task.inputs ) {
+            if( it.value instanceof ArrayBag){
+                def fileHolderList = it.value;
+                fileHolderList.each { item ->
+                    if(item instanceof FileHolder){
+                        final inputWorkDir = getWorkDirOfFile(executor.getWorkDir(), item.storePath)
+                        final jobId = jobIdMap.get(inputWorkDir.toString())
+                        if (jobId) {
+                            log.trace "[FOVUS] filepath ${item.storePath} belongs to jobId: ${jobId}";
+                            return
+                        }
+                        def fileName = item.storePath.toString().split("/")[-1];
+                        def newPath = Path.of("${task.workDir}/${fileName}");
+                        log.trace "[FOVUS] Moving file: ${item.storePath} to ${newPath}";
+                        FileHelper.copyPath(item.storePath, newPath);
+                    }
+                }
+            }
+        }
     }
 }

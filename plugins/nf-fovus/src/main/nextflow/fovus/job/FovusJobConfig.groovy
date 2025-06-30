@@ -36,7 +36,7 @@ class FovusJobConfig {
 
         this.constraints = new Constraints(jobConstraints: jobConstraints, taskConstraints: taskConstraints)
         this.workload = createWorkload()
-        this.jobName = task.name
+        this.jobName = normalizeJobName(task.name)
     }
 
     private Environment createEnvironment() {
@@ -139,7 +139,7 @@ class FovusJobConfig {
      */
     String toJson() {
         final workDir = task.workDir
-        final jobConfigFile = workDir.resolve("${jobName}_config.json")
+        final jobConfigFile = workDir.resolve("job_config.json")
 
         // Write the job config to a file
         def jsonString = JsonOutput.prettyPrint(JsonOutput.toJson(this))
@@ -149,6 +149,17 @@ class FovusJobConfig {
 
         return jobConfigFile.toString()
     }
+    /**
+     * Remove invalid characters from a job name string
+     *
+     * @param name A job name containing possible invalid character
+     * @return A job name without invalid characters
+     */
+    protected String normalizeJobName(String name) {
+        def result = name.replaceAll(' ','_').replaceAll(/[^a-zA-Z0-9_-]/,'')
+        result.size()>128 ? result.substring(0,128) : result
+    }
+
 }
 
 interface Environment {}

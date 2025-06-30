@@ -1,46 +1,51 @@
 process sayHello {
 
 //     publishDir 'results', mode: 'copy'
+    input:
+        path helloInput
     output:
         path 'output1.txt'
 
     script:
     """
-    echo "Hello, World!" > output1.txt
+    echo "Hello" > output1.txt
+    ls -la
+    cd Hello-Workload
+    ls -la
+    ./hello.sh
+    cat text.out
     """
 }
 
-// process sayGoodbye {
-//
+
+process sayWorld {
+
 //     publishDir 'results', mode: 'copy'
-//     output:
-//         path 'output2.txt'
-//
-//     script:
-//     """
-//     echo "Goodbye, World!" > output2.txt
-//     """
-// }
-//
-// process greeting {
-//     publishDir 'results', mode: 'copy'
-//
-//     input:
-//         path "output1.txt"
-//         path "output2.txt"
-//
-//
-//     output:
-//         path 'output3.txt'
-//
-//     script:
-//     """
-//     cat output1.txt output2.txt > output3.txt
-//     """
-// }
+    input:
+        path worldInput
+        path helloOutput
+    output:
+        path 'output2.txt'
+
+    script:
+    """
+    echo "World" > output2.txt
+    ls -la
+    cat output1.txt
+    cd World-Workload
+    ls -la
+    ./hello.sh
+    cat text.out
+    ls -la
+    echo "World!" > output1.txt
+    """
+}
+
+
 
 workflow {
-    hello = sayHello()
-//     goodbye = sayGoodbye()
-//     greeting(hello, goodbye)
+    def helloInput = file("/root/Jashmin/Code/Nextflow-Plugin/nf-fovus/example/Hello-Workload")
+    def helloOutput = sayHello(helloInput)
+    def worldInput = file("/root/Jashmin/Code/Nextflow-Plugin/nf-fovus/example/World-Workload")
+    sayWorld(worldInput, helloOutput)
 }
