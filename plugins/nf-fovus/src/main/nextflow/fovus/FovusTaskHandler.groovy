@@ -64,6 +64,8 @@ class FovusTaskHandler extends TaskHandler {
         this.traceFile = task.workDir.resolve(TaskRun.CMD_TRACE)
 
         this.jobConfig = new FovusJobConfig(task)
+        jobConfig.skipRemoteInputSync(executor)
+        
         this.jobClient = new FovusJobClient(executor.config, jobConfig)
     }
 

@@ -5,6 +5,8 @@ import groovy.transform.Canonical
 import groovy.transform.CompileStatic
 import groovy.transform.MapConstructor
 import groovy.util.logging.Slf4j
+import nextflow.fovus.FovusExecutor
+import nextflow.fovus.FovusUtil
 import nextflow.processor.TaskRun
 
 import java.nio.file.Files
@@ -129,6 +131,24 @@ class FovusJobConfig {
                 remoteInputsForAllTasks: remoteInputsForAllTasks,
                 parallelismConfigFiles: parallelismConfigFiles
         )
+    }
+
+
+    /**
+     * Skip syncing input files (eg, outputs from previous jobs) to remote storage
+     */
+    void skipRemoteInputSync(FovusExecutor executor) {
+        task.getInputFilesMap().each { stageName, filePath ->
+            {
+                final isRemoteFile = FovusUtil.isFovusRemoteFile(executor, task.workDir, filePath)
+                if (isRemoteFile) {
+                    workload.outputFileOption = 'exclude'
+                    workload.outputFileList = []
+                    workload.outputFileList << stageName
+                }
+            }
+        }
+
     }
 
     /**
