@@ -156,7 +156,7 @@ class FovusJobConfig {
      * @return A job name without invalid characters
      */
     protected String normalizeJobName(String name) {
-        def result = name.replaceAll(' ','_').replaceAll(/[^a-zA-Z0-9_-]/,'')
+        def result = name.replaceAll(' ','_').replaceAll(':', '-').replaceAll(/[^a-zA-Z0-9_-]/,'')
         result.size()>128 ? result.substring(0,128) : result
     }
 

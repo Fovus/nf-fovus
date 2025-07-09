@@ -5,6 +5,8 @@ import groovy.transform.MapConstructor
 import groovy.util.logging.Slf4j
 import nextflow.fovus.FovusConfig
 
+import java.nio.file.Path
+
 
 /**
  * Client for executing Fovus CLI commands
@@ -20,11 +22,16 @@ class FovusJobClient {
         this.jobConfig = jobConfig
     }
 
-    String createJob(String jobConfigFilePath, String jobDirectory, String jobName = null) {
+    String createJob(String jobConfigFilePath, String jobDirectory, String jobName = null, isArrayJob = false) {
         def command = [config.getCliPath(), 'job', 'create', jobConfigFilePath, jobDirectory]
         if (jobName) {
             command << "--job-name"
             command << jobName
+        }
+
+        if (isArrayJob) {
+            command << "--exclude-paths"
+            command << ".*,job_config.json"
         }
 
         def result = executeCommand(command.join(' '))
@@ -108,8 +115,17 @@ class FovusJobClient {
         return new CliExecutionResult(exitCode: process.exitValue(), output: stdout.toString(), error: stderr.toString())
     }
 
-    public void downloadJobOutputs(String jobDirectoryPath) {
-        def downloadJobCommand = [config.getCliPath(), 'job', 'download', jobDirectoryPath,]
+
+    public void downloadTaskOutput(String jobId, Path taskDirectoryPath) {
+        final taskName = taskDirectoryPath.getFileName().toString();
+        def downloadJobCommand = [
+                config.getCliPath(),
+                'job',
+                'download',
+                taskDirectoryPath.getParent().toString(),
+                '--job-id', jobId,
+                '--include-paths', "${taskName}/*"
+        ]
 
         log.trace "[FOVUS] Download job outputs"
         def result = executeCommand(downloadJobCommand.join(' '))
