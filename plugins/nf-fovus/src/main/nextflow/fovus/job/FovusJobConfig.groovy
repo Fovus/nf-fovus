@@ -32,7 +32,7 @@ class FovusJobConfig {
         this.environment = createEnvironment()
 
         def jobConstraints = createJobConstraints()
-        def taskConstraints = createTaskConstraints()
+        def taskConstraints = createTaskConstraints(jobConstraints.enableHyperthreading)
 
         this.objective = createObjective()
 
@@ -62,7 +62,7 @@ class FovusJobConfig {
         }
 
         // TODO: Add support for adding monolithic software
-        return new Environment(containerized: containerized)
+        return new ContainerizedEnvironment(containerized: containerized)
     }
 
     private JobConstraints createJobConstraints() {
@@ -70,8 +70,10 @@ class FovusJobConfig {
         final accelerator = task.config.getAccelerator()
 
         def isGpuUsed = false
-        if (accelerator && accelerator.type) {
-            log.warn "Ignoring task ${task.lazyName()} accelerator type ${accelerator.type} - Fovus only supports GPU accelerators"
+        if (accelerator) {
+            if (accelerator.type) {
+                log.warn "Ignoring task ${task.lazyName()} accelerator type ${accelerator.type} - " + "Fovus only supports GPU accelerators"
+            }
             isGpuUsed = true
         }
 
@@ -85,13 +87,12 @@ class FovusJobConfig {
             }
         }
 
-        def computingDevice = isGpuUsed ? "gpu" : "cpu"
-
+        def computingDevice = isGpuUsed ? "cpu+gpu" : "cpu"
         // TODO: Add support for other configurations such as spot instances, supported architectures, etc.
         return new JobConstraints(benchmarkingProfileName: benchmarkingProfileName, computingDevice: computingDevice)
     }
 
-    private TaskConstraints createTaskConstraints() {
+    private TaskConstraints createTaskConstraints(Boolean isHyperthreadingEnabled = false) {
         final cpus = task.config.getCpus()
         final memory = task.config.getMemory()
         final extension = task.config.get('ext') as Map<String, Object>
@@ -99,16 +100,18 @@ class FovusJobConfig {
 
         final accelerator = task.config.getAccelerator()
 
-        return new TaskConstraints(
+        def taskConstraints = new TaskConstraints(
                 minvCpu: cpus,
                 maxvCpu: cpus,
                 minvCpuMemGiB: memory?.toGiga()?.toInteger() ?: 8,
                 minGpu: accelerator?.request ?: 0,
-                maxGpu: accelerator?.request ?: 0,
+                maxGpu: accelerator?.limit ?: accelerator?.request ?: 0,
                 minGpuMemGiB: (extension?.minGpuMemGiB ?: 8) as Integer,
                 storageGiB: storage?.toGiga()?.toInteger() ?: 100,
                 walltimeHours: (extension?.walltimeHours ?: 3) as Integer
-        )
+        ).overrideCpuConstraints(isHyperthreadingEnabled)
+
+        return taskConstraints
     }
 
     private Objective createObjective() {
@@ -168,11 +171,18 @@ class FovusJobConfig {
     }
 }
 
+interface Environment {}
+
 @Canonical
 @MapConstructor
-class Environment {
+class ContainerizedEnvironment implements Environment {
     Containerized containerized
-    Monolithic monolithic
+}
+
+@Canonical
+@MapConstructor
+class MonolithicEnvironment implements Environment {
+    List<MonolithicSoftware> monolithicList = []
 }
 
 @Canonical
@@ -185,25 +195,19 @@ class Containerized {
 
 @Canonical
 @MapConstructor
-class Monolithic {
-    @Canonical
-    @MapConstructor
-    class MonolithicSoftware {
-        // Required fields
-        String softwareName
-        String vendorName
-        String softwareVersion
-        String licenseFeature
+class MonolithicSoftware {
+    // Required fields
+    String softwareName
+    String vendorName
+    String softwareVersion
+    String licenseFeature
 
-        // Optional fields
-        String licenseAddress
-        String licenseName
-        String licenseConsumptionProfileName
-        String licenseId
-        int licenseCountPerTask
-    }
-
-    List<MonolithicSoftware> monolithicList = []
+    // Optional fields
+    String licenseAddress
+    String licenseName
+    String licenseConsumptionProfileName
+    String licenseId
+    int licenseCountPerTask
 }
 
 @Canonical
@@ -239,6 +243,25 @@ class TaskConstraints {
     boolean isSingleThreadedTask = false
     boolean scalableParallelism = false
     boolean parallelismOptimization = false
+
+    /**
+     * Override the configurations based on whether GPU is used and hyperthreading is enabled
+     */
+    TaskConstraints overrideCpuConstraints(Boolean isHyperthreadingEnabled) {
+        def requiredMinCpu = minGpu > 0 ? 2 : 1
+        if (isHyperthreadingEnabled) {
+            requiredMinCpu = requiredMinCpu * 2
+        }
+
+        if (minvCpu >= requiredMinCpu) return this;
+
+        minvCpu = requiredMinCpu
+        if (maxvCpu < requiredMinCpu) {
+            maxvCpu = requiredMinCpu
+        }
+
+        return this
+    }
 }
 
 @Canonical
