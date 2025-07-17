@@ -118,6 +118,15 @@ class FovusJobClient {
             throw new RuntimeException("Failed to download Fovus job outputs: ${result.error}")
         }
     }
+
+    public void terminateJob(String jobId) {
+        def command = [config.getCliPath(), 'job', 'terminate', '--job-id', jobId]
+        def result = executeCommand(command.join(' '))
+
+        if (result.exitCode != 0) {
+            throw new RuntimeException("Failed to terminate Fovus job: ${result.error}")
+        }
+    }
 }
 
 enum FovusJobStatus {
