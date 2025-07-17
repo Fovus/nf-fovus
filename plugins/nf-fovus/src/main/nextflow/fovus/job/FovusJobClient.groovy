@@ -5,6 +5,8 @@ import groovy.transform.MapConstructor
 import groovy.util.logging.Slf4j
 import nextflow.fovus.FovusConfig
 
+import java.nio.file.Path
+
 
 /**
  * Client for executing Fovus CLI commands
@@ -20,11 +22,16 @@ class FovusJobClient {
         this.jobConfig = jobConfig
     }
 
-    String createJob(String jobConfigFilePath, String jobDirectory, String jobName = null) {
+    String createJob(String jobConfigFilePath, String jobDirectory, String jobName = null, isArrayJob = false) {
         def command = [config.getCliPath(), 'job', 'create', jobConfigFilePath, jobDirectory]
         if (jobName) {
             command << "--job-name"
             command << jobName
+        }
+
+        if (isArrayJob) {
+            command << "--exclude-paths"
+            command << ".*,job_config.json"
         }
 
         def result = executeCommand(command.join(' '))

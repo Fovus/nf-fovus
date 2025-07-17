@@ -3,6 +3,12 @@ package nextflow.fovus
 import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
+import nextflow.file.FileHelper
+import nextflow.file.FileHolder
+import nextflow.processor.TaskArrayRun
+import nextflow.processor.TaskHandler
+import nextflow.processor.TaskRun
+import nextflow.util.ArrayBag
 
 import java.nio.file.Path
 
@@ -70,7 +76,51 @@ class FovusUtil {
             return false
         }
 
-        final fovusRemotePath = getFovusRemotePath(executor, currentTaskWorkDir, remoteFilePath)
+        final fovusRemotePath = getFovusRemotePath(executor, remoteFilePath)
         return fovusRemotePath != null
+    }
+
+    /**
+     * Method to move local input files under task directory
+     */
+    static boolean moveLocalFilesToTaskDir(TaskRun task, FovusExecutor executor) {
+        final jobIdMap = executor.getJobIdMap()
+
+        log.trace "[FOVUS] Task Inputs: ${task.inputs}";
+        for( def it : task.inputs ) {
+            if( it.value instanceof ArrayBag){
+                def fileHolderList = it.value;
+                fileHolderList.each { item ->
+                    if(item instanceof FileHolder){
+                        final inputWorkDir = getWorkDirOfFile(executor.getWorkDir(), item.storePath)
+                        final jobId = jobIdMap.get(inputWorkDir.toString())
+                        if (jobId) {
+                            log.trace "[FOVUS] filepath ${item.storePath} belongs to jobId: ${jobId}";
+                            return
+                        }
+                        def fileName = item.storePath.toString().split("/")[-1];
+                        def newPath = Path.of("${task.workDir}/${fileName}");
+                        log.trace "[FOVUS] Moving file: ${item.storePath} to ${newPath}";
+                        FileHelper.copyPath(item.storePath, newPath);
+                    }
+                }
+            }
+        }
+    }
+
+    static boolean copyFilesToTaskForArray(TaskArrayRun task) {
+        def destination =  task.workDir.toString();
+        def sourcePaths = new ArrayList<String>();
+
+        for(TaskHandler taskHandler : task.getChildren()){
+            sourcePaths.add(taskHandler.getTask().workDir.toString())
+        }
+
+        log.trace "[FOVUS] sourcePaths-> $sourcePaths";
+        log.trace "[FOVUS] destination-> $destination";
+        for( String sourcePath : sourcePaths ) {
+            def dirName = sourcePath.split("/")[-1];
+            FileHelper.copyPath(Path.of(sourcePath), Path.of("${destination}/${dirName}"));
+        }
     }
 }

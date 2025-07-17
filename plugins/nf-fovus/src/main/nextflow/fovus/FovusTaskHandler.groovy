@@ -6,6 +6,7 @@ import nextflow.executor.BashWrapperBuilder
 import nextflow.fovus.job.FovusJobClient
 import nextflow.fovus.job.FovusJobConfig
 import nextflow.fovus.job.FovusJobStatus
+import nextflow.processor.TaskArrayRun
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskRun
 import nextflow.processor.TaskStatus
@@ -160,12 +161,15 @@ class FovusTaskHandler extends TaskHandler {
     @Override
     void submit() {
         final jobConfigFilePath = jobConfig.toJson()
-        final jobDirectory = task.workDir.getParent().toString()
+        final isTaskArrayRun = task instanceof TaskArrayRun;
+        def jobDirectory = task.workDir.getParent().toString();
 
+        if(isTaskArrayRun){
+            jobDirectory = task.workDir.toString();
+        }
         log.trace "[FOVUS] Submitting job > $task"
-        jobId = jobClient.createJob(jobConfigFilePath, jobDirectory, jobConfig.jobName)
-
-        status = TaskStatus.SUBMITTED
+        jobId = jobClient.createJob(jobConfigFilePath, jobDirectory, jobConfig.jobName, isTaskArrayRun)
+        updateStatus(jobId)
 
         executor.jobIdMap.put(task.workDir.toString(), jobId);
     }
@@ -180,6 +184,21 @@ class FovusTaskHandler extends TaskHandler {
         }
     }
 
+    protected void updateStatus(String jobId) {
+        if( task instanceof TaskArrayRun ) {
+            // update status for children tasks
+            for( int i=0; i<task.children.size(); i++ ) {
+                final handler = task.children[i] as FovusTaskHandler
+                //TODO: pass task id after adding check task status endpoint
+                handler.updateStatus(jobId)
+            }
+        }
+        else {
+            this.jobId = jobId
+            this.status = TaskStatus.SUBMITTED
+        }
+    }
+
     boolean isNew() { return status == NEW }
 
     boolean isSubmitted() { return status == SUBMITTED }
@@ -189,4 +208,15 @@ class FovusTaskHandler extends TaskHandler {
     boolean isCompleted() { return status == COMPLETED }
 
     boolean isActive() { status == SUBMITTED || status == RUNNING }
+
+    protected String normalizeJobName(String name) {
+        def result = name.replaceAll(' ','_').replaceAll(/[^a-zA-Z0-9_-]/,'')
+        result.size()>128 ? result.substring(0,128) : result
+    }
+
+    protected String getJobName(TaskRun task) {
+        final result = prependWorkflowPrefix(task.name, environment)
+        return normalizeJobName(result)
+    }
+
 }
