@@ -64,6 +64,8 @@ class FovusTaskHandler extends TaskHandler {
         this.traceFile = task.workDir.resolve(TaskRun.CMD_TRACE)
 
         this.jobConfig = new FovusJobConfig(task)
+        jobConfig.skipRemoteInputSync(executor)
+        
         this.jobClient = new FovusJobClient(executor.config, jobConfig)
     }
 
@@ -152,7 +154,7 @@ class FovusTaskHandler extends TaskHandler {
     }
 
     protected BashWrapperBuilder createTaskWrapper() {
-        return new BashWrapperBuilder(task)
+        return new FovusScriptLauncher(task.toTaskBean(), executor)
     }
 
     @Override
@@ -164,6 +166,8 @@ class FovusTaskHandler extends TaskHandler {
         jobId = jobClient.createJob(jobConfigFilePath, jobDirectory, jobConfig.jobName)
 
         status = TaskStatus.SUBMITTED
+
+        executor.jobIdMap.put(task.workDir.toString(), jobId);
     }
 
     private int readExitFile() {

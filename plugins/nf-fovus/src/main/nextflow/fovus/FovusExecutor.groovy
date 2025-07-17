@@ -19,6 +19,13 @@ class FovusExecutor extends Executor implements ExtensionPoint {
     protected FovusConfig config
 
     /**
+     * Map the local work directory with Fovus job id
+     */
+    volatile Map<String, String> jobIdMap = [:]
+
+    Map<String, String> getJobIdMap() { jobIdMap }
+
+    /**
      * @return The monitor instance that monitor submitted Fovus jobs
      */
     @Override
