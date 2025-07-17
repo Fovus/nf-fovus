@@ -1,4 +1,4 @@
-package nextflow.hello
+package nextflow.fovus
 
 import java.nio.file.Files
 import java.util.jar.Manifest
@@ -66,7 +66,7 @@ class HelloDslTest extends Dsl2Spec{
     def 'should perform a hi and create a channel' () {
         when:
         def SCRIPT = '''
-            include {reverse} from 'plugin/nf-hello'
+            include {reverse} from 'plugin/nf-fovus'
             channel.reverse('hi!') 
             '''
         and:
@@ -79,7 +79,7 @@ class HelloDslTest extends Dsl2Spec{
     def 'should store a goodbye' () {
         when:
         def SCRIPT = '''
-            include {goodbye} from 'plugin/nf-hello'
+            include {goodbye} from 'plugin/nf-fovus'
             channel
                 .of('folks')
                 .goodbye() 
@@ -95,7 +95,7 @@ class HelloDslTest extends Dsl2Spec{
     def 'can use an imported function' () {
         when:
         def SCRIPT = '''
-            include {randomString} from 'plugin/nf-hello'
+            include {randomString} from 'plugin/nf-fovus'
             channel
                 .of( randomString(20) )                
             '''

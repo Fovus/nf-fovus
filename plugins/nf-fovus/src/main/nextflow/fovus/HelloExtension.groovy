@@ -1,4 +1,4 @@
-package nextflow.hello
+package nextflow.fovus
 
 
 import groovy.transform.CompileStatic
