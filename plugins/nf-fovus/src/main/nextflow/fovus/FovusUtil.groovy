@@ -33,11 +33,6 @@ class FovusUtil {
         return sessionWorkDir.resolve(relativeTaskWorkDir.subpath(0, 2))
     }
 
-    static String getJobId(FovusExecutor executor, Path inputWorkDir, Path path){
-        final jobIdMap = executor.getJobIdMap()
-        return jobIdMap.get(inputWorkDir.toString())
-    }
-
     /**
      * Get the Fovus remote path of a file
      *
@@ -46,11 +41,15 @@ class FovusUtil {
      * @param remoteFilePath The output file from previous task or a local input file of the current task
      * @return The Fovus remote path start with /fovus-storage if the file is remote. Otherwise, return null.
      */
-    static Path getFovusRemotePath(FovusExecutor executor, Path remoteFilePath) {
+    static Path getFovusRemotePath(FovusExecutor executor, Path currentTaskWorkDir, Path remoteFilePath) {
+        final jobIdMap = executor.getJobIdMap()
         final inputWorkDir = getWorkDirOfFile(executor.getWorkDir(), remoteFilePath)
-        final jobId = getJobId(executor, inputWorkDir, remoteFilePath)
-        if(jobId == null){
-            return null;
+
+        final jobId = jobIdMap.get(inputWorkDir.toString())
+
+        if (!jobId) {
+            // This could be a local input files, return the original path
+            return null
         }
 
         final fovusStorageRemotePath = remoteFilePath.toString().replace(inputWorkDir.parent.toString(), "/fovus-storage/jobs/$jobId")

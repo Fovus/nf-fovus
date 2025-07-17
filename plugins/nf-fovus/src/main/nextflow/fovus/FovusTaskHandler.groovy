@@ -63,7 +63,10 @@ class FovusTaskHandler extends TaskHandler {
         this.exitFile = task.workDir.resolve(TaskRun.CMD_EXIT)
         this.wrapperFile = task.workDir.resolve(TaskRun.CMD_RUN)
         this.traceFile = task.workDir.resolve(TaskRun.CMD_TRACE)
+
         this.jobConfig = new FovusJobConfig(task)
+        jobConfig.skipRemoteInputSync(executor)
+        
         this.jobClient = new FovusJobClient(executor.config, jobConfig)
     }
 
@@ -72,9 +75,7 @@ class FovusTaskHandler extends TaskHandler {
      */
     @Override
     boolean checkIfRunning() {
-
-        log.trace "[FOVUS] Checking jobId > $jobId"
-        if (jobId == null || !isSubmitted()) {
+        if (!jobId || !isSubmitted()) {
             return false
         }
 
@@ -82,7 +83,7 @@ class FovusTaskHandler extends TaskHandler {
         final isRunning = jobStatus in RUNNING_STATUSES
 
         if (isRunning) {
-            this.setStatus(TaskStatus.RUNNING)
+            status = TaskStatus.RUNNING
         }
 
         return isRunning
@@ -91,6 +92,8 @@ class FovusTaskHandler extends TaskHandler {
 
     @Override
     boolean checkIfCompleted() {
+        assert jobId
+
         if (isCompleted()) {
             return true
         }
@@ -130,8 +133,8 @@ class FovusTaskHandler extends TaskHandler {
 
         status = TaskStatus.COMPLETED
 
-        log.trace "[FOVUS] Fovus task is completed > $status"
-        jobClient.downloadTaskOutput(jobId, task.workDir)
+        final jobDirectoryPath = task.workDir.getParent().toString()
+        jobClient.downloadJobOutputs(jobDirectoryPath)
         return true
     }
 

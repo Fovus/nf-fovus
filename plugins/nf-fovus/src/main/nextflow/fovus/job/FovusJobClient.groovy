@@ -115,17 +115,8 @@ class FovusJobClient {
         return new CliExecutionResult(exitCode: process.exitValue(), output: stdout.toString(), error: stderr.toString())
     }
 
-
-    public void downloadTaskOutput(String jobId, Path taskDirectoryPath) {
-        final taskName = taskDirectoryPath.getFileName().toString();
-        def downloadJobCommand = [
-                config.getCliPath(),
-                'job',
-                'download',
-                taskDirectoryPath.getParent().toString(),
-                '--job-id', jobId,
-                '--include-paths', "${taskName}/*"
-        ]
+    public void downloadJobOutputs(String jobDirectoryPath) {
+        def downloadJobCommand = [config.getCliPath(), 'job', 'download', jobDirectoryPath,]
 
         log.trace "[FOVUS] Download job outputs"
         def result = executeCommand(downloadJobCommand.join(' '))

@@ -14,16 +14,12 @@ import nextflow.util.Duration
 import nextflow.util.ServiceName
 import org.pf4j.ExtensionPoint
 
-import java.nio.file.Path
-
-
 @Slf4j
 @ServiceName('fovus')
 @CompileStatic
-class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecutor {
+class FovusExecutor extends Executor implements ExtensionPoint {
 
     protected FovusConfig config
-    protected String taskDir
 
     /**
      * Map the local work directory with Fovus job id
