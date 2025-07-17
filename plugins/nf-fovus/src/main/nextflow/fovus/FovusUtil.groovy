@@ -5,6 +5,8 @@ import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
 import nextflow.file.FileHelper
 import nextflow.file.FileHolder
+import nextflow.processor.TaskArrayRun
+import nextflow.processor.TaskHandler
 import nextflow.processor.TaskRun
 import nextflow.util.ArrayBag
 
@@ -104,6 +106,22 @@ class FovusUtil {
                     }
                 }
             }
+        }
+    }
+
+    static boolean copyFilesToTaskForArray(TaskArrayRun task) {
+        def destination =  task.workDir.toString();
+        def sourcePaths = new ArrayList<String>();
+
+        for(TaskHandler taskHandler : task.getChildren()){
+            sourcePaths.add(taskHandler.getTask().workDir.toString())
+        }
+
+        log.trace "[FOVUS] sourcePaths-> $sourcePaths";
+        log.trace "[FOVUS] destination-> $destination";
+        for( String sourcePath : sourcePaths ) {
+            def dirName = sourcePath.split("/")[-1];
+            FileHelper.copyPath(Path.of(sourcePath), Path.of("${destination}/${dirName}"));
         }
     }
 }
