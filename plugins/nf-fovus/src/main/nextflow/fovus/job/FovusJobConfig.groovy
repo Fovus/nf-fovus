@@ -5,6 +5,8 @@ import groovy.transform.Canonical
 import groovy.transform.CompileStatic
 import groovy.transform.MapConstructor
 import groovy.util.logging.Slf4j
+import nextflow.fovus.FovusExecutor
+import nextflow.fovus.FovusUtil
 import nextflow.processor.TaskRun
 
 import java.nio.file.Files
@@ -76,7 +78,6 @@ class FovusJobConfig {
         }
 
         def benchmarkingProfileName = extension?.benchmarkingProfileName
-
         if (!benchmarkingProfileName) {
             if (isGpuUsed) {
                 benchmarkingProfileName = "Default GPU"
@@ -85,7 +86,11 @@ class FovusJobConfig {
             }
         }
 
+
+
         def computingDevice = isGpuUsed ? "cpu+gpu" : "cpu"
+
+
         // TODO: Add support for other configurations such as spot instances, supported architectures, etc.
         return new JobConstraints(benchmarkingProfileName: benchmarkingProfileName, computingDevice: computingDevice)
     }

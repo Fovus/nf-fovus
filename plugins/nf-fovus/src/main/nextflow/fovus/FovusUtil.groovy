@@ -41,12 +41,10 @@ class FovusUtil {
      * @param remoteFilePath The output file from previous task or a local input file of the current task
      * @return The Fovus remote path start with /fovus-storage if the file is remote. Otherwise, return null.
      */
-    static Path getFovusRemotePath(FovusExecutor executor, Path currentTaskWorkDir, Path remoteFilePath) {
-        final jobIdMap = executor.getJobIdMap()
+    static Path getFovusRemotePath(FovusExecutor executor, Path remoteFilePath) {
         final inputWorkDir = getWorkDirOfFile(executor.getWorkDir(), remoteFilePath)
 
-        final jobId = jobIdMap.get(inputWorkDir.toString())
-
+        def jobId = getJobId(executor, inputWorkDir, remoteFilePath)
         if (!jobId) {
             // This could be a local input files, return the original path
             return null
@@ -66,6 +64,11 @@ class FovusUtil {
      */
     static boolean isStageFile(Executor executor, Path filePath) {
         return filePath.toAbsolutePath().normalize().startsWith(executor.getStageDir())
+    }
+
+    static String getJobId(FovusExecutor executor, Path inputWorkDir, Path remoteFilePath){
+        final jobIdMap = executor.getJobIdMap()
+        return jobIdMap.get(inputWorkDir.toString())
     }
 
     /**

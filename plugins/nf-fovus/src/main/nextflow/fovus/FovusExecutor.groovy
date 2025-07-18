@@ -4,7 +4,6 @@ import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
 import nextflow.executor.TaskArrayExecutor
-import nextflow.file.FileHelper
 import nextflow.processor.TaskArrayRun
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskMonitor
@@ -17,7 +16,7 @@ import org.pf4j.ExtensionPoint
 @Slf4j
 @ServiceName('fovus')
 @CompileStatic
-class FovusExecutor extends Executor implements ExtensionPoint {
+class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecutor {
 
     protected FovusConfig config
 
@@ -53,7 +52,6 @@ class FovusExecutor extends Executor implements ExtensionPoint {
     TaskHandler createTaskHandler(TaskRun task) {
         assert task
         assert task.workDir
-        this.taskDir = task.getWorkDir();
 
         if(task.inputs.size() > 0){
             log.trace "[FOVUS] Moving local files > ${task}"
@@ -85,6 +83,6 @@ class FovusExecutor extends Executor implements ExtensionPoint {
 
     @Override
     String getArrayLaunchCommand(String taskDir) {
-        return TaskArrayExecutor.super.getArrayLaunchCommand(taskDir)
+        return TaskArrayExecutor.super.getArrayLaunchCommand(taskDir);
     }
 }
