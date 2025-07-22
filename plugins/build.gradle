@@ -66,6 +66,13 @@ subprojects {
         mavenCentral()
     }
 
+    dependencies {
+        implementation 'com.fasterxml.jackson.core:jackson-core:2.17.0'
+        implementation 'com.fasterxml.jackson.core:jackson-annotations:2.17.0'
+        implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.0'
+    }
+
+
     version = metaFromManifest('Plugin-Version',file('src/resources/META-INF/MANIFEST.MF'))
 
     tasks.withType(Jar) {
@@ -176,3 +183,5 @@ task publishIndex( type: io.nextflow.gradle.tasks.GithubRepositoryPublisher ) {
     githubEmail = github_commit_email
     githubToken = github_access_token
 }
+
+

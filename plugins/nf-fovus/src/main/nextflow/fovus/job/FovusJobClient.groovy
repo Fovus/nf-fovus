@@ -23,7 +23,7 @@ class FovusJobClient {
     }
 
     String createJob(String jobConfigFilePath, String jobDirectory, String jobName = null, isArrayJob = false) {
-        def command = [config.getCliPath(), 'job', 'create', jobConfigFilePath, jobDirectory]
+        def command = [config.getCliPath(), '--silence', '--nextflow', 'job', 'create', jobConfigFilePath, jobDirectory]
         if (jobName) {
             command << "--job-name"
             command << jobName
@@ -115,8 +115,8 @@ class FovusJobClient {
         return new CliExecutionResult(exitCode: process.exitValue(), output: stdout.toString(), error: stderr.toString())
     }
 
-    public void downloadJobOutputs(String jobDirectoryPath) {
-        def downloadJobCommand = [config.getCliPath(), 'job', 'download', jobDirectoryPath,]
+    public void downloadJobOutputs(String jobDirectoryPath, String jobId) {
+        def downloadJobCommand = [config.getCliPath(), 'job', 'download', jobDirectoryPath, '--job-id', jobId]
 
         log.trace "[FOVUS] Download job outputs"
         def result = executeCommand(downloadJobCommand.join(' '))

@@ -1,10 +1,13 @@
 package nextflow.fovus.job
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize
 import groovy.json.JsonOutput
 import groovy.transform.Canonical
 import groovy.transform.CompileStatic
 import groovy.transform.MapConstructor
 import groovy.util.logging.Slf4j
+import nextflow.fovus.FovusExecutor
+import nextflow.fovus.FovusUtil
 import nextflow.processor.TaskRun
 
 import java.nio.file.Files
@@ -17,6 +20,8 @@ import java.nio.file.Files
 @Slf4j
 @CompileStatic
 class FovusJobConfig {
+
+    @JsonDeserialize(using = EnvironmentDeserializer)
     Environment environment
     Constraints constraints
     Objective objective
@@ -25,104 +30,133 @@ class FovusJobConfig {
 
     private final TaskRun task
 
+    void setEnvironment(Environment environment) {
+        this.environment = environment
+    }
+
+    void setConstraints(Constraints constraints) {
+        this.constraints = constraints
+    }
+
+    void setWorkload(Workload workload) {
+        this.workload = workload
+    }
+
+    void setObjective(Objective objective) {
+        this.objective = objective
+    }
+
+    void setJobName(String jobName) {
+        this.jobName = jobName
+    }
+
+    FovusJobConfig(){}
+
     FovusJobConfig(TaskRun task) {
-        this.task = task
-        this.environment = createEnvironment()
-
-        def jobConstraints = createJobConstraints()
-        def taskConstraints = createTaskConstraints(jobConstraints.enableHyperthreading)
-
-        this.objective = createObjective()
-
-        this.constraints = new Constraints(jobConstraints: jobConstraints, taskConstraints: taskConstraints)
-        this.workload = createWorkload()
-        this.jobName = normalizeJobName(task.name)
-    }
-
-    private Environment createEnvironment() {
-
-        def Containerized containerized = new Containerized()
-
-        if (task.container) {
-            def imagePath = task.container ?: ""
-            def engine = task.containerConfig.engine
-
-            if (engine != 'docker' && engine != 'apptainer') {
-                throw new IllegalArgumentException("Unsupported container engine: ${engine}")
-            }
-
-            if (engine == 'apptainer') {
-                containerized = new Containerized(container: 'Apptainer', imagePath: imagePath, version: "1.3.4")
-            } else {
-                // Default to docker
-                containerized = new Containerized(container: 'Docker', imagePath: imagePath, version: "20.10.8")
-            }
-        }
-
-        // TODO: Add support for adding monolithic software
-        return new ContainerizedEnvironment(containerized: containerized)
-    }
-
-    private JobConstraints createJobConstraints() {
-        final extension = task.config.get('ext') as Map<String, Object>
-        final accelerator = task.config.getAccelerator()
-
-        def isGpuUsed = false
-        if (accelerator) {
-            if (accelerator.type) {
-                log.warn "Ignoring task ${task.lazyName()} accelerator type ${accelerator.type} - " + "Fovus only supports GPU accelerators"
-            }
-            isGpuUsed = true
-        }
-
-        def benchmarkingProfileName = extension?.benchmarkingProfileName
-
-        if (!benchmarkingProfileName) {
-            if (isGpuUsed) {
-                benchmarkingProfileName = "Default GPU"
-            } else {
-                benchmarkingProfileName = "Default CPU"
-            }
-        }
-
-        def computingDevice = isGpuUsed ? "cpu+gpu" : "cpu"
-        // TODO: Add support for other configurations such as spot instances, supported architectures, etc.
-        return new JobConstraints(benchmarkingProfileName: benchmarkingProfileName, computingDevice: computingDevice)
-    }
-
-    private TaskConstraints createTaskConstraints(Boolean isHyperthreadingEnabled = false) {
-        final cpus = task.config.getCpus()
-        final memory = task.config.getMemory()
-        final extension = task.config.get('ext') as Map<String, Object>
-        final storage = task.config.getDisk()
-
-        final accelerator = task.config.getAccelerator()
-
-        def taskConstraints = new TaskConstraints(
-                minvCpu: cpus,
-                maxvCpu: cpus,
-                minvCpuMemGiB: memory?.toGiga()?.toInteger() ?: 8,
-                minGpu: accelerator?.request ?: 0,
-                maxGpu: accelerator?.limit ?: accelerator?.request ?: 0,
-                minGpuMemGiB: (extension?.minGpuMemGiB ?: 8) as Integer,
-                storageGiB: storage?.toGiga()?.toInteger() ?: 100,
-                walltimeHours: (extension?.walltimeHours ?: 3) as Integer
-        ).overrideCpuConstraints(isHyperthreadingEnabled)
-
-        return taskConstraints
-    }
-
-    private Objective createObjective() {
         def extension = task.config.get('ext') as Map<String, Object>
-        def timeToCostPriorityRatio = extension?.timeToCostPriorityRatio ?: "0.5/0.5"
+        if(extension?.jobConfigFile == null){
+            throw new Error("jobConfigFile file path is missing!")
+        }
 
-        return new Objective(timeToCostPriorityRatio: timeToCostPriorityRatio)
+        def fovusJobConfig = FovusJobConfigBuilder.fromJsonFile(extension.jobConfigFile as String)
+        this.task = task
+        this.environment = createEnvironment(fovusJobConfig)
+        def jobConstraints = createJobConstraints(fovusJobConfig)
+        def taskConstraints = createTaskConstraints(fovusJobConfig)
+        this.objective = createObjective(fovusJobConfig)
+        this.constraints = new Constraints(jobConstraints: jobConstraints, taskConstraints: taskConstraints)
+        this.workload = createWorkload(fovusJobConfig)
+        this.jobName = normalizeJobName(task.name)
+
     }
 
-    private Workload createWorkload() {
-        // TODO: Add support for remote inputs (both user-specified and Nextflow generated)
-        def remoteInputsForAllTasks = []
-        def parallelismConfigFiles = []
+    private Environment createEnvironment(FovusJobConfig fovusJobConfig) {
+        final extension = task.config.get('ext') as Map<String, Object>;
+        if(extension?.container != null || fovusJobConfig.getEnvironment() instanceof ContainerizedEnvironment){
+            def existingContainerizedEnv = fovusJobConfig.getEnvironment() as ContainerizedEnvironment
+            def Containerized containerized = new Containerized(
+                    container: extension?.container ?: existingContainerizedEnv.containerized.container,
+                    version: extension?.version ?: existingContainerizedEnv.containerized.version,
+                    imagePath: extension?.imagePath ?: existingContainerizedEnv.containerized.imagePath,
+            );
+            return new ContainerizedEnvironment(containerized: containerized)
+        } else {
+            // TODO: Add support for adding monolithic software
+        }
+    }
+
+    private JobConstraints createJobConstraints(FovusJobConfig fovusJobConfig) {
+        final extension = task.config.get('ext') as Map<String, Object>
+
+        def defaultJobConstraints = fovusJobConfig.getConstraints().jobConstraints;
+
+        def cpuArchitectures = defaultJobConstraints.supportedCpuArchitectures;
+
+        if(extension?.supportedCpuArchitectures != null){
+            switch(extension?.computingDevice){
+                case "x86-64":
+                    cpuArchitectures = ["x86-64"]
+                    break;
+                case "arm64":
+                    cpuArchitectures = ["arm-64"]
+                    break;
+                case "x86-64 + arm-64":
+                    cpuArchitectures = ["x86-64", "arm-64"]
+                    break;
+            }
+        }
+        return new JobConstraints(
+                benchmarkingProfileName: extension?.benchmarkingProfileName ?: defaultJobConstraints.benchmarkingProfileName,
+                computingDevice: extension?.computingDevice ?: defaultJobConstraints.computingDevice,
+                allowPreemptible: extension?.allowPreemptible ?: defaultJobConstraints.allowPreemptible,
+                enableHyperthreading: extension?.enableHyperthreading ?: defaultJobConstraints.enableHyperthreading,
+                isHybridStrategyAllowed: extension?.isHybridStrategyAllowed ?: defaultJobConstraints.isHybridStrategyAllowed,
+                supportedCpuArchitectures: cpuArchitectures,
+                isResumableWorkload: extension?.isResumableWorkload ?: defaultJobConstraints.isResumableWorkload,
+                isSubjectToLicenseAvailability: extension?.isSubjectToLicenseAvailability ?: defaultJobConstraints.isSubjectToLicenseAvailability,
+        )
+    }
+
+    private TaskConstraints createTaskConstraints(FovusJobConfig fovusJobConfig) {
+        final extension = task.config.get('ext') as Map<String, Object>
+        def defaultTaskConstaints = fovusJobConfig.constraints.getTaskConstraints();
+        return new TaskConstraints(
+                minvCpu: extension?.minvCpu as Integer ?: defaultTaskConstaints.minvCpu,
+                maxvCpu: extension?.maxvCpu as Integer ?: defaultTaskConstaints.maxvCpu,
+                minvCpuMemGiB: extension?.minvCpuMemGiB as Integer ?: defaultTaskConstaints.minvCpuMemGiB,
+                minGpu: extension?.minGpu as Integer ?: defaultTaskConstaints.maxvCpu,
+                maxGpu: extension?.maxGpu as Integer ?: defaultTaskConstaints.maxGpu,
+                minGpuMemGiB: extension?.minGpuMemGiB as Integer ?: defaultTaskConstaints.minGpuMemGiB,
+                storageGiB: extension?.storageGiB as Integer ?: defaultTaskConstaints.storageGiB,
+                walltimeHours: extension?.walltimeHours as Integer ?: defaultTaskConstaints.walltimeHours,
+                isSingleThreadedTask: extension?.isSingleThreadedTask ?: defaultTaskConstaints.isSingleThreadedTask,
+                scalableParallelism: extension?.scalableParallelism ?: defaultTaskConstaints.scalableParallelism,
+                parallelismOptimization: extension?.parallelismOptimization ?: defaultTaskConstaints.parallelismOptimization,
+        )
+    }
+
+    private Objective createObjective(FovusJobConfig fovusJobConfig) {
+        def extension = task.config.get('ext') as Map<String, Object>
+        return new Objective(timeToCostPriorityRatio: extension?.timeToCostPriorityRatio ?: fovusJobConfig.objective.timeToCostPriorityRatio)
+    }
+
+    private Workload createWorkload(FovusJobConfig fovusJobConfig) {
+        def extension = task.config.get('ext') as Map<String, Object>
+        def defaultWorkload = fovusJobConfig.workload;
+
+        def remoteInputsForAllTasks = defaultWorkload.remoteInputsForAllTasks
+        def parallelismConfigFiles = defaultWorkload.parallelismConfigFiles
+        def outputFileList = defaultWorkload.outputFileList
+
+        if(extension?.remoteInputsForAllTasks){
+            remoteInputsForAllTasks = (extension.remoteInputsForAllTasks as String).split(",").toList();
+        }
+        if(extension?.parallelismConfigFiles){
+            parallelismConfigFiles = (extension.parallelismConfigFiles as String).split(",").toList();
+        }
+        if(extension?.outputFileList){
+            parallelismConfigFiles = (extension.outputFileList as String).split(",").toList();
+        }
 
         // Get the script file and run it
         final runCommand = "./${TaskRun.CMD_RUN}"
@@ -130,7 +164,9 @@ class FovusJobConfig {
         return new Workload(
                 runCommand: runCommand,
                 remoteInputsForAllTasks: remoteInputsForAllTasks,
-                parallelismConfigFiles: parallelismConfigFiles
+                parallelismConfigFiles: parallelismConfigFiles,
+                outputFileOption: extension.outputFileOption ?: defaultWorkload.outputFileOption,
+                outputFileList: outputFileList
         )
     }
 
@@ -141,7 +177,7 @@ class FovusJobConfig {
     void skipRemoteInputSync(FovusExecutor executor) {
         task.getInputFilesMap().each { stageName, filePath ->
             {
-                final isRemoteFile = FovusUtil.isFovusRemoteFile(executor, task.workDir, filePath)
+                final isRemoteFile = FovusUtil.isFovusRemoteFile(executor, filePath)
                 if (isRemoteFile) {
                     workload.outputFileOption = 'exclude'
                     workload.outputFileList = []
@@ -236,6 +272,7 @@ class JobConstraints {
     boolean enableHyperthreading = false
     boolean allowPreemptible = false
     boolean isResumableWorkload = false
+    boolean isSubjectToLicenseAvailability = false
 }
 
 @Canonical

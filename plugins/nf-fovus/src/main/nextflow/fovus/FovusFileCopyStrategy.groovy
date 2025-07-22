@@ -48,7 +48,7 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
             final storePath = entry.value
 
             final inputWorkDir = FovusUtil.getWorkDirOfFile(executor.getWorkDir(), storePath)
-            final jobId = FovusUtil.getJobId(executor, inputWorkDir, storePath);
+            final jobId = FovusUtil.getJobId(executor, inputWorkDir);
 
             if(jobId == null){
                 continue

@@ -66,7 +66,7 @@ class FovusTaskHandler extends TaskHandler {
 
         this.jobConfig = new FovusJobConfig(task)
         jobConfig.skipRemoteInputSync(executor)
-        
+
         this.jobClient = new FovusJobClient(executor.config, jobConfig)
     }
 
@@ -134,7 +134,7 @@ class FovusTaskHandler extends TaskHandler {
         status = TaskStatus.COMPLETED
 
         final jobDirectoryPath = task.workDir.getParent().toString()
-        jobClient.downloadJobOutputs(jobDirectoryPath)
+        jobClient.downloadJobOutputs(jobDirectoryPath, jobId)
         return true
     }
 
@@ -218,5 +218,4 @@ class FovusTaskHandler extends TaskHandler {
         final result = prependWorkflowPrefix(task.name, environment)
         return normalizeJobName(result)
     }
-
 }
