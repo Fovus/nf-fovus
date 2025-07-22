@@ -44,7 +44,7 @@ class FovusUtil {
     static Path getFovusRemotePath(FovusExecutor executor, Path remoteFilePath) {
         final inputWorkDir = getWorkDirOfFile(executor.getWorkDir(), remoteFilePath)
 
-        def jobId = getJobId(executor, inputWorkDir, remoteFilePath)
+        def jobId = getJobId(executor, inputWorkDir)
         if (!jobId) {
             // This could be a local input files, return the original path
             return null
@@ -66,7 +66,7 @@ class FovusUtil {
         return filePath.toAbsolutePath().normalize().startsWith(executor.getStageDir())
     }
 
-    static String getJobId(FovusExecutor executor, Path inputWorkDir, Path remoteFilePath){
+    static String getJobId(FovusExecutor executor, Path inputWorkDir){
         final jobIdMap = executor.getJobIdMap()
         return jobIdMap.get(inputWorkDir.toString())
     }
@@ -74,7 +74,7 @@ class FovusUtil {
     /**
      * Method to check if the file is Fovus remote file
      */
-    static boolean isFovusRemoteFile(FovusExecutor executor, Path currentTaskWorkDir, Path remoteFilePath) {
+    static boolean isFovusRemoteFile(FovusExecutor executor, Path remoteFilePath) {
         if (isStageFile(executor, remoteFilePath)) {
             return false
         }
