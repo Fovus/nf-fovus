@@ -1,7 +1,53 @@
-# nf-fovus plugin
+# 🔌 nf-fovus Nextflow Plugin
 
-Fovus plugin for integration with Nextflow.
+The `nf-fovus` plugin integrates [Fovus](https://fovus.co) with [Nextflow](https://www.nextflow.io) to enable intelligent job configuration and optimization based on constraints, environments, and workload profiles.
 
+---
+
+## 📦 Setup
+
+- Install the Fovus CLI
+
+  `pip install fovus`
+
+- Login into Fovus CLI
+
+  `fovus auth login`
+
+- Install the `nf-fovus` plugin
+
+  `nextflow plugin install nf-fovus`
+
+## How to use
+
+- Define your Fovus Job Config file. (Example templates - `plugins/nf-fovus/fovus_provided_configs`)
+- Use the Plugin in Your Nextflow Workflow
+  - In your main.nf or custom process, the plugin can read and apply configuration logic.
+      
+  - Example:
+         
+  -     process FovusLaunch {
+  
+            ext (
+                 jobConfigFile: '<Fovus job config file path>'
+            )
+
+            input:
+            // Provide Input
+
+            script:
+            """
+              // execution script
+            """
+        }
+- Run Nexflow Pipeline:
+    
+   - `nextflow run main.nf -plugins nf-fovus`
+
+## Reference documents:
+
+- Fovus CLI : https://help.fovus.co/cli/get_started.html
+  
 ## Plugin structure
 
 - `settings.gradle`
