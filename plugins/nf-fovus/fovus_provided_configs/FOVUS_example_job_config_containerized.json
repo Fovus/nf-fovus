@@ -1,0 +1,55 @@
+{
+  "scheduledAt": "2022-03-31T15:00:00-07:00",
+  "environment": {
+    "containerized": {
+      "container": "Apptainer",
+      "version": "1.3.4",
+      "imagePath": "shub://GodloveD/lolcow"
+    }
+  },
+  "constraints": {
+    "jobConstraints": {
+      "computingDevice": "cpu",
+      "supportedCpuArchitectures": ["x86-64", "arm-64"],
+      "benchmarkingProfileName": "Default CPU",
+      "isHybridStrategyAllowed": false,
+      "enableHyperthreading": false,
+      "allowPreemptible": false,
+      "isResumableWorkload": false,
+      "isSubjectToLicenseAvailability": false
+    },
+    "taskConstraints": {
+      "minvCpu": 1,
+      "maxvCpu": 192,
+      "minvCpuMemGiB": 1,
+      "minGpu": 0,
+      "maxGpu": 0,
+      "minGpuMemGiB": 0,
+      "storageGiB": 1,
+      "walltimeHours": 1,
+      "isSingleThreadedTask": false,
+      "scalableParallelism": false,
+      "parallelismOptimization": false
+    }
+  },
+  "objective": {
+    "timeToCostPriorityRatio": "0.9/0.1"
+  },
+  "workload": {
+    "parallelismConfigFiles": ["config*/*.adm", "input/*.config"],
+    "runCommand": "Apptainer exec --bind $PWD:/container_workspace --home /container_workspace --nv [user_options]  [user_cmd_to_run]",
+    "outputFileOption": "include",
+    "outputFileList": ["*"]
+  },
+  "isPostProcessingIncluded": true,
+  "postProcessingInfo": {
+    "postProcessingRunCommand": "./post.sh",
+    "postProcessingStorageGiB": 1,
+    "postProcessingTaskName": "Post Processing",
+    "postProcessingWalltimeHours": 1
+  },
+  "keywordSearchInput": {
+    "keywords": [],
+    "targetOutputFiles": []
+  }
+}

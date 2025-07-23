@@ -1,0 +1,57 @@
+{
+  "scheduledAt": "",
+  "environment": {
+    "containerized": {
+      "container": "",
+      "version": "",
+      "imagePath": ""
+    }
+  },
+  "constraints": {
+    "jobConstraints": {
+      "computingDevice": "",
+      "supportedCpuArchitectures": [""],
+      "benchmarkingProfileName": "",
+      "isHybridStrategyAllowed": false,
+      "enableHyperthreading": false,
+      "jobMaxClusterSizevCpu": 0,
+      "allowPreemptible": false,
+      "isResumableWorkload": false,
+      "isSubjectToLicenseAvailability": false
+    },
+    "taskConstraints": {
+      "minvCpu": 1,
+      "maxvCpu": 192,
+      "minvCpuMemGiB": 1,
+      "minGpu": 0,
+      "maxGpu": 0,
+      "minGpuMemGiB": 0,
+      "storageGiB": 1,
+      "walltimeHours": 1,
+      "isSingleThreadedTask": false,
+      "scalableParallelism": false,
+      "parallelismOptimization": false
+    }
+  },
+  "objective": {
+    "timeToCostPriorityRatio": "0.9/0.1"
+  },
+  "workload": {
+    "remoteInputsForAllTasks": [],
+    "parallelismConfigFiles": [],
+    "runCommand": "",
+    "outputFileOption": "include",
+    "outputFileList": ["*"]
+  },
+  "isPostProcessingIncluded": false,
+  "postProcessingInfo": {
+    "postProcessingRunCommand": "",
+    "postProcessingStorageGiB": 1,
+    "postProcessingTaskName": "",
+    "postProcessingWalltimeHours": 1
+  },
+  "keywordSearchInput": {
+    "keywords": [],
+    "targetOutputFiles": []
+  }
+}
