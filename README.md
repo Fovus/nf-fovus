@@ -25,7 +25,7 @@ The `nf-fovus` plugin integrates [Fovus](https://fovus.co) with [Nextflow](https
   - In your main.nf or custom process, the plugin can read and apply configuration logic.
       
   - Example:
-        ` 
+         
   -     process FovusLaunch {
   
             ext (
@@ -39,15 +39,15 @@ The `nf-fovus` plugin integrates [Fovus](https://fovus.co) with [Nextflow](https
             """
               // execution script
             """
-        } `
+        }
 - Run Nexflow Pipeline:
     
-   - `nextflow run example/hello-world.nf -plugins nf-fovus`
+   - `nextflow run main.nf -plugins nf-fovus`
 
-## Reference Documents:
+## Reference documents:
 
 - Fovus CLI : https://help.fovus.co/cli/get_started.html
-- 
+  
 ## Plugin structure
 
 - `settings.gradle`
