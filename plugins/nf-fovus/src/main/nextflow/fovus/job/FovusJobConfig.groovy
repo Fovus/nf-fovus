@@ -54,11 +54,13 @@ class FovusJobConfig {
 
     FovusJobConfig(TaskRun task) {
         def extension = task.config.get('ext') as Map<String, Object>
-        if(extension?.jobConfigFile == null){
+        if(extension?.jobConfigFile == null && task.config.get('jobConfigFile') == null ){
             throw new Error("jobConfigFile file path is missing!")
         }
 
-        def fovusJobConfig = FovusJobConfigBuilder.fromJsonFile(extension.jobConfigFile as String)
+        def jobConfigFilePath = (extension.jobConfigFile ?: task.config.get('jobConfigFile')) as String
+
+        def fovusJobConfig = FovusJobConfigBuilder.fromJsonFile(jobConfigFilePath)
         this.task = task
         this.environment = createEnvironment(fovusJobConfig)
         def jobConstraints = createJobConstraints(fovusJobConfig)
