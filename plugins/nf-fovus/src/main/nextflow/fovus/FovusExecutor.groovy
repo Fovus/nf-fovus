@@ -4,6 +4,7 @@ import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
 import nextflow.executor.TaskArrayExecutor
+import nextflow.fovus.pipeline.FovusPipelineClient
 import nextflow.processor.TaskArrayRun
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskMonitor
@@ -19,6 +20,8 @@ import org.pf4j.ExtensionPoint
 class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecutor {
 
     protected FovusConfig config
+
+    protected FovusPipelineClient pipelineClient;
 
     /**
      * Map the local work directory with Fovus job id
@@ -39,7 +42,13 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     protected void register() {
         super.register()
 
-        config = new FovusConfig(session.config.navigate('fovus') as Map)
+        config = new FovusConfig(session.config.navigate('fovus') as Map);
+        log.debug "[FOVUS] Creating fovus pipeline"
+        this.pipelineClient = new FovusPipelineClient();
+        log.debug("session --> ${this.session}")
+        log.debug("name --> ${this.name}")
+
+        this.pipelineClient.createPipeline(config, "FullRnaseqPipeline");
     }
 
     /**
@@ -54,7 +63,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         assert task.workDir
 
         if(task.inputs.size() > 0){
-            log.trace "[FOVUS] Moving local files > ${task}"
+            log.debug "[FOVUS] Moving local files > ${task}"
             FovusUtil.moveLocalFilesToTaskDir(task, this);
         }
 
@@ -62,7 +71,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
             FovusUtil.copyFilesToTaskForArray(task)
         }
 
-        log.trace "[FOVUS] Launching process > ${task.name} -- work folder: ${task.workDir}"
+        log.debug "[FOVUS] Launching process > ${task.name} -- work folder: ${task.workDir}"
         return new FovusTaskHandler(task, this)
     }
 

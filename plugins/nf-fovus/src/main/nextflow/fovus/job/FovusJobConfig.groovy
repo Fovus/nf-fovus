@@ -120,16 +120,20 @@ class FovusJobConfig {
     }
 
     private TaskConstraints createTaskConstraints(FovusJobConfig fovusJobConfig) {
-        final extension = task.config.get('ext') as Map<String, Object>
+        final extension = task.config.get('ext') as Map<String, Object>;
+        final nfVcpus = task.config.getCpus()
+        final nfMemory = task.config.getMemory()?.toGiga()?.toInteger()
+        final nfStorage = task.config.getDisk()?.toGiga()?.toInteger()
+
         def defaultTaskConstaints = fovusJobConfig.constraints.getTaskConstraints();
         return new TaskConstraints(
-                minvCpu: extension?.minvCpu as Integer ?: defaultTaskConstaints.minvCpu,
-                maxvCpu: extension?.maxvCpu as Integer ?: defaultTaskConstaints.maxvCpu,
-                minvCpuMemGiB: extension?.minvCpuMemGiB as Integer ?: defaultTaskConstaints.minvCpuMemGiB,
+                minvCpu: extension?.minvCpu as Integer ?: nfVcpus ?: defaultTaskConstaints.minvCpu,
+                maxvCpu: extension?.maxvCpu as Integer ?: nfVcpus ?: defaultTaskConstaints.maxvCpu,
+                minvCpuMemGiB: extension?.minvCpuMemGiB as Integer ?: nfMemory ?: defaultTaskConstaints.minvCpuMemGiB,
                 minGpu: extension?.minGpu as Integer ?: defaultTaskConstaints.maxvCpu,
                 maxGpu: extension?.maxGpu as Integer ?: defaultTaskConstaints.maxGpu,
                 minGpuMemGiB: extension?.minGpuMemGiB as Integer ?: defaultTaskConstaints.minGpuMemGiB,
-                storageGiB: extension?.storageGiB as Integer ?: defaultTaskConstaints.storageGiB,
+                storageGiB: extension?.storageGiB as Integer ?: nfStorage ?: defaultTaskConstaints.storageGiB,
                 walltimeHours: extension?.walltimeHours as Integer ?: defaultTaskConstaints.walltimeHours,
                 isSingleThreadedTask: extension?.isSingleThreadedTask ?: defaultTaskConstaints.isSingleThreadedTask,
                 scalableParallelism: extension?.scalableParallelism ?: defaultTaskConstaints.scalableParallelism,
@@ -161,7 +165,7 @@ class FovusJobConfig {
         }
 
         // Get the script file and run it
-        final runCommand = "./${TaskRun.CMD_RUN}"
+        final runCommand = "time ./${TaskRun.CMD_RUN}"
 
         return new Workload(
                 runCommand: runCommand,
@@ -201,7 +205,7 @@ class FovusJobConfig {
         def jsonString = JsonOutput.prettyPrint(JsonOutput.toJson(this))
         Files.write(jobConfigFile, jsonString.bytes)
 
-        log.trace "[FOVUS] Job config file for ${task.name} saved to ${jobConfigFile.toString()}"
+        log.debug "[FOVUS] Job config file for ${task.name} saved to ${jobConfigFile.toString()}"
 
         return jobConfigFile.toString()
     }

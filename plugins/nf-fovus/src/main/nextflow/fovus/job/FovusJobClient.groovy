@@ -1,5 +1,6 @@
 package nextflow.fovus.job
 
+import groovy.json.JsonSlurper
 import groovy.transform.CompileStatic
 import groovy.transform.MapConstructor
 import groovy.util.logging.Slf4j
@@ -22,16 +23,22 @@ class FovusJobClient {
         this.jobConfig = jobConfig
     }
 
-    String createJob(String jobConfigFilePath, String jobDirectory, String jobName = null, isArrayJob = false) {
+    String createJob(String jobConfigFilePath, String jobDirectory, String pipelineId, List<String> includeList, String jobName = null, isArrayJob = false) {
         def command = [config.getCliPath(), '--silence', '--nextflow', 'job', 'create', jobConfigFilePath, jobDirectory]
+
+        if(pipelineId){
+            command << "--pipeline-id"
+            command << pipelineId
+        }
+
         if (jobName) {
             command << "--job-name"
             command << jobName
         }
 
-        if (isArrayJob) {
-            command << "--exclude-paths"
-            command << ".*,job_config.json"
+        if (includeList.size() > 0) {
+            command << "--include-paths"
+            command << includeList.join(",")
         }
 
         def result = executeCommand(command.join(' '))
@@ -43,7 +50,7 @@ class FovusJobClient {
 
         // Get the Job ID (the last line of the output)
         def jobId = result.output.trim().split('\n')[-1]
-        log.trace "[FOVUS] Job created with ID: ${jobId}"
+        log.debug "[FOVUS] Job created with ID: ${jobId}"
 
         return jobId
     }
@@ -53,7 +60,7 @@ class FovusJobClient {
         def result = executeCommand(command.join(' '))
 
         def jobStatus = result.output.trim().split('\n')[-1]
-        log.trace "[FOVUS] Job Id: ${jobId}, status: ${jobStatus}"
+        log.debug "[FOVUS] Job Id: ${jobId}, status: ${jobStatus}"
 
         switch (jobStatus) {
             case 'Created':
@@ -86,6 +93,63 @@ class FovusJobClient {
         }
     }
 
+    def getStatusFromJsonOutput(fullOutputString) {
+        // 1. Extract the JSON part from the string
+        // This regex looks for a '[' followed by anything, ending with a ']'
+        def matcher = (fullOutputString =~ /(?s)\[.*\]/)
+        if (matcher.find()) {
+            def jsonPart = matcher.group(0) // Get the full matched JSON string
+
+            // 2. Parse the JSON part
+            def slurper = new JsonSlurper()
+            def parsedData =  (List<Map<String, Object>>)  slurper.parseText(jsonPart)
+
+            // 3. Access the status from the first element of the array
+            // Use null-safe operator and Elvis operator for robustness
+            return parsedData[0]?.get("status") as String ?: "Status Not Found"
+        } else {
+            // Handle case where no JSON part is found
+            return "No JSON found in output"
+        }
+    }
+
+    FovusRunStatus getRunStatus(String jobId, String runName) {
+        def command = [config.getCliPath(), 'job', 'list-runs', '--job-id', jobId, '--run-names', runName]
+        try {
+            def result = executeCommand(command.join(' '))
+            def runStatus = getStatusFromJsonOutput(result.output)
+            log.debug "[FOVUS] Job Id: ${jobId}, status: ${runStatus}"
+
+            switch (runStatus) {
+                case 'Pending':
+                    return FovusRunStatus.CREATED
+                case 'Completed':
+                    return FovusRunStatus.COMPLETED
+                case 'Failed':
+                    return FovusRunStatus.FAILED
+                case 'Running':
+                    return FovusRunStatus.RUNNING
+                case 'Requeued':
+                    return FovusRunStatus.REQUEUED
+                case 'Terminated':
+                    return FovusRunStatus.TERMINATED
+                case 'Terminating':
+                    return FovusRunStatus.TERMINATING
+                case 'Uncompleted':
+                    return FovusRunStatus.UNCOMPLETE
+                case 'Walltime Reached':
+                    return FovusRunStatus.WALLTIME_REACHED
+                default:
+                    log.error "[FOVUS] Unknown job status: ${runStatus}"
+                    throw new RuntimeException("Unknown job status: ${runStatus}")
+            }
+        }catch(Exception e) {
+            log.error("getRunStatus error, ex=${e.message}")
+            return "true"
+        }
+
+    }
+
     @MapConstructor
     class CliExecutionResult {
         int exitCode
@@ -99,26 +163,50 @@ class FovusJobClient {
      * @return
      */
     private CliExecutionResult executeCommand(String command) {
-        log.trace "[FOVUS] Executing command: ${command}"
+        int maxRetries = 3
+        int attempt = 0
+        CliExecutionResult result = null
 
-        def stdout = new StringBuilder()
-        def stderr = new StringBuilder()
+        while (attempt < maxRetries) {
+            attempt++
+            log.debug "[FOVUS] Executing command (attempt ${attempt}/${maxRetries}): ${command}"
 
-        def process = command.execute()
-        process.consumeProcessOutput(stdout, stderr)
-        process.waitFor()
+            def stdout = new StringBuilder()
+            def stderr = new StringBuilder()
 
-        log.trace "[FOVUS] Command executed with exit code: ${process.exitValue()}"
-        log.trace "[FOVUS] Command output: ${stdout}"
-        log.trace "[FOVUS] Command error: ${stderr}"
+            def process = command.execute()
+            process.consumeProcessOutput(stdout, stderr)
+            process.waitFor()
 
-        return new CliExecutionResult(exitCode: process.exitValue(), output: stdout.toString(), error: stderr.toString())
+            result = new CliExecutionResult(
+                    exitCode: process.exitValue(),
+                    output: stdout.toString(),
+                    error: stderr.toString()
+            )
+
+            log.debug "[FOVUS] Command executed with exit code: ${result.exitCode}"
+            log.debug "[FOVUS] Command output: ${result.output}"
+            log.debug "[FOVUS] Command error: ${result.error}"
+
+            if (result.exitCode == 0) {
+                // Success, break out of retry loop
+                break
+            } else {
+                log.warn "[FOVUS] Command failed on attempt ${attempt} with exit code ${result.exitCode}"
+                if (attempt < maxRetries) {
+                    log.info "[FOVUS] Retrying command in 2s..."
+                    sleep(2000)  // small backoff before retry
+                }
+            }
+        }
+
+        return result
     }
 
     public void downloadJobOutputs(String jobDirectoryPath, String jobId) {
         def downloadJobCommand = [config.getCliPath(), 'job', 'download', jobDirectoryPath, '--job-id', jobId]
 
-        log.trace "[FOVUS] Download job outputs"
+        log.debug "[FOVUS] Download job outputs"
         def result = executeCommand(downloadJobCommand.join(' '))
 
         if (result.exitCode != 0) {
@@ -149,4 +237,16 @@ enum FovusJobStatus {
     WALLTIME_REACHED,
     PROVISIONING_INFRASTRUCTURE,
     CLOUD_STRATEGY_OPTIMIZATION
+}
+
+enum FovusRunStatus {
+    CREATED,
+    COMPLETED,
+    FAILED,
+    REQUEUED,
+    RUNNING,
+    TERMINATED,
+    TERMINATING,
+    UNCOMPLETE,
+    WALLTIME_REACHED
 }
