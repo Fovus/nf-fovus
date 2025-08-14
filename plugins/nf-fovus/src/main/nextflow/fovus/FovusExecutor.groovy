@@ -4,6 +4,7 @@ import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
 import nextflow.executor.TaskArrayExecutor
+import nextflow.fovus.pipeline.FovusPipelineClient
 import nextflow.processor.TaskArrayRun
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskMonitor
@@ -19,6 +20,8 @@ import org.pf4j.ExtensionPoint
 class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecutor {
 
     protected FovusConfig config
+
+    protected FovusPipelineClient pipelineClient;
 
     /**
      * Map the local work directory with Fovus job id
@@ -39,7 +42,10 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     protected void register() {
         super.register()
 
-        config = new FovusConfig(session.config.navigate('fovus') as Map)
+        config = new FovusConfig(session.config.navigate('fovus') as Map);
+        log.trace "[FOVUS] Creating fovus pipeline"
+        this.pipelineClient = new FovusPipelineClient();
+        this.pipelineClient.createPipeline(config, "testPipeline");
     }
 
     /**

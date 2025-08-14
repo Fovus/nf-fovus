@@ -22,16 +22,22 @@ class FovusJobClient {
         this.jobConfig = jobConfig
     }
 
-    String createJob(String jobConfigFilePath, String jobDirectory, String jobName = null, isArrayJob = false) {
+    String createJob(String jobConfigFilePath, String jobDirectory, String pipelineId, List<String> includeList, String jobName = null, isArrayJob = false) {
         def command = [config.getCliPath(), '--silence', '--nextflow', 'job', 'create', jobConfigFilePath, jobDirectory]
+
+        if(pipelineId){
+            command << "--pipeline-id"
+            command << pipelineId
+        }
+
         if (jobName) {
             command << "--job-name"
             command << jobName
         }
 
-        if (isArrayJob) {
-            command << "--exclude-paths"
-            command << ".*,job_config.json"
+        if (includeList.size() > 0) {
+            command << "--include-paths"
+            command << includeList.join(",")
         }
 
         def result = executeCommand(command.join(' '))
