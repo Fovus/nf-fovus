@@ -52,6 +52,10 @@ class FovusTaskHandler extends TaskHandler {
             FovusJobStatus.PROVISIONING_INFRASTRUCTURE,
     ]
 
+    FovusJobConfig getJobConfig() {
+        return this.jobConfig
+    }
+
     FovusTaskHandler(TaskRun task, FovusExecutor executor) {
         super(task)
         this.executor = executor
@@ -64,9 +68,14 @@ class FovusTaskHandler extends TaskHandler {
         this.wrapperFile = task.workDir.resolve(TaskRun.CMD_RUN)
         this.traceFile = task.workDir.resolve(TaskRun.CMD_TRACE)
 
-        this.jobConfig = new FovusJobConfig(task)
+        if(task instanceof TaskArrayRun){
+            def childeren = task.getChildren();
+            def firstTask = childeren.first();
+            this.jobConfig = firstTask.getJobConfig();
+        } else {
+            this.jobConfig = new FovusJobConfig(task)
+        }
         jobConfig.skipRemoteInputSync(executor)
-
         this.jobClient = new FovusJobClient(executor.config, jobConfig)
     }
 
@@ -167,8 +176,19 @@ class FovusTaskHandler extends TaskHandler {
         if(isTaskArrayRun){
             jobDirectory = task.workDir.toString();
         }
+        List<String> includeList = []
+        if(isTaskArrayRun){
+            for(TaskHandler taskHandler : task.getChildren()){
+                log.trace "[FOVUS] List of directory > ${taskHandler.getTask().workDir.toString()}"
+                includeList.add("${taskHandler.getTask().workDir.toString().tokenize("/")[-1]}/");
+            }
+        } else {
+            includeList.add("${this.getTask().workDir.toString().tokenize("/")[-1]}/");
+        }
+
         log.trace "[FOVUS] Submitting job > $task"
-        jobId = jobClient.createJob(jobConfigFilePath, jobDirectory, jobConfig.jobName, isTaskArrayRun)
+        def pipelineId = this.executor.pipelineClient.getPipeline().getPipelineId();
+        jobId = jobClient.createJob(jobConfigFilePath, jobDirectory, pipelineId, includeList, jobConfig.jobName, isTaskArrayRun)
         updateStatus(jobId)
 
         executor.jobIdMap.put(task.workDir.toString(), jobId);
