@@ -14,6 +14,9 @@ import nextflow.util.Duration
 import nextflow.util.ServiceName
 import org.pf4j.ExtensionPoint
 
+import java.nio.file.Path
+import java.nio.file.Paths
+
 @Slf4j
 @ServiceName('fovus')
 @CompileStatic
@@ -39,6 +42,13 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     }
 
     @Override
+    Path getWorkDir() {
+        def pipelineId = pipelineClient.getPipeline().getPipelineId();
+        println("pipelineId: -----------> $pipelineId")
+        Paths.get(URI.create("fovus://fovus-storage/$pipelineId"));
+    }
+
+    @Override
     protected void register() {
         super.register()
 
@@ -47,8 +57,25 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         this.pipelineClient = new FovusPipelineClient();
         log.debug("session --> ${this.session}")
         log.debug("name --> ${this.name}")
-
         this.pipelineClient.createPipeline(config, "FullRnaseqPipeline");
+    }
+
+    @Override
+    boolean isContainerNative() {
+        return true;
+    }
+
+    @Override
+    String containerConfigEngine() {
+        return 'docker'
+    }
+
+    /**
+     * @return {@code true} whenever the secrets handling is managed by the executing platform itself
+     */
+    @Override
+    final boolean isSecretNative() {
+        return true
     }
 
     /**
@@ -61,15 +88,6 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     TaskHandler createTaskHandler(TaskRun task) {
         assert task
         assert task.workDir
-
-        if(task.inputs.size() > 0){
-            log.debug "[FOVUS] Moving local files > ${task}"
-            FovusUtil.moveLocalFilesToTaskDir(task, this);
-        }
-
-        if(task instanceof TaskArrayRun){
-            FovusUtil.copyFilesToTaskForArray(task)
-        }
 
         log.debug "[FOVUS] Launching process > ${task.name} -- work folder: ${task.workDir}"
         return new FovusTaskHandler(task, this)

@@ -23,5 +23,9 @@ class FovusConfig {
         this.cliPath = config.cliPath ?: "fovus"
     }
 
+    FovusConfig() {
+        this.cliPath = "fovus"
+    }
+
     String getCliPath() {cliPath}
 }

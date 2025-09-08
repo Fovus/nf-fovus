@@ -3,16 +3,18 @@ package nextflow.fovus
 import groovy.util.logging.Slf4j
 import nextflow.exception.ProcessException
 import nextflow.executor.BashWrapperBuilder
-import nextflow.fovus.job.FovusJobClient
+import nextflow.fovus.FovusClient
 import nextflow.fovus.job.FovusJobConfig
-import nextflow.fovus.job.FovusJobStatus
-import nextflow.fovus.job.FovusRunStatus
+import nextflow.fovus.FovusJobStatus
+import nextflow.fovus.FovusRunStatus
+import nextflow.fovus.nio.util.FovusJobCache
 import nextflow.processor.TaskArrayRun
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskRun
 import nextflow.processor.TaskStatus
 
 import java.nio.file.Path
+import java.nio.file.Paths
 
 import static nextflow.processor.TaskStatus.*
 
@@ -43,7 +45,7 @@ class FovusTaskHandler extends TaskHandler {
 
     protected FovusJobConfig jobConfig;
 
-    protected FovusJobClient jobClient;
+    protected FovusClient jobClient;
 
     private List<FovusJobStatus> RUNNING_STATUSES = [
             FovusJobStatus.PENDING,
@@ -76,8 +78,8 @@ class FovusTaskHandler extends TaskHandler {
         } else {
             this.jobConfig = new FovusJobConfig(task)
         }
-        jobConfig.skipRemoteInputSync(executor)
-        this.jobClient = new FovusJobClient(executor.config, jobConfig)
+//        jobConfig.skipRemoteInputSync(executor)
+        this.jobClient = new FovusClient(executor.config, jobConfig)
     }
 
     /**
@@ -145,7 +147,6 @@ class FovusTaskHandler extends TaskHandler {
         }
 
         task.stdout = outputFile
-
         // TODO: Download and read the exit file. Assuming successful exit for now
         // task.exitStatus = readExitFile()
         task.exitStatus = 0
@@ -167,9 +168,6 @@ class FovusTaskHandler extends TaskHandler {
         }
 
         status = TaskStatus.COMPLETED
-
-        final jobDirectoryPath = task.workDir.getParent().toString()
-        jobClient.downloadJobOutputs(jobDirectoryPath, jobId)
         return true
     }
 
@@ -195,7 +193,8 @@ class FovusTaskHandler extends TaskHandler {
 
     @Override
     void submit() {
-        final jobConfigFilePath = jobConfig.toJson()
+        final jobConfigFile = Paths.get("./work/.nextflow/fovus").resolve("${this.jobId}_config.json")
+        final jobConfigFilePath = jobConfig.toJson(jobConfigFile);
         final isTaskArrayRun = task instanceof TaskArrayRun;
         def jobDirectory = task.workDir.getParent().toString();
 
@@ -214,7 +213,15 @@ class FovusTaskHandler extends TaskHandler {
 
         log.debug "[FOVUS] Submitting job > $task"
         def pipelineId = this.executor.pipelineClient.getPipeline().getPipelineId();
-        jobId = jobClient.createJob(jobConfigFilePath, jobDirectory, pipelineId, includeList, jobConfig.jobName, isTaskArrayRun)
+
+        def parts = task.workDir.toString().split('/')
+        def taskHashcode = parts[-2] + parts[-1]
+
+        println("[FOVUS] taskHashcode > ${taskHashcode}")
+        def generatedJobId = FovusJobCache.getGeneratedJobId(taskHashcode)
+        println("[FOVUS] generatedJobId > ${generatedJobId}")
+
+        jobId = jobClient.createJob(jobConfigFilePath, jobDirectory, pipelineId, includeList, generatedJobId, jobConfig.jobName, isTaskArrayRun)
         updateStatus(jobId)
 
         executor.jobIdMap.put(task.workDir.toString(), jobId);

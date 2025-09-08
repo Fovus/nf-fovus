@@ -11,6 +11,8 @@ import nextflow.fovus.FovusUtil
 import nextflow.processor.TaskRun
 
 import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
 
 /**
  * Configurations for Fovus job.
@@ -180,35 +182,32 @@ class FovusJobConfig {
     /**
      * Skip syncing input files (eg, outputs from previous jobs) to remote storage
      */
-    void skipRemoteInputSync(FovusExecutor executor) {
-        task.getInputFilesMap().each { stageName, filePath ->
-            {
-                final isRemoteFile = FovusUtil.isFovusRemoteFile(executor, filePath)
-                if (isRemoteFile) {
-                    workload.outputFileOption = 'exclude'
-                    workload.outputFileList = []
-                    workload.outputFileList << stageName
-                }
-            }
-        }
-
-    }
+//    void skipRemoteInputSync(FovusExecutor executor) {
+//        task.getInputFilesMap().each { stageName, filePath ->
+//            {
+//                final isRemoteFile = FovusUtil.isFovusRemoteFile(executor, filePath)
+//                if (isRemoteFile) {
+//                    workload.outputFileOption = 'exclude'
+//                    workload.outputFileList = []
+//                    workload.outputFileList << stageName
+//                }
+//            }
+//        }
+//
+//    }
 
     /**
      * Save the job config to a JSON file and return the file path.
      */
-    String toJson() {
-        final workDir = task.workDir
-        final jobConfigFile = workDir.resolve("${jobName}_config.json")
-
-        // Write the job config to a file
+    String toJson(Path jobConfigFile) {
         def jsonString = JsonOutput.prettyPrint(JsonOutput.toJson(this))
-        Files.write(jobConfigFile, jsonString.bytes)
+        new File(jobConfigFile.toString()).text = jsonString
 
-        log.debug "[FOVUS] Job config file for ${task.name} saved to ${jobConfigFile.toString()}"
+        log.debug "[FOVUS] Job config file for ${task.name} saved to ${jobConfigFile}"
 
         return jobConfigFile.toString()
     }
+
     /**
      * Remove invalid characters from a job name string
      *
