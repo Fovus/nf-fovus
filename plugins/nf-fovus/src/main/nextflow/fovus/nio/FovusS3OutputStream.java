@@ -103,6 +103,16 @@ public final class FovusS3OutputStream extends OutputStream {
     private volatile String uploadId;
 
     /**
+     * The local temporary file for buffer flushing
+     */
+    private volatile File tempFile;
+
+    /**
+     * The current offset to write to the temp file for each flush
+     */
+    private int tempFileOffset;
+
+    /**
      * If a multipart upload is in progress, holds the ETags of the uploaded parts, {@code null} otherwise.
      */
     private Queue<PartETag> partETags;
@@ -161,7 +171,9 @@ public final class FovusS3OutputStream extends OutputStream {
     }
 
     private ByteBuffer expandBuffer(ByteBuffer byteBuffer) {
-        
+
+        log.trace("Inside expandBuffer");
+
         final float expandFactor = 2.5f;
         final int newCapacity = Math.min( (int)(byteBuffer.capacity() * expandFactor), bufferSize );
 
@@ -185,18 +197,17 @@ public final class FovusS3OutputStream extends OutputStream {
      * @throws IOException
      */
     @Override
-    public void write (int b) throws IOException {
-        if( closed ){
+    public void write(int b) throws IOException {
+        if (closed) {
             throw new IOException("Can't write into a closed stream");
         }
-        if( buf == null ) {
+//        log.trace("Inside write");
+        if (buf == null) {
             buf = allocate();
-        }
-        else if( !buf.hasRemaining() ) {
-            if( buf.position() < bufferSize ) {
+        } else if (!buf.hasRemaining()) {
+            if (buf.position() < bufferSize) {
                 buf = expandBuffer(buf);
-            }
-            else {
+            } else {
                 flush();
                 // create a new buffer
                 buf = allocate();
@@ -210,19 +221,25 @@ public final class FovusS3OutputStream extends OutputStream {
      *
      * @throws IOException
      */
-//    @Override
-//    public void flush() throws IOException {
-//        // send out the current buffer
-//        if( uploadBuffer(buf, false) ) {
-//            // clear the current buffer
-//            buf = null;
-//            md5 = null;
-//        }
-//    }
+    @Override
+    public void flush() throws IOException {
+        // send out the current buffer
+        log.trace("Inside flush");
+        log.trace("Current size {}", buf.limit());
+        log.trace("Current buffer position {}", buf.position());
+        ;
+        if (uploadBuffer(buf, false)) {
+            tempFileOffset += buf.limit();
+            log.trace("tempFileOffset {}", tempFileOffset);
+            // clear the current buffer
+            buf = null;
+            md5 = null;
+        }
+    }
 
     private ByteBuffer allocate() {
 
-        if( partsCount==0 ) {
+        if (tempFileOffset == 0) {
             // this class is expected to be used to upload small files
             // start with a small buffer and growth if more space if necessary
             final int initialSize = 100 * 1024;
@@ -231,10 +248,9 @@ public final class FovusS3OutputStream extends OutputStream {
 
         // try to reuse a buffer from the poll
         ByteBuffer result = bufferPool.poll();
-        if( result != null ) {
+        if (result != null) {
             result.clear();
-        }
-        else {
+        } else {
             // allocate a new buffer
             log.debug("Allocating new buffer of {} bytes, total buffers {}", bufferSize, bufferCounter.incrementAndGet());
             result = ByteBuffer.allocate(bufferSize);
@@ -251,33 +267,49 @@ public final class FovusS3OutputStream extends OutputStream {
      *
      * return: true if the buffer can be reused, false if still needs to be used
      */
-//    private boolean uploadBuffer(ByteBuffer buf, boolean last) throws IOException {
-//        // when the buffer is empty nothing to do
-//        if( buf == null || buf.position()==0 ) { return false; }
-//
+    private boolean uploadBuffer(ByteBuffer buf, boolean last) throws IOException {
+        // when the buffer is empty nothing to do
+        log.trace("Inside uploadBuffer");
+        log.trace("Buffer is null? {}", buf == null);
+        if (buf == null || buf.position() == 0) {
+            return false;
+        }
+
 //        // Intermediate uploads needs to have at least MIN bytes
-//        if( buf.position() < MIN_MULTIPART_UPLOAD && !last){
+//        if (buf.position() < MIN_MULTIPART_UPLOAD && !last) {
 //            return false;
 //        }
-//
-//        if (partsCount == 0) {
-//            init();
-//        }
-//
-//        // set the buffer in read mode and submit for upload
-//        executor.submit( task(buf, md5.digest(), ++partsCount) );
-//
-//        return true;
-//    }
+
+        if (tempFileOffset == 0) {
+            log.debug("Initializing temp file");
+            init();
+        }
+
+        // set the buffer in read mode and submit for upload
+//        executor.submit(task(buf, md5.digest(), ++partsCount));
+
+        // Write buffer to the temp file
+        try (FileOutputStream out = new FileOutputStream(tempFile, true)) {
+            log.debug("Writing to temp file");
+            buf.flip();
+            out.write(buf.array(), 0, buf.remaining());
+        } catch (Exception e) {
+            log.debug("Failed to write to temp file {}", e);
+            throw new IOException("Failed to write to temp file", e);
+        }
+
+        return true;
+    }
 
     /**
      * Initialize multipart upload data structures
      *
      * @throws IOException
      */
-//    private void init() throws IOException {
-//        // get the upload id
-//        uploadId = initiateMultipartUpload().getUploadId();
+    private void init() throws IOException {
+        // TODO: Replace with CLI steaming and part upload
+        // get the upload id
+        // uploadId = initiateMultipartUpload().getUploadId();
 //        if (uploadId == null) {
 //            throw new IOException("Failed to get a valid multipart upload ID from Amazon S3");
 //        }
@@ -287,7 +319,16 @@ public final class FovusS3OutputStream extends OutputStream {
 //        phaser = new Phaser();
 //        phaser.register();
 //        log.trace("[S3 phaser] Register - Starting S3 upload: {}; chunk-size: {}; max-threads: {}", uploadId, bufferSize, request.getMaxThreads());
-//    }
+        try {
+            Path tmpDir = Files.createTempDirectory(Path.of("/tmp"), "fovus-");
+            String filename = fovuS3Path.getFileName().toString();
+            tempFile = new File(tmpDir.toFile(), filename);
+            log.debug("tempFile {}", tempFile);
+        } catch (Exception e) {
+            log.debug("Failed to create temp directory and file {}", e.getMessage());
+            throw new IOException("Failed to create temp directory and file", e);
+        }
+    }
 
 
     /**
@@ -329,25 +370,27 @@ public final class FovusS3OutputStream extends OutputStream {
      */
     @Override
     public void close() throws IOException {
+        log.trace("Inside close");
         System.out.println("Inside close");
         if (closed || !(fovuS3Path instanceof FovusS3Path)) {
             return;
         }
 
-        try {
-            // If buffer exists, flush it to a temp file for CLI upload
-            Path randomDir = Files.createTempDirectory(Path.of("/tmp"), "fovus-");
+        if (tempFile == null && buf != null) {
+            Path tmpDir = Files.createTempDirectory(Path.of("/tmp"), "fovus-");
             String filename = fovuS3Path.getFileName().toString();
-            File tempFile = new File(randomDir.toFile(), filename);
-            try (FileOutputStream out = new FileOutputStream(tempFile)) {
-                if (buf != null) {
-                    buf.flip(); // make sure position is at start
-                    byte[] bytes = new byte[buf.remaining()];
-                    buf.get(bytes);
-                    out.write(bytes);
-                }
-                // if buf == null → empty file, nothing to write
+            tempFile = new File(tmpDir.toFile(), filename);
+        }
+
+        try (FileOutputStream out = new FileOutputStream(tempFile, true)) {
+            if (buf != null) {
+                buf.flip(); // make sure position is at start
+                byte[] bytes = new byte[buf.remaining()];
+                buf.get(bytes);
+                out.write(bytes, 0, bytes.length);
             }
+            // if buf == null → empty file, nothing to write
+
 
             // Build path for CLI upload
             String basePath = ((FovusS3Path) fovuS3Path).getKey();   // or however you map bucket
@@ -363,6 +406,11 @@ public final class FovusS3OutputStream extends OutputStream {
             throw new IOException("Upload interrupted", e);
         } finally {
             closed = true;
+//            if (!tempFile.delete()) {
+//                log.error("Failed to delete temporary file: {}", tempFile);
+//            } else {
+//                log.trace("Deleted temporary file: {}", tempFile);
+//            }
         }
     }
 
@@ -591,9 +639,16 @@ public final class FovusS3OutputStream extends OutputStream {
     /**
      * @return Number of uploaded chunks
      */
-//    int getPartsCount() {
-//        return partsCount;
-//    }
+    int getPartsCount() {
+        return partsCount;
+    }
+
+    /**
+     * @return Current temp file offset
+     */
+    int getTempFileOffset() {
+        return tempFileOffset;
+    }
 
 
     /** holds a singleton executor instance */
