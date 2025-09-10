@@ -3,15 +3,18 @@ package nextflow.fovus
 import groovy.util.logging.Slf4j
 import nextflow.exception.ProcessException
 import nextflow.executor.BashWrapperBuilder
-import nextflow.fovus.job.FovusJobClient
+import nextflow.fovus.FovusClient
 import nextflow.fovus.job.FovusJobConfig
-import nextflow.fovus.job.FovusJobStatus
+import nextflow.fovus.FovusJobStatus
+import nextflow.fovus.FovusRunStatus
+import nextflow.fovus.nio.util.FovusJobCache
 import nextflow.processor.TaskArrayRun
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskRun
 import nextflow.processor.TaskStatus
 
 import java.nio.file.Path
+import java.nio.file.Paths
 
 import static nextflow.processor.TaskStatus.*
 
@@ -42,15 +45,19 @@ class FovusTaskHandler extends TaskHandler {
 
     protected FovusJobConfig jobConfig;
 
-    protected FovusJobClient jobClient;
+    protected FovusClient jobClient;
 
     private List<FovusJobStatus> RUNNING_STATUSES = [
-            FovusJobStatus.CREATED,
             FovusJobStatus.PENDING,
-            FovusJobStatus.RUNNING,
-            FovusJobStatus.REQUEUED,
             FovusJobStatus.PROVISIONING_INFRASTRUCTURE,
+            FovusRunStatus.CREATED,
+            FovusRunStatus.RUNNING,
+            FovusRunStatus.REQUEUED,
     ]
+
+    FovusJobConfig getJobConfig() {
+        return this.jobConfig
+    }
 
     FovusTaskHandler(TaskRun task, FovusExecutor executor) {
         super(task)
@@ -64,10 +71,15 @@ class FovusTaskHandler extends TaskHandler {
         this.wrapperFile = task.workDir.resolve(TaskRun.CMD_RUN)
         this.traceFile = task.workDir.resolve(TaskRun.CMD_TRACE)
 
-        this.jobConfig = new FovusJobConfig(task)
-        jobConfig.skipRemoteInputSync(executor)
-
-        this.jobClient = new FovusJobClient(executor.config, jobConfig)
+        if(task instanceof TaskArrayRun){
+            def childeren = task.getChildren();
+            def firstTask = childeren.first();
+            this.jobConfig = firstTask.getJobConfig();
+        } else {
+            this.jobConfig = new FovusJobConfig(task)
+        }
+//        jobConfig.skipRemoteInputSync(executor)
+        this.jobClient = new FovusClient(executor.config, jobConfig)
     }
 
     /**
@@ -79,8 +91,21 @@ class FovusTaskHandler extends TaskHandler {
             return false
         }
 
-        final jobStatus = jobClient.getJobStatus(jobId)
-        final isRunning = jobStatus in RUNNING_STATUSES
+        if(this.task instanceof TaskArrayRun){
+            log.debug("TaskArrayRun is detected: ${this.task} jobId: --> $jobId")
+
+            final jobStatus = jobClient.getJobStatus(jobId)
+            final isRunning = jobStatus in RUNNING_STATUSES
+
+            if (isRunning) {
+                status = TaskStatus.RUNNING
+            }
+
+            return isRunning
+        }
+        final runName = this.task.workDirStr.split("/")[-1];
+        final taskStatus = jobClient.getRunStatus(jobId, runName)
+        final isRunning = taskStatus in RUNNING_STATUSES
 
         if (isRunning) {
             status = TaskStatus.RUNNING
@@ -102,23 +127,34 @@ class FovusTaskHandler extends TaskHandler {
             return false
         }
 
-        final jobStatus = jobClient.getJobStatus(jobId)
-        final isJobTerminated = jobStatus in [FovusJobStatus.COMPLETED, FovusJobStatus.FAILED, FovusJobStatus.WALLTIME_REACHED, FovusJobStatus.TERMINATED]
+        def taskStatus
+        if(this.task instanceof TaskArrayRun){
+            log.debug("TaskArrayRun is detected: ${this.task} jobId: --> $jobId")
+            taskStatus = jobClient.getJobStatus(jobId)
+            final isJobTerminated = jobStatus in [FovusJobStatus.COMPLETED, FovusJobStatus.FAILED, FovusJobStatus.WALLTIME_REACHED, FovusJobStatus.TERMINATED]
 
-        if (!isJobTerminated) {
-            return false
+            if (!isJobTerminated) {
+                return false
+            }
+        } else {
+            final runName = this.task.workDirStr.split("/")[-1];
+            taskStatus = jobClient.getRunStatus(jobId, runName)
+            final isRunTerminated = taskStatus in [FovusRunStatus.COMPLETED, FovusRunStatus.FAILED, FovusRunStatus.WALLTIME_REACHED, FovusRunStatus.TERMINATED]
+
+            if (!isRunTerminated) {
+                return false
+            }
         }
 
         task.stdout = outputFile
-
         // TODO: Download and read the exit file. Assuming successful exit for now
         // task.exitStatus = readExitFile()
         task.exitStatus = 0
 
-        if (jobStatus != FovusJobStatus.COMPLETED) {
+        if (taskStatus != FovusJobStatus.COMPLETED || taskStatus != FovusRunStatus.COMPLETED) {
             task.stderr = errorFile
 
-            switch (jobStatus) {
+            switch (taskStatus) {
                 case FovusJobStatus.FAILED:
                     task.error = new ProcessException("Job ${jobId} failed")
                     break
@@ -132,9 +168,6 @@ class FovusTaskHandler extends TaskHandler {
         }
 
         status = TaskStatus.COMPLETED
-
-        final jobDirectoryPath = task.workDir.getParent().toString()
-        jobClient.downloadJobOutputs(jobDirectoryPath, jobId)
         return true
     }
 
@@ -145,7 +178,7 @@ class FovusTaskHandler extends TaskHandler {
     protected void killTask() {
         assert jobId
 
-        log.trace "[FOVUS] Terminating job > $task"
+        log.debug "[FOVUS] Terminating job > $task"
         jobClient.terminateJob(jobId)
     }
 
@@ -160,15 +193,35 @@ class FovusTaskHandler extends TaskHandler {
 
     @Override
     void submit() {
-        final jobConfigFilePath = jobConfig.toJson()
+        final jobConfigFile = Paths.get("./work/.nextflow/fovus").resolve("${this.jobId}_config.json")
+        final jobConfigFilePath = jobConfig.toJson(jobConfigFile);
         final isTaskArrayRun = task instanceof TaskArrayRun;
         def jobDirectory = task.workDir.getParent().toString();
 
         if(isTaskArrayRun){
             jobDirectory = task.workDir.toString();
         }
-        log.trace "[FOVUS] Submitting job > $task"
-        jobId = jobClient.createJob(jobConfigFilePath, jobDirectory, jobConfig.jobName, isTaskArrayRun)
+        List<String> includeList = []
+        if(isTaskArrayRun){
+            for(TaskHandler taskHandler : task.getChildren()){
+                log.debug "[FOVUS] List of directory > ${taskHandler.getTask().workDir.toString()}"
+                includeList.add("${taskHandler.getTask().workDir.toString().tokenize("/")[-1]}/");
+            }
+        } else {
+            includeList.add("${this.getTask().workDir.toString().tokenize("/")[-1]}/");
+        }
+
+        log.debug "[FOVUS] Submitting job > $task"
+        def pipelineId = this.executor.pipelineClient.getPipeline().getPipelineId();
+
+        def parts = task.workDir.toString().split('/')
+        def taskHashcode = parts[-2] + parts[-1]
+
+        println("[FOVUS] taskHashcode > ${taskHashcode}")
+        def generatedJobId = FovusJobCache.getGeneratedJobId(taskHashcode)
+        println("[FOVUS] generatedJobId > ${generatedJobId}")
+
+        jobId = jobClient.createJob(jobConfigFilePath, jobDirectory, pipelineId, includeList, generatedJobId, jobConfig.jobName, isTaskArrayRun)
         updateStatus(jobId)
 
         executor.jobIdMap.put(task.workDir.toString(), jobId);

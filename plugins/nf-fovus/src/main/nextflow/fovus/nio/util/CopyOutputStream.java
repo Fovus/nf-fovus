@@ -1,5 +1,5 @@
 /*
- * Copyright 2021, Seqera Labs
+ * Copyright 2020-2022, Seqera Labs
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -12,31 +12,24 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
  */
 
-package nextflow.fovus
+package nextflow.fovus.nio.util;
 
-import groovy.transform.CompileStatic
-import groovy.util.logging.Slf4j
-import nextflow.Session
-import nextflow.trace.TraceObserver
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 
 /**
- * Example workflow events observer
+ * https://stackoverflow.com/a/31809148/395921
  *
  * @author Paolo Di Tommaso <paolo.ditommaso@gmail.com>
  */
-@Slf4j
-@CompileStatic
-class HelloObserver implements TraceObserver {
+public class CopyOutputStream extends ByteArrayOutputStream {
 
-    @Override
-    void onFlowCreate(Session session) {
-        log.info "Pipeline is starting! 🚀"
-    }
-
-    @Override
-    void onFlowComplete() {
-        log.info "Pipeline complete! 👋"
+    //Creates InputStream without actually copying the buffer and using up mem for that.
+    public InputStream toInputStream(){
+        return new ByteArrayInputStream(buf, 0, count);
     }
 }

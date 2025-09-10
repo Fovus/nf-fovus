@@ -11,6 +11,8 @@ import nextflow.fovus.FovusUtil
 import nextflow.processor.TaskRun
 
 import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
 
 /**
  * Configurations for Fovus job.
@@ -120,16 +122,20 @@ class FovusJobConfig {
     }
 
     private TaskConstraints createTaskConstraints(FovusJobConfig fovusJobConfig) {
-        final extension = task.config.get('ext') as Map<String, Object>
+        final extension = task.config.get('ext') as Map<String, Object>;
+        final nfVcpus = task.config.getCpus()
+        final nfMemory = task.config.getMemory()?.toGiga()?.toInteger()
+        final nfStorage = task.config.getDisk()?.toGiga()?.toInteger()
+
         def defaultTaskConstaints = fovusJobConfig.constraints.getTaskConstraints();
         return new TaskConstraints(
-                minvCpu: extension?.minvCpu as Integer ?: defaultTaskConstaints.minvCpu,
-                maxvCpu: extension?.maxvCpu as Integer ?: defaultTaskConstaints.maxvCpu,
-                minvCpuMemGiB: extension?.minvCpuMemGiB as Integer ?: defaultTaskConstaints.minvCpuMemGiB,
+                minvCpu: extension?.minvCpu as Integer ?: nfVcpus ?: defaultTaskConstaints.minvCpu,
+                maxvCpu: extension?.maxvCpu as Integer ?: nfVcpus ?: defaultTaskConstaints.maxvCpu,
+                minvCpuMemGiB: extension?.minvCpuMemGiB as Integer ?: nfMemory ?: defaultTaskConstaints.minvCpuMemGiB,
                 minGpu: extension?.minGpu as Integer ?: defaultTaskConstaints.maxvCpu,
                 maxGpu: extension?.maxGpu as Integer ?: defaultTaskConstaints.maxGpu,
                 minGpuMemGiB: extension?.minGpuMemGiB as Integer ?: defaultTaskConstaints.minGpuMemGiB,
-                storageGiB: extension?.storageGiB as Integer ?: defaultTaskConstaints.storageGiB,
+                storageGiB: extension?.storageGiB as Integer ?: nfStorage ?: defaultTaskConstaints.storageGiB,
                 walltimeHours: extension?.walltimeHours as Integer ?: defaultTaskConstaints.walltimeHours,
                 isSingleThreadedTask: extension?.isSingleThreadedTask ?: defaultTaskConstaints.isSingleThreadedTask,
                 scalableParallelism: extension?.scalableParallelism ?: defaultTaskConstaints.scalableParallelism,
@@ -161,7 +167,7 @@ class FovusJobConfig {
         }
 
         // Get the script file and run it
-        final runCommand = "./${TaskRun.CMD_RUN}"
+        final runCommand = "time ./${TaskRun.CMD_RUN}"
 
         return new Workload(
                 runCommand: runCommand,
@@ -176,35 +182,32 @@ class FovusJobConfig {
     /**
      * Skip syncing input files (eg, outputs from previous jobs) to remote storage
      */
-    void skipRemoteInputSync(FovusExecutor executor) {
-        task.getInputFilesMap().each { stageName, filePath ->
-            {
-                final isRemoteFile = FovusUtil.isFovusRemoteFile(executor, filePath)
-                if (isRemoteFile) {
-                    workload.outputFileOption = 'exclude'
-                    workload.outputFileList = []
-                    workload.outputFileList << stageName
-                }
-            }
-        }
-
-    }
+//    void skipRemoteInputSync(FovusExecutor executor) {
+//        task.getInputFilesMap().each { stageName, filePath ->
+//            {
+//                final isRemoteFile = FovusUtil.isFovusRemoteFile(executor, filePath)
+//                if (isRemoteFile) {
+//                    workload.outputFileOption = 'exclude'
+//                    workload.outputFileList = []
+//                    workload.outputFileList << stageName
+//                }
+//            }
+//        }
+//
+//    }
 
     /**
      * Save the job config to a JSON file and return the file path.
      */
-    String toJson() {
-        final workDir = task.workDir
-        final jobConfigFile = workDir.resolve("${jobName}_config.json")
-
-        // Write the job config to a file
+    String toJson(Path jobConfigFile) {
         def jsonString = JsonOutput.prettyPrint(JsonOutput.toJson(this))
-        Files.write(jobConfigFile, jsonString.bytes)
+        new File(jobConfigFile.toString()).text = jsonString
 
-        log.trace "[FOVUS] Job config file for ${task.name} saved to ${jobConfigFile.toString()}"
+        log.debug "[FOVUS] Job config file for ${task.name} saved to ${jobConfigFile}"
 
         return jobConfigFile.toString()
     }
+
     /**
      * Remove invalid characters from a job name string
      *

@@ -17,6 +17,8 @@
 package nextflow.fovus
 
 import groovy.transform.CompileStatic
+import nextflow.file.FileHelper
+import nextflow.fovus.nio.FovusS3FileSystemProvider
 import nextflow.plugin.BasePlugin
 import org.pf4j.PluginWrapper
 
@@ -30,5 +32,13 @@ class FovusPlugin extends BasePlugin {
 
     FovusPlugin(PluginWrapper wrapper) {
         super(wrapper)
+    }
+
+    @Override
+    void start() {
+        super.start()
+        // disable aws sdk v1 warning
+        System.setProperty("aws.java.v1.disableDeprecationAnnouncement", "true")
+        FileHelper.getOrInstallProvider(FovusS3FileSystemProvider)
     }
 }
