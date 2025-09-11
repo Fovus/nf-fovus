@@ -62,7 +62,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
 
     @Override
     boolean isContainerNative() {
-        return true;
+        return false;
     }
 
     @Override

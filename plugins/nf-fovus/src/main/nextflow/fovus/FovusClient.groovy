@@ -25,11 +25,11 @@ class FovusClient {
         this.jobConfig = jobConfig
     }
 
-    FovusClient(){
+    FovusClient() {
         this.config = new FovusConfig();
     }
 
-    String generateJobId(){
+    String generateJobId() {
         def command = [config.getCliPath(), '--silence', 'job', 'generate-id']
         def result = executeCommand(command.join(' '))
 
@@ -47,7 +47,7 @@ class FovusClient {
     String createJob(String jobConfigFilePath, String jobDirectory, String pipelineId, List<String> includeList, String jobId, String jobName = null, isArrayJob = false) {
         def command = [config.getCliPath(), '--silence', '--nextflow', 'job', 'create', jobConfigFilePath, jobDirectory]
 
-        if(pipelineId){
+        if (pipelineId) {
             command << "--pipeline-id"
             command << pipelineId
         }
@@ -80,9 +80,9 @@ class FovusClient {
         return jobId
     }
 
-    void uploadJobFile(String basePath, String filePath, String jobId){
+    void uploadJobFile(String basePath, String filePath, String jobId) {
         def command = []
-        if(jobId){
+        if (jobId) {
             def parts = filePath.split('/');
             println("filePath: $filePath --> ${parts[2..-2].join('/')}")
             command = [config.getCliPath(), '--silence', 'job', 'upload', basePath, parts[2..-2].join('/'), '--job-id', jobId]
@@ -96,14 +96,14 @@ class FovusClient {
         }
     }
 
-    String uploadEmptyDirectory(String filePath, String jobId){
+    String uploadEmptyDirectory(String filePath, String jobId) {
         def command = []
-        if(jobId){
+        if (jobId) {
             println("filePath: $filePath")
             def parts = filePath.tokenize('/')
             def afterTwo = parts.size() > 2 ? parts[2..-1].join('/') : filePath
             println afterTwo
-            command = [config.getCliPath(), '--silence', 'job', 'upload', afterTwo , '--job-id', jobId, '--empty-dir True']
+            command = [config.getCliPath(), '--silence', 'job', 'upload', afterTwo, '--job-id', jobId, '--empty-dir True']
         } else {
             def basePath = "dummy"
             command = [config.getCliPath(), '--silence', 'storage', 'upload', basePath, filePath, '--empty-dir True']
@@ -116,17 +116,23 @@ class FovusClient {
         return jobId
     }
 
-    String downloadJobFile(String jobId, String targetPath, String filePath){
-        def command = [config.getCliPath(), '--silence', 'job', 'download', targetPath, '--job-id', jobId, '--include-paths', filePath]
+    String downloadJobFile(String jobId, String targetPath, String filePath) {
+        def parts = filePath.split('/');
+//            println("filePath: $filePath --> ${parts[2..-2].join('/')}")
+//            command = [config.getCliPath(), '--silence', 'job', 'download', targetPath,, '--job-id', jobId]
+
+// fovus --silence job download /tmp/fovus-7637548319521497736 --job-id 1757547676862-minhlefovus --include-paths ffa827451eca6c3774e874c4d47396
+        def command = [config.getCliPath(), '--silence', 'job', 'download', targetPath, '--job-id', jobId, '--include-paths', parts[2..-1].join('/')]
         def result = executeCommand(command.join(' '))
 
         if (result.exitCode != 0) {
             throw new RuntimeException("Failed to upload file: ${result.error}")
         }
+        
         return jobId
     }
 
-    ObjectMetaData getFileObject(String path, String jobId){
+    ObjectMetaData getFileObject(String path, String jobId) {
         println("Inside getFileObject")
         def command = [config.getCliPath(), '--silence', 'job', 'list-objects']
         if (jobId) {
@@ -146,7 +152,7 @@ class FovusClient {
         }
 
 
-        try{
+        try {
             def output = result.output.toString()
 
             def jsonText = output.readLines().drop(2).join('\n')
@@ -168,7 +174,7 @@ class FovusClient {
             def dateFormat = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX")
             Date lastModifiedDate = dateFormat.parse(lastModifiedStr)
 
-            def objMetaData =  new ObjectMetaData(
+            def objMetaData = new ObjectMetaData(
                     obj['Key'] as String,
                     lastModifiedDate,
                     obj['ETag'] as String,
@@ -181,7 +187,7 @@ class FovusClient {
             println("objMetaData --> ${objMetaData.toString()}")
 
             return objMetaData
-        } catch (Exception e){
+        } catch (Exception e) {
             println("error ----- $e")
         }
         return null;
@@ -234,11 +240,11 @@ class FovusClient {
 
             // 2. Parse the JSON part
             def slurper = new JsonSlurper()
-            def parsedData =  (List<Map<String, Object>>)  slurper.parseText(jsonPart)
+            def parsedData = (List<Map<String, Object>>) slurper.parseText(jsonPart)
 
             // 3. Access the status from the first element of the array
             // Use null-safe operator and Elvis operator for robustness
-            return parsedData[0]?.get("status") as String ?: "Status Not Found"
+            return parsedData[0]?.get("status") as String ?: "Created"
         } else {
             // Handle case where no JSON part is found
             return "No JSON found in output"
@@ -275,7 +281,7 @@ class FovusClient {
                     log.error "[FOVUS] Unknown job status: ${runStatus}"
                     throw new RuntimeException("Unknown job status: ${runStatus}")
             }
-        }catch(Exception e) {
+        } catch (Exception e) {
             log.error("getRunStatus error, ex=${e.message}")
             return "true"
         }
