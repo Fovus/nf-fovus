@@ -175,18 +175,16 @@ public final class FovusS3OutputStream extends OutputStream {
         log.trace("Inside expandBuffer");
 
         final float expandFactor = 2.5f;
-        final int newCapacity = Math.min( (int)(byteBuffer.capacity() * expandFactor), bufferSize );
+        final int newCapacity = Math.min((int) (byteBuffer.capacity() * expandFactor), bufferSize);
 
         // cast to prevent Java 8 / Java 11 cross compile-runtime error
         // https://www.morling.dev/blog/bytebuffer-and-the-dreaded-nosuchmethoderror/
-        ((java.nio.Buffer)byteBuffer).flip();
+        ((java.nio.Buffer) byteBuffer).flip();
         ByteBuffer expanded = ByteBuffer.allocate(newCapacity);
         expanded.order(byteBuffer.order());
         expanded.put(byteBuffer);
         return expanded;
     }
-
-
 
 
     /**
@@ -198,11 +196,13 @@ public final class FovusS3OutputStream extends OutputStream {
      */
     @Override
     public void write(int b) throws IOException {
+        log.trace("Inside write");
         if (closed) {
             throw new IOException("Can't write into a closed stream");
         }
 //        log.trace("Inside write");
         if (buf == null) {
+            log.trace("buf is null, allocating");
             buf = allocate();
         } else if (!buf.hasRemaining()) {
             if (buf.position() < bufferSize) {
@@ -264,7 +264,7 @@ public final class FovusS3OutputStream extends OutputStream {
      * Upload the given buffer to S3 storage in a asynchronous manner.
      * NOTE: when the executor service is busy (i.e. there are any more free threads)
      * this method will block
-     *
+     * <p>
      * return: true if the buffer can be reused, false if still needs to be used
      */
     private boolean uploadBuffer(ByteBuffer buf, boolean last) throws IOException {
@@ -523,12 +523,10 @@ public final class FovusS3OutputStream extends OutputStream {
 //        partETags.add(partETag);
 //
 //    }
-
-    private void sleep( long millis ) {
+    private void sleep(long millis) {
         try {
             Thread.sleep(millis);
-        }
-        catch (InterruptedException e) {
+        } catch (InterruptedException e) {
             log.trace("Sleep was interrupted -- Cause: {}", e.getMessage());
         }
     }

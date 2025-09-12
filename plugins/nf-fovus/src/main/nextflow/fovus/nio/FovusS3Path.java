@@ -69,6 +69,15 @@ public class FovusS3Path implements Path, TagAwareFile {
         return fileJobId;
     }
 
+    public String getPipelineId() {
+        assert !parts.isEmpty();
+        return parts.get(0);
+    }
+
+    public List<String> getParts() {
+        return new ArrayList<>(parts);
+    }
+
     private String fileJobId;
 
     /**
@@ -178,6 +187,19 @@ public class FovusS3Path implements Path, TagAwareFile {
 
     public S3ObjectId toS3ObjectId() {
         return new S3ObjectId(bucket, getKey());
+    }
+
+    /**
+     * Get the corresponding remote file path of this {@link FovusS3Path} object relatively to /fovus-storage/
+     */
+    public String toRemoteFilePath() {
+        if (!isJobFile()) {
+            return "files/" + getKey();
+        }
+
+        String fileKey = getKey();
+        String fileNameWithoutPipelineId = fileKey.substring(fileKey.indexOf(PATH_SEPARATOR) + 1);
+        return "jobs/" + fileNameWithoutPipelineId;
     }
 
     public Boolean isJobFile() {
@@ -387,6 +409,7 @@ public class FovusS3Path implements Path, TagAwareFile {
 
     @Override
     public Path relativize(Path other) {
+        System.out.println("relativize: " + this + " -> " + other);
         Preconditions.checkArgument(other instanceof FovusS3Path,
                 "other must be an instance of %s", FovusS3Path.class.getName());
         FovusS3Path s3Path = (FovusS3Path) other;
@@ -585,8 +608,8 @@ public class FovusS3Path implements Path, TagAwareFile {
         return storageClass;
     }
 
-    // ~ helpers methods
 
+    // ~ helpers methods
     private static Function<String, String> strip(final String... strs) {
         return new Function<String, String>() {
             public String apply(String input) {

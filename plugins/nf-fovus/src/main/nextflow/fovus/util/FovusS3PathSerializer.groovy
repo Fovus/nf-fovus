@@ -34,11 +34,11 @@ import org.pf4j.Extension
 @Slf4j
 @Extension
 @CompileStatic
-class S3PathSerializer extends Serializer<FovusS3Path> implements SerializerRegistrant  {
+class FovusS3PathSerializer extends Serializer<FovusS3Path> implements SerializerRegistrant {
 
     @Override
     void register(Map<Class, Object> serializers) {
-        serializers.put(FovusS3Path, S3PathSerializer)
+        serializers.put(FovusS3Path, FovusS3PathSerializer)
     }
 
     @Override
@@ -54,9 +54,9 @@ class S3PathSerializer extends Serializer<FovusS3Path> implements SerializerRegi
     FovusS3Path read(Kryo kryo, Input input, Class<FovusS3Path> type) {
         final scheme = input.readString()
         final path = input.readString()
-        if( scheme != 's3' ) throw new IllegalStateException("Unexpected scheme for S3 path -- offending value '$scheme'")
-        log.trace "S3Path de-serialization > scheme: $scheme; path: $path"
-        return (FovusS3Path) S3PathFactory.create("fovus://${path}")
+        if (scheme != 'fovus') throw new IllegalStateException("Unexpected scheme for Fovus path -- offending value '$scheme'")
+        log.trace "FovusS3Path de-serialization > scheme: $scheme; path: $path"
+        return (FovusS3Path) FovusS3PathFactory.create("fovus://${path}")
     }
-    
+
 }

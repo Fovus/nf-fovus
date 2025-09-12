@@ -27,6 +27,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import nextflow.fovus.FovusClient;
 import nextflow.fovus.FovusClientFactory;
+import nextflow.fovus.FovusConfig;
 import nextflow.fovus.nio.FovusS3Iterator;
 import nextflow.fovus.nio.util.IOUtils;
 import nextflow.fovus.nio.util.S3MultipartOptions;
@@ -104,7 +105,8 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
         synchronized (fileSystems) {
             if (fileSystems.containsKey(bucketName))
                 throw new FileSystemAlreadyExistsException("S3 filesystem already exists. Use getFileSystem() instead");
-            final FovusS3FileSystem result = createFileSystem(uri);
+            final FovusConfig fovusConfig = new FovusConfig(env);
+            final FovusS3FileSystem result = createFileSystem(uri, fovusConfig);
             fileSystems.put(bucketName, result);
             return result;
         }
@@ -133,7 +135,11 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
     @Override
     public Path getPath(URI uri) {
         Preconditions.checkArgument(uri.getScheme().equals(getScheme()), "URI scheme must be %s", getScheme());
-        return getFileSystem(uri).getPath("/" + uri.getAuthority() + uri.getPath());
+        Path testPath = getFileSystem(uri).getPath("/" + uri.getAuthority() + uri.getPath());
+        System.out.println("testPath: " + testPath);
+        Path returnPath = getFileSystem(uri).getPath(uri.getPath());
+        System.out.println("returnPath: " + returnPath);
+        return returnPath;
     }
 
     @Override
@@ -150,7 +156,7 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
 
             @Override
             public Iterator<Path> iterator() {
-                return new FovusS3Iterator(s3Path.getFileSystem(), s3Path.getBucket(), s3Path.getKey() + "/");
+                return new FovusS3Iterator(s3Path.getKey() + "/", s3Path);
             }
         };
     }
@@ -679,11 +685,14 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
 
         System.out.println("Inside readAttributes" + path.toString());
         if (type.isAssignableFrom(BasicFileAttributes.class)) {
-            return (A) ("".equals(s3Path.getKey())
+            A attributes = (A) ("".equals(s3Path.getKey())
                     // the root bucket is implicitly a directory
                     ? new FovusS3FileAttributes("/", null, 0, true, false)
                     // read the target path attributes
                     : readAttr0(s3Path));
+            System.out.println("attributes: " + attributes);
+            log.trace("+++ Attributes for path {}: {}", path, attributes);
+            return attributes;
         }
         // not support attribute class
         throw new UnsupportedOperationException(format("only %s supported", BasicFileAttributes.class));
@@ -699,6 +708,7 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
 
     private FovusS3FileAttributes readAttr0(FovusS3Path s3Path) throws IOException {
         S3ObjectSummary objectSummary = s3ObjectSummaryLookup.lookup(s3Path);
+        log.trace("+++ Object summary for path {}: {}", s3Path, objectSummary);
 
         // parse the data to BasicFileAttributes.
         FileTime lastModifiedTime = null;
@@ -824,14 +834,12 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
 
     // ~~
 
-    protected FovusS3FileSystem createFileSystem(URI uri) {
+    protected FovusS3FileSystem createFileSystem(URI uri, FovusConfig fovusConfig) {
         // try to load amazon props
         Properties props = loadAmazonProperties();
         // add properties for legacy compatibility
 
         FovusClient fovusClient;
-        S3Client client; // TODO FOVUS Remove
-        ClientConfiguration clientConfig = createClientConfig(props);
 
         final String bucketName = FovusS3Path.bucketName(uri);
         // do not use `global` flag for custom endpoint because
@@ -840,7 +848,7 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
         final boolean global = bucketName != null;
 //		final FovusClientFactory factory = new FovusClientFactory();
         System.out.println("Creating FovusClient");
-        fovusClient = new FovusClient();
+        fovusClient = new FovusClient(fovusConfig);
 
         if (props.getProperty("glacier_auto_retrieval") != null)
             log.warn("Glacier auto-retrieval is no longer supported, config option `aws.client.glacierAutoRetrieval` will be ignored");

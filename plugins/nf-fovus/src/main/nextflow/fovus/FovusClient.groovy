@@ -29,6 +29,10 @@ class FovusClient {
         this.config = new FovusConfig();
     }
 
+    FovusClient(FovusConfig config) {
+        this.config = config;
+    }
+
     String generateJobId() {
         def command = [config.getCliPath(), '--silence', 'job', 'generate-id']
         def result = executeCommand(command.join(' '))
@@ -97,11 +101,14 @@ class FovusClient {
     }
 
     String uploadEmptyDirectory(String filePath, String jobId) {
+        println("Inside uploadEmptyDirectory")
         def command = []
         if (jobId) {
             println("filePath: $filePath")
             def parts = filePath.tokenize('/')
+            println("parts: $parts")
             def afterTwo = parts.size() > 2 ? parts[2..-1].join('/') : filePath
+            println("afterTwo: $afterTwo")
             println afterTwo
             command = [config.getCliPath(), '--silence', 'job', 'upload', afterTwo, '--job-id', jobId, '--empty-dir True']
         } else {
@@ -128,12 +135,13 @@ class FovusClient {
         if (result.exitCode != 0) {
             throw new RuntimeException("Failed to upload file: ${result.error}")
         }
-        
+
         return jobId
     }
 
-    ObjectMetaData getFileObject(String path, String jobId) {
-        println("Inside getFileObject")
+
+    List<ObjectMetaData> listFileObjects(String path, String jobId) {
+        println("Inside listFileObjects")
         def command = [config.getCliPath(), '--silence', 'job', 'list-objects']
         if (jobId) {
             def parts = path.tokenize('/')
@@ -168,29 +176,43 @@ class FovusClient {
 
 
             List<Map> jsonList = (List<Map>) json
-            Map obj = jsonList.get(0)
+            List<ObjectMetaData> metaDataList = []
 
-            def lastModifiedStr = obj['LastModified'] as String
-            def dateFormat = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX")
-            Date lastModifiedDate = dateFormat.parse(lastModifiedStr)
+            for (Map obj : jsonList) {
+                def lastModifiedStr = obj['LastModified'] as String
+                def dateFormat = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX")
+                Date lastModifiedDate = dateFormat.parse(lastModifiedStr)
 
-            def objMetaData = new ObjectMetaData(
-                    obj['Key'] as String,
-                    lastModifiedDate,
-                    obj['ETag'] as String,
-                    obj['ChecksumAlgorithm'] as List<String>,
-                    obj['ChecksumType'] as String,
-                    (obj['Size'] as Number).longValue(),
-                    obj['StorageClass'] as String
-            )
+                def objMetaData = new ObjectMetaData(
+                        obj['Key'] as String,
+                        lastModifiedDate,
+                        obj['ETag'] as String,
+                        obj['ChecksumAlgorithm'] as List<String>,
+                        obj['ChecksumType'] as String,
+                        (obj['Size'] as Number).longValue(),
+                        obj['StorageClass'] as String
+                )
+                metaDataList.add(objMetaData)
 
-            println("objMetaData --> ${objMetaData.toString()}")
+                println("objMetaData --> ${objMetaData.toString()}")
+            }
 
-            return objMetaData
+            return metaDataList
         } catch (Exception e) {
             println("error ----- $e")
         }
         return null;
+    }
+
+
+    ObjectMetaData getFileObject(String path, String jobId) {
+        List<ObjectMetaData> metaDataList = listFileObjects(path, jobId)
+
+        if (metaDataList == null || metaDataList.size() == 0) {
+            return null
+        }
+
+        return metaDataList[0]
     }
 
     FovusJobStatus getJobStatus(String jobId) {
@@ -244,7 +266,7 @@ class FovusClient {
 
             // 3. Access the status from the first element of the array
             // Use null-safe operator and Elvis operator for robustness
-            return parsedData[0]?.get("status") as String ?: "Created"
+            return parsedData[0]?.get("status") as String ?: "Pending"
         } else {
             // Handle case where no JSON part is found
             return "No JSON found in output"

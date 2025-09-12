@@ -1,1 +1,3 @@
 nextflow.fovus.FovusExecutor
+nextflow.fovus.util.FovusS3PathFactory
+nextflow.fovus.util.FovusS3PathSerializer

@@ -1,9 +1,11 @@
 package nextflow.fovus
 
 import groovy.transform.CompileStatic
+import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
 import nextflow.executor.TaskArrayExecutor
+import nextflow.extension.FilesEx
 import nextflow.fovus.pipeline.FovusPipelineClient
 import nextflow.processor.TaskArrayRun
 import nextflow.processor.TaskHandler
@@ -34,6 +36,11 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     Map<String, String> getJobIdMap() { jobIdMap }
 
     /**
+     * A S3 path where executable scripts need to be uploaded
+     */
+    private Path remoteBinDir = null
+
+    /**
      * @return The monitor instance that monitor submitted Fovus jobs
      */
     @Override
@@ -45,7 +52,13 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     Path getWorkDir() {
         def pipelineId = pipelineClient.getPipeline().getPipelineId();
         println("pipelineId: -----------> $pipelineId")
-        Paths.get(URI.create("fovus://fovus-storage/$pipelineId"));
+        // Need to use /// to match the expected FovusS3FileSystem uri schema
+        Paths.get(URI.create("fovus:///fovus-storage/$pipelineId"));
+    }
+
+    @PackageScope
+    Path getRemoteBinDir() {
+        remoteBinDir
     }
 
     @Override
@@ -58,6 +71,19 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         log.debug("session --> ${this.session}")
         log.debug("name --> ${this.name}")
         this.pipelineClient.createPipeline(config, "FullRnaseqPipeline");
+
+        uploadBinDir()
+    }
+
+    protected void uploadBinDir() {
+        /*
+         * upload local binaries
+         */
+        if (session.binDir && !session.binDir.empty() && !session.disableRemoteBinDir) {
+            def s3 = getTempDir()
+            log.info "Uploading local `bin` scripts folder to ${s3.toUriString()}/bin"
+            remoteBinDir = FilesEx.copyTo(session.binDir, s3)
+        }
     }
 
     @Override
