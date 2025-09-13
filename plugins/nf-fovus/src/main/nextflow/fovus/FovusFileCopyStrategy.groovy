@@ -17,6 +17,7 @@
 package nextflow.fovus
 
 import nextflow.fovus.nio.FovusS3Path
+import nextflow.processor.TaskProcessor
 
 import java.nio.file.Path
 
@@ -37,10 +38,12 @@ import nextflow.util.Escape
 class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
 
 
-    private Map<String,String> environment
+    private Map<String, String> environment
+    private FovusExecutor executor
 
-    FovusFileCopyStrategy(TaskBean task) {
+    FovusFileCopyStrategy(TaskBean task, FovusExecutor executor) {
         super(task)
+        this.executor = executor
         this.environment = task.environment
     }
 
@@ -58,43 +61,56 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
      */
     @Override
     String getEnvScript(Map environment, boolean container) {
-//        if( container )
-//            throw new IllegalArgumentException("Parameter `container` not supported by ${this.class.simpleName}")
-
         final result = new StringBuilder()
-        final copy = environment ? new LinkedHashMap<String,String>(environment) : Collections.<String,String>emptyMap()
+        final copy = environment ? new LinkedHashMap<String, String>(environment) : Collections.<String, String> emptyMap()
         final path = copy.containsKey('PATH')
         // remove any external PATH
-        if( path )
+        if (path)
             copy.remove('PATH')
-        // when a remote bin directory is provide managed it properly
-//        if( opts.remoteBinDir ) {
-//            result << "${opts.getAwsCli()} s3 cp --recursive --only-show-errors s3:/${opts.remoteBinDir} \$PWD/nextflow-bin\n"
-//            result << "chmod +x \$PWD/nextflow-bin/* || true\n"
-//            result << "export PATH=\$PWD/nextflow-bin:\$PATH\n"
-//        }
-        // finally render the environment
-        final envSnippet = super.getEnvScript(copy,false)
-        if( envSnippet )
-            result << envSnippet
+
+        if (!executor.remoteBinDir) return super.getEnvScript(copy, container)
+
+        result << "[ -d \$PWD/nextflow-bin ] || cp -r /${getFovusMappingPath(executor.remoteBinDir)} \$PWD/nextflow-bin && chmod +x \$PWD/nextflow-bin/* || true\n"
+
+        if (!container) {
+            result << "export PATH=\$PWD/nextflow-bin:\$PATH\n"
+
+            final envScript = super.getEnvScript(copy, false)
+            if (envScript) result << envScript
+
+            return result.toString()
+        }
+
+        final wrapper = new StringBuilder()
+        wrapper << "nxf_container_env() {\n"
+        wrapper << 'cat << EOF\n'
+        if (copy) {
+            wrapper << TaskProcessor.bashEnvironmentScript(copy, true)
+        }
+        wrapper << "chmod +x ${Escape.variable("\$PWD/nextflow-bin/*")} || true \n"
+        wrapper << "export PATH=${Escape.variable("\$PWD/nextflow-bin:\$PATH")}\n"
+        wrapper << 'EOF\n'
+        wrapper << '}\n'
+
+        result << wrapper.toString()
         return result.toString()
     }
 
     @Override
-    String getStageInputFilesScript(Map<String,Path> inputFiles) {
+    String getStageInputFilesScript(Map<String, Path> inputFiles) {
         def result = 'downloads=(true)\n'
         result += getStageInputFilesScriptHelper(inputFiles) + '\n'
         result += 'nxf_parallel "${downloads[@]}"\n'
         return result
     }
 
-    String getStageInputFilesScriptHelper(Map<String,Path> inputFiles) {
+    String getStageInputFilesScriptHelper(Map<String, Path> inputFiles) {
         assert inputFiles != null
 
         def len = inputFiles.size()
         def delete = []
         def links = []
-        for( Map.Entry<String,Path> entry : inputFiles ) {
+        for (Map.Entry<String, Path> entry : inputFiles) {
             final stageName = entry.key
             final storePath = entry.value
 
@@ -107,11 +123,11 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
             // here is to keep the deletion only when a file input number is
             // given (which is more likely during pipeline development) and
             // drop in any case  when they are more than 100
-            if( len<100 )
+            if (len < 100)
                 delete << "rm -f ${Escape.path(stageName)}"
 
             // link them
-            links << stageInputFile( storePath, stageName )
+            links << stageInputFile(storePath, stageName)
         }
 
         // return a big string containing the command
@@ -122,10 +138,15 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
      * {@inheritDoc}
      */
     @Override
-    String stageInputFile( Path path, String targetName ) {
+    String stageInputFile(Path path, String targetName) {
         // third param should not be escaped, because it's used in the grep match rule
-        def stage_cmd = "downloads+=(\"nxf_s3_download /${Escape.path(getFovusMappingPath(path))} ${Escape.path(targetName)}\")"
-        return stage_cmd
+        def cmd = ''
+        def p = targetName.lastIndexOf('/')
+        if (p > 0) {
+            cmd += "mkdir -p ${Escape.path(targetName.substring(0, p))} && "
+        }
+        cmd += "downloads+=(\"nxf_s3_download /${Escape.path(getFovusMappingPath(path))} ${Escape.path(targetName)}\")"
+        return cmd
     }
 
     /**
@@ -138,12 +159,12 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
         // create a bash script that will copy the out file to the working directory
         log.trace "[AWS BATCH] Unstaging file path: $patterns"
 
-        if( !patterns )
+        if (!patterns)
             return null
 
         final escape = new ArrayList(outputFiles.size())
-        for( String it : patterns )
-            escape.add( Escape.path(it) )
+        for (String it : patterns)
+            escape.add(Escape.path(it))
 
         return """\
             uploads=()
@@ -160,7 +181,7 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
      * {@inheritDoc}
      */
     @Override
-    String touchFile( Path file ) {
+    String touchFile(Path file) {
         "echo start | nxf_s3_upload - /${Escape.path(getFovusMappingPath(file))}"
     }
 
@@ -168,7 +189,7 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
      * {@inheritDoc}
      */
     @Override
-    String fileStr( Path path ) {
+    String fileStr(Path path) {
         Escape.path(path.getFileName())
     }
 
@@ -176,34 +197,37 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
      * {@inheritDoc}
      */
     @Override
-    String copyFile( String name, Path target ) {
+    String copyFile(String name, Path target) {
         "nxf_s3_upload ${Escape.path(name)} /${Escape.path(getFovusMappingPath(target.getParent()))}"
     }
 
-    static String uploadCmd( String source, Path target ) {
+    static String uploadCmd(String source, Path target) {
         "nxf_s3_upload ${Escape.path(source)} /${Escape.path(getFovusMappingPath(target))}"
     }
 
     /**
      * {@inheritDoc}
      */
-    String exitFile( Path path ) {
-        "| nxf_s3_upload - /${Escape.path(getFovusMappingPath(path))} || true"
+    String exitFile(Path path) {
+        // Write exit code to current working directory
+//        "| nxf_s3_upload - /${Escape.path(getFovusMappingPath(path))} || true"
+        final exitCodeFileName = path.getFileName().toString()
+        " > ${Escape.path(exitCodeFileName)} || true"
     }
 
     /**
      * {@inheritDoc}
      */
     @Override
-    String pipeInputFile( Path path ) {
+    String pipeInputFile(Path path) {
         " < ${Escape.path(path.getFileName())}"
     }
 
-    static String getFovusMappingPath(Path path){
-        FovusS3Path fovusPath = (FovusS3Path)path;
+    static String getFovusMappingPath(Path path) {
+        FovusS3Path fovusPath = (FovusS3Path) path;
         String key = fovusPath.getKey();
         def result = ""
-        if(fovusPath.isJobFile()){
+        if (fovusPath.isJobFile()) {
             result = "fovus-storage/jobs/${key.substring(key.indexOf('/') + 1)}"
         } else {
             result = "fovus-storage/files/${key}"

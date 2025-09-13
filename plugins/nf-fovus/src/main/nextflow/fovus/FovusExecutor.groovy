@@ -6,6 +6,7 @@ import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
 import nextflow.executor.TaskArrayExecutor
 import nextflow.extension.FilesEx
+import nextflow.fovus.nio.FovusS3Path
 import nextflow.fovus.pipeline.FovusPipelineClient
 import nextflow.processor.TaskArrayRun
 import nextflow.processor.TaskHandler
@@ -60,7 +61,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     Path getRemoteBinDir() {
         remoteBinDir
     }
-
+    
     @Override
     protected void register() {
         super.register()

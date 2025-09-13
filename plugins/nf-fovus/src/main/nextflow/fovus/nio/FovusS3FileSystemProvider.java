@@ -282,11 +282,14 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
         final Optional<FovusS3FileAttributes> attrs = readAttr1(source);
         final boolean isDir = attrs.isPresent() && attrs.get().isDirectory();
         final String type = isDir ? "directory" : "file";
-        final FovusClient s3Client = source.getFileSystem().getClient();
-        log.debug("S3 download {} from={} to={}", type, FilesEx.toUriString(source), localDestination);
+        final FovusClient fovusS3Client = source.getFileSystem().getClient();
+        log.debug("Fovus download {} from={} to={}", type, FilesEx.toUriString(source), localDestination);
 
         System.out.println("download: source: " + source);
         System.out.println("download: localDestination.toFile(): " + localDestination.toFile());
+
+        fovusS3Client.downloadJobFile(source.getFileJobId(), localDestination.toAbsolutePath().toString(), source.getKey());
+
         //            TODO: Replace
 //		if( isDir ) {
 ////			s3Client.downloadDirectory(source, localDestination.toFile());
@@ -905,6 +908,7 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
     public boolean exists(Path path, LinkOption... options) {
         if (path instanceof FovusS3Path fovusPath) { // Java 16+ pattern matching for instanceof
             try {
+                log.trace("exists Checking file: {}", path.toString());
                 System.out.println("exists Checking file: " + path.toString());// use your logger instead of println
                 s3ObjectSummaryLookup.lookup(fovusPath);
                 return true;

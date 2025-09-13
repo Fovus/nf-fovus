@@ -1,8 +1,11 @@
 package nextflow.fovus
 
+import nextflow.container.ContainerBuilder
 import nextflow.executor.BashWrapperBuilder
 import nextflow.processor.TaskBean
 import nextflow.processor.TaskRun
+
+import java.nio.file.Path
 
 class FovusScriptLauncher extends BashWrapperBuilder {
 
@@ -23,6 +26,16 @@ class FovusScriptLauncher extends BashWrapperBuilder {
             bean.inputFiles[TaskRun.CMD_INFILE] = bean.workDir.resolve(TaskRun.CMD_INFILE)
         }
     }
+
+//    @Override
+//    ContainerBuilder createContainerBuilder(String changeDir) {
+//        ContainerBuilder builder = super.createContainerBuilder(changeDir)
+//        builder.addMount(Path.of("/fovus/archive"))
+//        builder.addMount(Path.of("/fovus-storage"))
+//
+//        builder.build()
+//        return builder
+//    }
 
     @Override
     protected boolean fixOwnership() {
