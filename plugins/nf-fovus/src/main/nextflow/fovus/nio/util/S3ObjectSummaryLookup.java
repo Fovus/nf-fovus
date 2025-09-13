@@ -35,6 +35,7 @@ public class S3ObjectSummaryLookup {
 
     /**
      * Get the {@link com.amazonaws.services.s3.model.S3ObjectSummary} that represent this Path or its first child if the path does not exist
+     *
      * @param s3Path {@link FovusS3Path}
      * @return {@link com.amazonaws.services.s3.model.S3ObjectSummary}
      * @throws NoSuchFileException if not found the path and any child
@@ -45,65 +46,80 @@ public class S3ObjectSummaryLookup {
          * check is object summary has been cached
          */
         S3ObjectSummary summary = s3Path.fetchObjectSummary();
-        if( summary != null ) {
+        if (summary != null) {
             return summary;
         }
 
         final FovusClient client = s3Path.getFileSystem().getClient();
         System.out.println("lookup: s3Path " + s3Path.toString());
-        try{
-            System.out.println("checking" );
-            /*
-             * when `key` is an empty string retrieve the object meta-data of the bucket
-             */
-            if( "".equals(s3Path.getKey()) ) {
-                System.out.println("lookup - s3Path.getKey is empty");
-                ObjectMetaData meta = client.getFileObject(s3Path.getBucket(), "");
-                if( meta == null )
-                    throw new NoSuchFileException("s3://" + s3Path.getBucket());
+        System.out.println("===== Lookup Key:" + s3Path.getKey());
+        System.out.println("checking");
+        /*
+         * when `key` is an empty string retrieve the object meta-data of the bucket
+         */
+        if ("".equals(s3Path.getKey())) {
+            System.out.println("lookup - s3Path.getKey is empty");
+            ObjectMetaData meta = client.getFileObject(s3Path.getBucket(), "");
+            if (meta == null)
+                throw new NoSuchFileException("s3://" + s3Path.getBucket());
 
-                summary = new S3ObjectSummary();
-                summary.setBucketName(s3Path.getBucket());
-                summary.setETag(meta.getETag());
-                summary.setKey(s3Path.getKey());
-                summary.setLastModified(meta.getLastModified());
-                summary.setSize(meta.getSize());
-                return summary;
-            } else {
-                System.out.println("calling getFileObject" );
-                ObjectMetaData meta = client.getFileObject(s3Path.getKey(), s3Path.getFileJobId());
-                System.out.println("meta" + meta.toString());
-                if( meta == null )
-                    throw new NoSuchFileException("s3://" + s3Path.getKey());
-
-                summary = new S3ObjectSummary();
-                summary.setBucketName(s3Path.getKey());
-                summary.setETag(meta.getETag());
-                summary.setKey(s3Path.getKey());
-                summary.setLastModified(meta.getLastModified());
-                summary.setSize(meta.getSize());
-                return summary;
+            summary = new S3ObjectSummary();
+            summary.setBucketName(s3Path.getBucket());
+            summary.setETag(meta.getETag());
+            summary.setKey(s3Path.getKey());
+            summary.setLastModified(meta.getLastModified());
+            summary.setSize(meta.getSize());
+            return summary;
+        } else {
+            System.out.println("calling getFileObject");
+            List<ObjectMetaData> metaDataList = client.listFileObjects(s3Path.getKey(), s3Path.getFileJobId());
+            log.trace("metaDataList: {}", metaDataList);
+            System.out.println("metaDataList: " + metaDataList);
+            if (metaDataList == null || metaDataList.isEmpty()) {
+                throw new NoSuchFileException("s3://" + s3Path.getKey());
             }
-        } catch (Exception e) {
-            System.out.println("Throwing NoSuchFileException");
-            throw new NoSuchFileException("s3://" + s3Path.getBucket() + "/" + s3Path.getKey());
+
+            for (ObjectMetaData objectMetaData : metaDataList) {
+                if (matchName(s3Path, objectMetaData)) {
+                    summary = new S3ObjectSummary();
+                    summary.setBucketName(s3Path.getBucket());
+                    summary.setETag(objectMetaData.getETag());
+
+                    if (objectMetaData.getKey().endsWith("/")) {
+                        summary.setKey(s3Path.getKey() + "/");
+                    } else {
+                        summary.setKey(s3Path.getKey());
+                    }
+                    summary.setLastModified(objectMetaData.getLastModified());
+                    summary.setSize(objectMetaData.getSize());
+                    return summary;
+                }
+            }
         }
+
+        System.out.println("Throwing NoSuchFileException");
+        log.trace("Throwing NoSuchFileException");
+        throw new NoSuchFileException("s3://" + s3Path.getBucket() + "/" + s3Path.getKey());
+
     }
 
-//    private boolean matchName(String fileName, S3ObjectSummary summary) {
-//        String foundKey = summary.getKey();
-//
-//        // they are different names return false
-//        if( !foundKey.startsWith(fileName) ) {
-//            return false;
-//        }
-//
-//        // when they are the same length, they are identical
-//        if( foundKey.length() == fileName.length() )
-//            return true;
-//
-//        return foundKey.charAt(fileName.length()) == '/';
-//    }
+    private boolean matchName(FovusS3Path s3Path, ObjectMetaData objectMetaData) {
+        String foundKey = objectMetaData.getKey();
+        String remoteFilePath = s3Path.toRemoteFilePath();
+        log.trace("+++ Remote file path {}", remoteFilePath);
+        System.out.println("+++ Remote file path " + remoteFilePath);
+
+        // they are different names return false
+        if (!foundKey.startsWith(remoteFilePath)) {
+            return false;
+        }
+
+        // when they are the same length, they are identical
+        if (foundKey.length() == remoteFilePath.length())
+            return true;
+
+        return foundKey.charAt(remoteFilePath.length()) == '/';
+    }
 
 //    public ObjectMetadata getS3ObjectMetadata(FovusS3Path s3Path) {
 //        FovusClient client = s3Path.getFileSystem().getClient();

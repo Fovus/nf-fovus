@@ -21,9 +21,13 @@ import com.amazonaws.services.s3.model.ListObjectsRequest;
 import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 import com.google.common.base.Preconditions;
+import org.jsoup.helper.ValidationException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 
@@ -34,20 +38,32 @@ import java.util.List;
  */
 public class FovusS3Iterator implements Iterator<Path> {
 
+    private static final Logger log = LoggerFactory.getLogger(FovusS3Iterator.class);
+
     private FovusS3FileSystem s3FileSystem;
+
     private String bucket;
+
     private String key;
+
+    /**
+     * The path to the input folder that we want to interate over
+     */
+    FovusS3Path fovusS3Path;
 
     private Iterator<FovusS3Path> it;
 
-    public FovusS3Iterator(FovusS3FileSystem s3FileSystem, String bucket, String key) {
+    public FovusS3Iterator(String key, FovusS3Path s3Path) {
+        String bucket = s3Path.getBucket();
+        FovusS3FileSystem s3FileSystem = s3Path.getFileSystem();
 
         Preconditions.checkArgument(key != null && key.endsWith("/"), "key %s should be ended with slash '/'", key);
 
         this.bucket = bucket;
-        // the only case i dont need the end slash is to list buckets content
+        // the only case i don't need the end slash is to list buckets content
         this.key = key.length() == 1 ? "" : key;
         this.s3FileSystem = s3FileSystem;
+        this.fovusS3Path = s3Path;
     }
 
     @Override
@@ -67,28 +83,29 @@ public class FovusS3Iterator implements Iterator<Path> {
 
     private Iterator<FovusS3Path> getIterator() {
         System.out.println("Inside getIterator : ");
-//        if (it == null) {
-//            List<FovusS3Path> listPath = new ArrayList<>();
-//
-//            // iterator over this list
-//            ObjectListing current = s3FileSystem.getClient().listObjects(buildRequest());
-//
+        if (it == null) {
+            List<FovusS3Path> listPath = new ArrayList<>();
+
+            // iterator over this list
+            // TODO: Need to support paginated requests
+            List<ObjectMetaData> objectMetaDataList = s3FileSystem.getClient().listFileObjects(key.substring(0, key.length() - 1), fovusS3Path.getFileJobId());
+
 //            while (current.isTruncated()) {
 //                // parse the elements
 //                parseObjectListing(listPath, current);
 //                // continue
 //                current = s3FileSystem.getClient().listNextBatchOfObjects(current);
 //            }
-//
-//            parseObjectListing(listPath, current);
-//
-//            it = listPath.iterator();
-//        }
+
+            parseObjectListing(listPath, objectMetaDataList);
+
+            it = listPath.iterator();
+        }
 
         return it;
     }
 
-    private ListObjectsRequest buildRequest(){
+    private ListObjectsRequest buildRequest() {
 
         ListObjectsRequest request = new ListObjectsRequest();
         request.setBucketName(bucket);
@@ -100,39 +117,83 @@ public class FovusS3Iterator implements Iterator<Path> {
 
     /**
      * add to the listPath the elements at the same level that s3Path
-     * @param listPath List not null list to add
-     * @param current ObjectListing to walk
+     *
+     * @param listPath           List not null list to add
+     * @param objectMetaDataList List<ObjectMetaData> to walk
      */
-    private void parseObjectListing(List<FovusS3Path> listPath, ObjectListing current) {
-
+    private void parseObjectListing(List<FovusS3Path> listPath, List<ObjectMetaData> objectMetaDataList) {
+        log.trace("parseObjectListing {}", bucket);
         System.out.println("parseObjectListing" + bucket);
         // add all the objects i.e. the files
-        for (final S3ObjectSummary objectSummary : current.getObjectSummaries()) {
-            final String key = objectSummary.getKey();
-            final FovusS3Path path = new FovusS3Path(s3FileSystem, "/" + bucket, key.split("/"));
-            path.setObjectSummary(objectSummary);
+//        for (final S3ObjectSummary objectSummary : current.getObjectSummaries()) {
+//            final String key = objectSummary.getKey();
+//            final FovusS3Path path = new FovusS3Path(s3FileSystem, "/" + bucket, key.split("/"));
+//            path.setObjectSummary(objectSummary);
+//            listPath.add(path);
+//        }
+        for (final ObjectMetaData objectMetaData : objectMetaDataList) {
+            String metaDataKey = objectMetaData.getKey();
+            if (metaDataKey.endsWith("/")) {
+                continue;
+            }
+            List<String> metaDataKeyParts = Arrays.stream(metaDataKey.split("/")).toList();
+
+            List<String> fovusS3PathParts = new ArrayList<>();
+            fovusS3PathParts.add(fovusS3Path.getPipelineId());
+
+            if (metaDataKeyParts.get(0).equals("jobs")) {
+                if (fovusS3Path.getFileJobId() == null) {
+                    throw new ValidationException("[FOVUS] Expecting job file but parent folder is not a job directory");
+                }
+
+                // Add the hashed bucket directory
+                String taskHasDir = fovusS3Path.getParts().get(1);
+                fovusS3PathParts.add(taskHasDir);
+            }
+
+            // Adding the remaining parts starting with the actual task's working directory or stage-*/
+            fovusS3PathParts.addAll(metaDataKeyParts.subList(2, metaDataKeyParts.size()));
+            log.trace("+++ fovusfovusS3PathParts {}", fovusS3PathParts);
+            System.out.println("+++ fovusS3PathParts" + fovusS3PathParts);
+
+            FovusS3Path path = new FovusS3Path(s3FileSystem, "/" + bucket, String.join("/", fovusS3PathParts));
+
+            S3ObjectSummary summary = new S3ObjectSummary();
+            summary.setBucketName(path.getBucket());
+            summary.setETag(objectMetaData.getETag());
+
+            if (objectMetaData.getKey().endsWith("/")) {
+                summary.setKey(path.getKey() + "/");
+            } else {
+                summary.setKey(path.getKey());
+            }
+            summary.setLastModified(objectMetaData.getLastModified());
+            summary.setSize(objectMetaData.getSize());
+            path.setObjectSummary(summary);
+
             listPath.add(path);
         }
 
         // add all the common prefixes i.e. the directories
-        for(final String dir : current.getCommonPrefixes()) {
-            if( dir.equals("/") ) continue;
-            listPath.add(new FovusS3Path(s3FileSystem, "/" + bucket, dir));
-        }
-
+        // TODO: Add support for common prefix for nested folders
+//        for (final String dir : current.getCommonPrefixes()) {
+//            if (dir.equals("/")) continue;
+//            listPath.add(new FovusS3Path(s3FileSystem, "/" + bucket, dir));
+//        }
     }
 
     /**
      * The current #buildRequest() get all subdirectories and her content.
      * This method filter the keyChild and check if is a immediate
      * descendant of the keyParent parameter
+     *
      * @param keyParent String
-     * @param keyChild String
+     * @param keyChild  String
      * @return String parsed
-     *  or null when the keyChild and keyParent are the same and not have to be returned
+     * or null when the keyChild and keyParent are the same and not have to be returned
      */
     @Deprecated
-    private String getInmediateDescendent(String keyParent, String keyChild){
+    private String getInmediateDescendent(String keyParent, String keyChild) {
 
         keyParent = deleteExtraPath(keyParent);
         keyChild = deleteExtraPath(keyChild);
@@ -143,10 +204,9 @@ public class FovusS3Iterator implements Iterator<Path> {
 
         String[] parts = childWithoutParent.split("/");
 
-        if (parts.length > 0 && !parts[0].isEmpty()){
+        if (parts.length > 0 && !parts[0].isEmpty()) {
             return keyParent + "/" + parts[0];
-        }
-        else {
+        } else {
             return null;
         }
 
@@ -154,10 +214,10 @@ public class FovusS3Iterator implements Iterator<Path> {
 
     @Deprecated
     private String deleteExtraPath(String keyChild) {
-        if (keyChild.startsWith("/")){
+        if (keyChild.startsWith("/")) {
             keyChild = keyChild.substring(1);
         }
-        if (keyChild.endsWith("/")){
+        if (keyChild.endsWith("/")) {
             keyChild = keyChild.substring(0, keyChild.length() - 1);
         }
         return keyChild;

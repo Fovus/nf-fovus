@@ -27,26 +27,26 @@ import java.nio.file.Path
 
 /**
  * Implements the a factory strategy to parse and build S3 path URIs
- * 
+ *
  * @author Paolo Di Tommaso <paolo.ditommaso@gmail.com>
  */
 @Slf4j
 @CompileStatic
-class S3PathFactory extends FileSystemPathFactory {
+class FovusS3PathFactory extends FileSystemPathFactory {
 
     @Override
     protected Path parseUri(String str) {
         // normalise 's3' path
         log.debug "ParseURI: $str"
-        if( str.startsWith('fovus://') && str[5]!='/' ) {
-            final path = "fovus:///${str.substring(5)}"
+        if (str.startsWith('fovus://') && str[8] != '/') {
+            final path = "fovus:///${str.substring(8)}"
             return create(path)
         }
         return null
     }
 
     static private Map config() {
-        final result = Global.config?.get('aws') as Map
+        final result = Global.config?.get('fovus') as Map
         return result != null ? result : Collections.emptyMap()
     }
 
@@ -63,7 +63,7 @@ class S3PathFactory extends FileSystemPathFactory {
     @Override
     protected String getUploadCmd(String source, Path target) {
         return target instanceof FovusS3Path
-                ? FovusFileCopyStrategy.uploadCmd(source,target)
+                ? FovusFileCopyStrategy.uploadCmd(source, target)
                 : null
     }
 
@@ -79,12 +79,12 @@ class S3PathFactory extends FileSystemPathFactory {
      *      The corresponding {@link FovusS3Path}
      */
     static FovusS3Path create(String path) {
-        if( !path ) throw new IllegalArgumentException("Missing S3 path argument")
-        if( !path.startsWith('fovus:///') ) throw new IllegalArgumentException("S3 path must start with fovus:/// prefix -- offending value '$path'")
+        if (!path) throw new IllegalArgumentException("Missing S3 path argument")
+        if (!path.startsWith('fovus:///')) throw new IllegalArgumentException("S3 path must start with fovus:/// prefix -- offending value '$path'")
         // note: this URI constructor parse the path parameter and extract the `scheme` and `authority` components
-        final uri = new URI(null,null, path,null,null)
+        final uri = new URI(null, null, path, null, null)
 
         log.debug "ParseURI create: $path"
-        return (FovusS3Path)FileHelper.getOrCreateFileSystemFor(uri,config()).provider().getPath(uri)
+        return (FovusS3Path) FileHelper.getOrCreateFileSystemFor(uri, config()).provider().getPath(uri)
     }
 }

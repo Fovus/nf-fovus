@@ -38,7 +38,7 @@ class S3BashLib extends BashFunLib<S3BashLib> {
 
 
     protected String retryEnv() {
-        if( !retryMode )
+        if (!retryMode)
             return ''
         """
         # aws cli retry config
@@ -70,7 +70,7 @@ class S3BashLib extends BashFunLib<S3BashLib> {
         nxf_s3_download() {
             local source="\$1"
             local target="\$2"
-        
+            
             if [[ -d "\$source" ]]; then
                 # source is a directory
                 cp -r "\$source" "\$target"
