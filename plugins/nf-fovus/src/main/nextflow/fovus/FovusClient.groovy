@@ -33,9 +33,13 @@ class FovusClient {
         this.config = config;
     }
 
+    public setJobConfig(FovusJobConfig jobConfig) {
+        this.jobConfig = jobConfig
+    }
+
     String generateJobId() {
         def command = [config.getCliPath(), '--silence', 'job', 'generate-id']
-        def result = executeCommand(command.join(' '))
+        def result = executeCommand(command)
 
         if (result.exitCode != 0) {
             throw new RuntimeException("Failed to generate Fovus job id: ${result.error}")
@@ -49,7 +53,12 @@ class FovusClient {
     }
 
     String createJob(String jobConfigFilePath, String jobDirectory, String pipelineId, List<String> includeList, String jobId, String jobName = null, isArrayJob = false) {
-        def command = [config.getCliPath(), '--silence', '--nextflow', 'job', 'create', jobConfigFilePath, jobDirectory]
+        def command = [config.getCliPath(), '--silence', '--nextflow', 'job', 'create']
+
+        if (includeList.size() > 0) {
+            command << "--job-id"
+            command << jobId
+        }
 
         if (pipelineId) {
             command << "--pipeline-id"
@@ -66,12 +75,10 @@ class FovusClient {
             command << includeList.join(",")
         }
 
-        if (includeList.size() > 0) {
-            command << "--job-id"
-            command << jobId
-        }
+        command << jobConfigFilePath
+        command << jobDirectory
 
-        def result = executeCommand(command.join(' '))
+        def result = executeCommand(command)
 
 
         if (result.exitCode != 0) {
@@ -93,7 +100,7 @@ class FovusClient {
         } else {
             command = [config.getCliPath(), '--silence', 'storage', 'upload', basePath, filePath.substring(0, filePath.lastIndexOf('/'))]
         }
-        def result = executeCommand(command.join(' '))
+        def result = executeCommand(command)
 
         if (result.exitCode != 0) {
             throw new RuntimeException("Failed to upload file: ${result.error}")
@@ -110,12 +117,12 @@ class FovusClient {
             def afterTwo = parts.size() > 2 ? parts[2..-1].join('/') : filePath
             println("afterTwo: $afterTwo")
             println afterTwo
-            command = [config.getCliPath(), '--silence', 'job', 'upload', afterTwo, '--job-id', jobId, '--empty-dir True']
+            command = [config.getCliPath(), '--silence', 'job', 'upload', afterTwo, '--job-id', jobId, '--empty-dir', 'True']
         } else {
             def basePath = "dummy"
-            command = [config.getCliPath(), '--silence', 'storage', 'upload', basePath, filePath, '--empty-dir True']
+            command = [config.getCliPath(), '--silence', 'storage', 'upload', basePath, filePath, '--empty-dir', 'True']
         }
-        def result = executeCommand(command.join(' '))
+        def result = executeCommand(command)
 
         if (result.exitCode != 0) {
             throw new RuntimeException("Failed to upload file: ${result.error}")
@@ -130,13 +137,15 @@ class FovusClient {
 
 // fovus --silence job download /tmp/fovus-7637548319521497736 --job-id 1757547676862-minhlefovus --include-paths ffa827451eca6c3774e874c4d47396
         def command = [config.getCliPath(), '--silence', 'job', 'download', targetPath, '--job-id', jobId, '--include-paths', parts[2..-1].join('/')]
-        def result = executeCommand(command.join(' '))
+        def result = executeCommand(command)
 
         if (result.exitCode != 0) {
             throw new RuntimeException("Failed to upload file: ${result.error}")
         }
 
-        return jobId
+        // Eg, /tmp/fovus-7637548319521497736/ffa827451eca6c3774e874c4d47396
+        final downloadedPath = targetPath + '/' + parts[2..-1].join('/')
+        return downloadedPath
     }
 
 
@@ -153,7 +162,7 @@ class FovusClient {
             command << path
         }
 
-        def result = executeCommand(command.join(' '))
+        def result = executeCommand(command)
 
         if (result.exitCode != 0) {
             throw new RuntimeException("Failed to upload file: ${result.error}")
@@ -217,7 +226,7 @@ class FovusClient {
 
     FovusJobStatus getJobStatus(String jobId) {
         def command = [config.getCliPath(), 'job', 'status', '--job-id', jobId]
-        def result = executeCommand(command.join(' '))
+        def result = executeCommand(command)
 
         def jobStatus = result.output.trim().split('\n')[-1]
         log.debug "[FOVUS] Job Id: ${jobId}, status: ${jobStatus}"
@@ -276,7 +285,7 @@ class FovusClient {
     FovusRunStatus getRunStatus(String jobId, String runName) {
         def command = [config.getCliPath(), 'job', 'list-runs', '--job-id', jobId, '--run-names', runName]
         try {
-            def result = executeCommand(command.join(' '))
+            def result = executeCommand(command)
             def runStatus = getStatusFromJsonOutput(result.output)
             log.debug "[FOVUS] Job Id: ${jobId}, status: ${runStatus}"
 
@@ -318,18 +327,18 @@ class FovusClient {
     }
 
     /**
-     * Helper method to execute Fovus CLI commands
+     * Helper method to execute Fovus CLI commands with retry logic
      * @param command
      * @return
      */
-    private CliExecutionResult executeCommand(String command) {
+    private CliExecutionResult executeCommand(final List command) {
         int maxRetries = 3
         int attempt = 0
         CliExecutionResult result = null
 
         while (attempt < maxRetries) {
             attempt++
-            log.debug "[FOVUS] Executing command (attempt ${attempt}/${maxRetries}): ${command}"
+            log.debug "[FOVUS] Executing command (attempt ${attempt}/${maxRetries}): ${command.join(' ')}"
 
             def stdout = new StringBuilder()
             def stderr = new StringBuilder()
@@ -363,20 +372,42 @@ class FovusClient {
         return result
     }
 
+//    private CliExecutionResult executeCommand(String command) {
+//        return executeCommand([command])
+//    }
+
     public void downloadJobOutputs(String jobDirectoryPath, String jobId) {
         def downloadJobCommand = [config.getCliPath(), 'job', 'download', jobDirectoryPath, '--job-id', jobId]
 
         log.debug "[FOVUS] Download job outputs"
-        def result = executeCommand(downloadJobCommand.join(' '))
+        def result = executeCommand(downloadJobCommand)
 
         if (result.exitCode != 0) {
             throw new RuntimeException("Failed to download Fovus job outputs: ${result.error}")
         }
     }
 
+    public String getDefaultJobConfig(String benchmarkingProfileName) {
+        def command = [config.getCliPath(), 'job', 'get-default-config', '--benchmarking-profile-name', "${benchmarkingProfileName}"]
+
+        def result = executeCommand(command)
+
+        log.debug "[FOVUS] getDefaultJobConfig with exit code: ${result.exitCode}"
+        if (result.exitCode != 0) {
+            log.debug "[FOVUS] Command error: ${result.error}"
+            return null
+        }
+
+        return result.output
+    }
+
+    public String getDefaultJobConfig() {
+        getDefaultJobConfig("Default")
+    }
+
     public void terminateJob(String jobId) {
         def command = [config.getCliPath(), 'job', 'terminate', '--job-id', jobId]
-        def result = executeCommand(command.join(' '))
+        def result = executeCommand(command)
 
         if (result.exitCode != 0) {
             throw new RuntimeException("Failed to terminate Fovus job: ${result.error}")

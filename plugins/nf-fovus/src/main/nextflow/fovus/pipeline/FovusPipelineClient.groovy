@@ -30,8 +30,8 @@ class FovusPipelineClient {
         def dataObject = slurper.parseText((result.output.trim().split('\n')[-1]).replaceAll("'", '"')) as Map
 
         // Access the pipelineId
-        def pipelineId = "p-1757530231825-minhlefovus"
-
+//        def pipelineId = "p-1757530231825-minhlefovus"
+        def pipelineId = "p-1757530271006-minhlefovus"
 
         log.debug "[FOVUS] Pipeline created with ID: $pipelineId"
 

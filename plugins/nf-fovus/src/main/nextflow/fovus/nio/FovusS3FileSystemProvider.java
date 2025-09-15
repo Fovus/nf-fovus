@@ -356,23 +356,35 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
                 "path must be an instance of %s", FovusS3Path.class.getName());
         final FovusS3Path s3Path = (FovusS3Path) path;
         // we resolve to a file inside the temp folder with the s3path name
-        final Path tempFile = createTempDir().resolve(path.getFileName().toString());
+        final Path tempDir = createTempDir();
+//        final Path tempFile = createTempDir().resolve(path.getFileName().toString());
 
+        String downloadedPath = "";
         try {
 //			InputStream is = s3Path.getFileSystem().getClient()
 //					.getObject(s3Path.getBucket(), s3Path.getKey())
 //					.getObjectContent();
-            InputStream is = null;
-            if (is == null)
-                throw new IOException(String.format("The specified path is a directory: %s", path));
+//            InputStream is = null;
+//            if (is == null)
+//                throw new IOException(String.format("The specified path is a directory: %s", path));
+//
+//            Files.write(tempFile, IOUtils.toByteArray(is));
+            downloadedPath = s3Path
+                    .getFileSystem()
+                    .getClient()
+                    .downloadJobFile(s3Path.getFileJobId(), tempDir.toAbsolutePath().toString(), s3Path.getKey());
 
-            Files.write(tempFile, IOUtils.toByteArray(is));
+            log.trace("[FOVUS] In newByteChannel - downloadedPath: {}", downloadedPath);
+            if (downloadedPath.isEmpty()) {
+                throw new IOException(String.format("Cannot access file: %s", path));
+            }
         } catch (AmazonS3Exception e) {
             if (e.getStatusCode() != 404)
                 throw new IOException(String.format("Cannot access file: %s", path), e);
         }
 
         // and we can use the File SeekableByteChannel implementation
+        final Path tempFile = Path.of(downloadedPath);
         final SeekableByteChannel seekable = Files.newByteChannel(tempFile, options);
         final List<Tag> tags = ((FovusS3Path) path).getTagsList();
         final String contentType = ((FovusS3Path) path).getContentType();
