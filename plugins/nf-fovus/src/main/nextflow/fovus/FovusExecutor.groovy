@@ -7,6 +7,7 @@ import nextflow.executor.Executor
 import nextflow.executor.TaskArrayExecutor
 import nextflow.extension.FilesEx
 import nextflow.fovus.nio.FovusS3Path
+import nextflow.fovus.nio.util.FovusJobCache
 import nextflow.fovus.pipeline.FovusPipelineClient
 import nextflow.processor.TaskArrayRun
 import nextflow.processor.TaskHandler
@@ -17,6 +18,8 @@ import nextflow.util.Duration
 import nextflow.util.ServiceName
 import org.pf4j.ExtensionPoint
 
+import java.nio.file.FileSystemNotFoundException
+import java.nio.file.FileSystems
 import java.nio.file.Path
 import java.nio.file.Paths
 
@@ -54,14 +57,24 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         def pipelineId = pipelineClient.getPipeline().getPipelineId();
         println("pipelineId: -----------> $pipelineId")
         // Need to use /// to match the expected FovusS3FileSystem uri schema
-        Paths.get(URI.create("fovus:///fovus-storage/$pipelineId"));
+
+        def workDirUri = URI.create("fovus:///fovus-storage/$pipelineId")
+        Path workDir = null
+        try {
+            workDir = Paths.get(workDirUri);
+        } catch (FileSystemNotFoundException e) {
+            FileSystems.newFileSystem(workDirUri, session.config)
+            workDir = Paths.get(workDirUri)
+        }
+
+        return workDir
     }
 
     @PackageScope
     Path getRemoteBinDir() {
         remoteBinDir
     }
-    
+
     @Override
     protected void register() {
         super.register()
@@ -71,7 +84,9 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         this.pipelineClient = new FovusPipelineClient();
         log.debug("session --> ${this.session}")
         log.debug("name --> ${this.name}")
-        this.pipelineClient.createPipeline(config, "FullRnaseqPipeline");
+        log.debug("pipelineName --> ${config.getPipelineName()}")
+
+        FovusJobCache.getOrCreatePipelineId(this.pipelineClient, this.config, this.config.getPipelineName())
 
         uploadBinDir()
     }

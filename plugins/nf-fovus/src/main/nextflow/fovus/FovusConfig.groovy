@@ -18,14 +18,19 @@ import groovy.transform.PackageScope
 class FovusConfig {
 
     final private String cliPath
+    final private String pipelineName
 
     FovusConfig(Map config) {
         this.cliPath = config.cliPath ?: "fovus"
+        this.pipelineName = config.pipelineName ?: "Nextflow Unnamed Pipeline"
     }
 
     FovusConfig() {
         this.cliPath = "fovus"
+        this.pipelineName = "Nextflow Unnamed Pipeline"
     }
 
-    String getCliPath() {cliPath}
+    String getCliPath() { cliPath }
+
+    String getPipelineName() { pipelineName }
 }

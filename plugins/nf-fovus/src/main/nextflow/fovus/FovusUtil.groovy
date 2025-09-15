@@ -1,6 +1,7 @@
 package nextflow.fovus
 
 import groovy.transform.CompileStatic
+import groovy.transform.MapConstructor
 import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
 import nextflow.file.FileHelper
@@ -67,7 +68,7 @@ class FovusUtil {
 //        return filePath.toAbsolutePath().normalize().startsWith(executor.getStageDir())
 //    }
 
-    static String getJobId(FovusExecutor executor, Path inputWorkDir){
+    static String getJobId(FovusExecutor executor, Path inputWorkDir) {
         final jobIdMap = executor.getJobIdMap()
         return jobIdMap.get(inputWorkDir.toString())
     }
@@ -131,4 +132,57 @@ class FovusUtil {
 //            FileHelper.copyPath(Path.of(sourcePath), Path.of("${destination}/${dirName}"));
 //        }
 //    }
+
+    /**
+     * Helper method to execute Fovus CLI commands with retry logic
+     * @param command
+     * @return
+     */
+    static public CliExecutionResult executeCommand(final List command) {
+        int maxRetries = 3
+        int attempt = 0
+        CliExecutionResult result = null
+
+        while (attempt < maxRetries) {
+            attempt++
+            log.debug "[FOVUS] Executing command (attempt ${attempt}/${maxRetries}): ${command.join(' ')}"
+
+            def stdout = new StringBuilder()
+            def stderr = new StringBuilder()
+
+            def process = command.execute()
+            process.consumeProcessOutput(stdout, stderr)
+            process.waitFor()
+
+            result = new CliExecutionResult(
+                    exitCode: process.exitValue(),
+                    output: stdout.toString(),
+                    error: stderr.toString()
+            )
+
+            log.debug "[FOVUS] Command executed with exit code: ${result.exitCode}"
+            log.debug "[FOVUS] Command output: ${result.output}"
+            log.debug "[FOVUS] Command error: ${result.error}"
+
+            if (result.exitCode == 0) {
+                // Success, break out of retry loop
+                break
+            } else {
+                log.warn "[FOVUS] Command failed on attempt ${attempt} with exit code ${result.exitCode}"
+                if (attempt < maxRetries) {
+                    log.info "[FOVUS] Retrying command in 2s..."
+                    sleep(2000)  // small backoff before retry
+                }
+            }
+        }
+
+        return result
+    }
+}
+
+@MapConstructor
+class CliExecutionResult {
+    int exitCode
+    String output
+    String error
 }
