@@ -327,7 +327,7 @@ class FovusClient {
     }
 
     public String getDefaultJobConfig(String benchmarkingProfileName) {
-        def command = [config.getCliPath(), 'job', 'get-default-config', '--benchmarking-profile-name', "${benchmarkingProfileName}"]
+        def command = [config.getCliPath(), 'job', 'get-default-config', '--benchmarking-profile-name', "\"${benchmarkingProfileName}\""]
 
         def result = FovusUtil.executeCommand(command)
 
