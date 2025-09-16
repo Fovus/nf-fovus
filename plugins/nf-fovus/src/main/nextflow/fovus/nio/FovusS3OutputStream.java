@@ -371,7 +371,6 @@ public final class FovusS3OutputStream extends OutputStream {
     @Override
     public void close() throws IOException {
         log.trace("Inside close");
-        System.out.println("Inside close");
         if (closed || !(fovuS3Path instanceof FovusS3Path)) {
             return;
         }

@@ -115,8 +115,6 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
     @Override
     public FileSystem getFileSystem(URI uri) {
         final String bucketName = FovusS3Path.bucketName(uri);
-        System.out.println("bucketName: " + bucketName);
-        System.out.println("fileSystems: " + fileSystems);
 
         final FileSystem fileSystem = this.fileSystems.get(bucketName);
 
@@ -205,14 +203,12 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
             throw new IOException(String.format("Cannot access file: %s", FilesEx.toUriString(s3Path)), e);
         }
 
-        System.out.println("result: " + result);
         return result;
 //        return null;
     }
 
     @Override
     public OutputStream newOutputStream(final Path path, final OpenOption... options) throws IOException {
-        System.out.println("Inside newOutputStream");
         Preconditions.checkArgument(path instanceof FovusS3Path, "path must be an instance of %s", FovusS3Path.class.getName());
         FovusS3Path s3Path = (FovusS3Path) path;
 
@@ -285,8 +281,6 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
         final FovusClient fovusS3Client = source.getFileSystem().getClient();
         log.debug("Fovus download {} from={} to={}", type, FilesEx.toUriString(source), localDestination);
 
-        System.out.println("download: source: " + source);
-        System.out.println("download: localDestination.toFile(): " + localDestination.toFile());
 
         fovusS3Client.downloadJobFile(source.getFileJobId(), localDestination.toAbsolutePath().toString(), source.getKey());
 
@@ -323,8 +317,6 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
         final String type = isDir ? "directory" : "file";
         log.debug("S3 upload {} from={} to={}", type, localFile, FilesEx.toUriString(target));
         final FovusClient s3Client = target.getFileSystem().getClient();
-        System.out.println("upload: target: " + target);
-        System.out.println("upload: localFile.toFile(): " + localFile.toFile());
         //            TODO: Replace
         s3Client.uploadJobFile(localFile.toFile().toString(), target.getKey(), target.getFileJobId());
 
@@ -351,7 +343,6 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
     public SeekableByteChannel newByteChannel(Path path,
                                               Set<? extends OpenOption> options, FileAttribute<?>... attrs)
             throws IOException {
-        System.out.println("Inside newByteChannel");
         Preconditions.checkArgument(path instanceof FovusS3Path,
                 "path must be an instance of %s", FovusS3Path.class.getName());
         final FovusS3Path s3Path = (FovusS3Path) path;
@@ -415,14 +406,12 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
                          and evict the close and open methods of probeContentType. By this way:
                          metadata.setContentType(new Tika().detect(stream, tempFile.getFileName().toString()));
                         */
-                        System.out.println("newByteChannel puObject: " + s3Path.getBucket() + "  " + s3Path.getKey());
                         s3Path.getFileSystem()
                                 .getClient()
                                 .uploadJobFile(tempFile.toFile().toString(), s3Path.getKey(), s3Path.getFileJobId());
                     }
                 } else {
                     // delete: check option delete_on_close
-                    System.out.println("newByteChannel deleteObject: " + s3Path.getBucket() + "  " + s3Path.getKey());
 //                    s3Path.getFileSystem().
 //                        getClient().deleteObject(s3Path.getBucket(), s3Path.getKey());
                 }
@@ -487,9 +476,6 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
         String keyName = s3Path.getKey()
                 + (s3Path.getKey().endsWith("/") ? "" : "/");
 
-        System.out.println("createDirectory - keyName: " + keyName);
-        System.out.println("createDirectory - metadata: " + metadata);
-        System.out.println("createDirectory - tags: " + tags);
         //TODO Update
         s3Path.getFileSystem()
                 .getClient()
@@ -516,8 +502,6 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
         }
 
         // we delete the two objects (sometimes exists the key '/' and sometimes not)
-        System.out.println("Delete s3Path: " + s3Path.getKey());
-        System.out.println("Delete s3Path: " + s3Path.getBucket());
         //TODO update
 //		s3Path.getFileSystem().getClient()
 //			.deleteObject(s3Path.getBucket(), s3Path.getKey());
@@ -535,7 +519,6 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
 
         if (isSameFile(source, target)) {
             // TODO add copy object
-            System.out.println("Same file..........");
             return;
         }
 
@@ -562,8 +545,6 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
         Properties props = s3Target.getFileSystem().properties();
 
         // TODO add copy object
-        System.out.println("Copy s3Source: " + s3Source.getBucket() + "  " + s3Source.getKey());
-        System.out.println("Copy s3Target: " + s3Target.getBucket() + "  " + s3Target.getKey());
 
         //		final ObjectMetadata sourceObjMetadata = s3Source.getFileSystem().getClient().getObjectMetadata(s3Source.getBucket(), s3Source.getKey());
         final S3MultipartOptions opts = props != null ? new S3MultipartOptions(props) : new S3MultipartOptions();
@@ -587,7 +568,6 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
 
     @Override
     public void move(Path source, Path target, CopyOption... options) throws IOException {
-        System.out.println("Inside move");
         for (CopyOption it : options) {
             if (it == StandardCopyOption.ATOMIC_MOVE)
                 throw new IllegalArgumentException("Atomic move not supported by S3 file system provider");
@@ -620,7 +600,6 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
         FovusClient client = s3Path.getFileSystem().getClient();
 
         // TODO
-        System.out.println("checkAccess s3Path: " + s3Path.getBucket() + "  " + s3Path.getKey());
 //		if( modes==null || modes.length==0 ) {
 //			// when no modes are given, the method is invoked
 //			// by `Files.exists` method, therefore just use summary lookup
@@ -698,14 +677,12 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
                 "path must be an instance of %s", FovusS3Path.class.getName());
         FovusS3Path s3Path = (FovusS3Path) path;
 
-        System.out.println("Inside readAttributes" + path.toString());
         if (type.isAssignableFrom(BasicFileAttributes.class)) {
             A attributes = (A) ("".equals(s3Path.getKey())
                     // the root bucket is implicitly a directory
                     ? new FovusS3FileAttributes("/", null, 0, true, false)
                     // read the target path attributes
                     : readAttr0(s3Path));
-            System.out.println("attributes: " + attributes);
             log.trace("+++ Attributes for path {}: {}", path, attributes);
             return attributes;
         }
@@ -862,7 +839,6 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
         // see https://github.com/nextflow-io/nextflow/pull/5779
         final boolean global = bucketName != null;
 //		final FovusClientFactory factory = new FovusClientFactory();
-        System.out.println("Creating FovusClient");
         fovusClient = new FovusClient(fovusConfig);
 
         if (props.getProperty("glacier_auto_retrieval") != null)
@@ -921,7 +897,6 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
         if (path instanceof FovusS3Path fovusPath) { // Java 16+ pattern matching for instanceof
             try {
                 log.trace("exists Checking file: {}", path.toString());
-                System.out.println("exists Checking file: " + path.toString());// use your logger instead of println
                 s3ObjectSummaryLookup.lookup(fovusPath);
                 return true;
             } catch (NoSuchFileException e) { // <-- more specific exception preferred

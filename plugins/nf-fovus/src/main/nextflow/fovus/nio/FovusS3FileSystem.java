@@ -104,7 +104,6 @@ public class FovusS3FileSystem extends FileSystem {
 
 	@Override
 	public Path getPath(String first, String... more) {
-        System.out.println("getPath: "+ first);
 		if (more.length == 0) {
 			return new FovusS3Path(this, first);
 		}

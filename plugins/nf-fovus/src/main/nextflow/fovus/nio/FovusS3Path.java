@@ -409,7 +409,6 @@ public class FovusS3Path implements Path, TagAwareFile {
 
     @Override
     public Path relativize(Path other) {
-        System.out.println("relativize: " + this + " -> " + other);
         Preconditions.checkArgument(other instanceof FovusS3Path,
                 "other must be an instance of %s", FovusS3Path.class.getName());
         FovusS3Path s3Path = (FovusS3Path) other;
@@ -646,7 +645,6 @@ public class FovusS3Path implements Path, TagAwareFile {
     }
 
     public static String bucketName(URI uri) {
-        System.out.println("uri: " + uri);
         final String path = uri.getPath();
         if (path == null || !path.startsWith("/"))
             throw new IllegalArgumentException("Invalid S3 path: " + uri);

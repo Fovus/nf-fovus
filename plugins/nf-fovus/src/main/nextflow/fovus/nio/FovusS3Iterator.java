@@ -82,7 +82,6 @@ public class FovusS3Iterator implements Iterator<Path> {
     }
 
     private Iterator<FovusS3Path> getIterator() {
-        System.out.println("Inside getIterator : ");
         if (it == null) {
             List<FovusS3Path> listPath = new ArrayList<>();
 
@@ -123,7 +122,6 @@ public class FovusS3Iterator implements Iterator<Path> {
      */
     private void parseObjectListing(List<FovusS3Path> listPath, List<ObjectMetaData> objectMetaDataList) {
         log.trace("parseObjectListing {}", bucket);
-        System.out.println("parseObjectListing" + bucket);
         // add all the objects i.e. the files
 //        for (final S3ObjectSummary objectSummary : current.getObjectSummaries()) {
 //            final String key = objectSummary.getKey();
@@ -154,7 +152,6 @@ public class FovusS3Iterator implements Iterator<Path> {
             // Adding the remaining parts starting with the actual task's working directory or stage-*/
             fovusS3PathParts.addAll(metaDataKeyParts.subList(2, metaDataKeyParts.size()));
             log.trace("+++ fovusfovusS3PathParts {}", fovusS3PathParts);
-            System.out.println("+++ fovusS3PathParts" + fovusS3PathParts);
 
             FovusS3Path path = new FovusS3Path(s3FileSystem, "/" + bucket, String.join("/", fovusS3PathParts));
 
