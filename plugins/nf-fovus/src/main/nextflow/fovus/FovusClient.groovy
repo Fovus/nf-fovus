@@ -95,7 +95,6 @@ class FovusClient {
         def command = []
         if (jobId) {
             def parts = filePath.split('/');
-            println("filePath: $filePath --> ${parts[2..-2].join('/')}")
             command = [config.getCliPath(), '--silence', 'job', 'upload', basePath, parts[2..-2].join('/'), '--job-id', jobId]
         } else {
             command = [config.getCliPath(), '--silence', 'storage', 'upload', basePath, filePath.substring(0, filePath.lastIndexOf('/'))]
@@ -108,15 +107,10 @@ class FovusClient {
     }
 
     String uploadEmptyDirectory(String filePath, String jobId) {
-        println("Inside uploadEmptyDirectory")
         def command = []
         if (jobId) {
-            println("filePath: $filePath")
             def parts = filePath.tokenize('/')
-            println("parts: $parts")
             def afterTwo = parts.size() > 2 ? parts[2..-1].join('/') : filePath
-            println("afterTwo: $afterTwo")
-            println afterTwo
             command = [config.getCliPath(), '--silence', 'job', 'upload', afterTwo, '--job-id', jobId, '--empty-dir', 'True']
         } else {
             def basePath = "dummy"
@@ -146,7 +140,6 @@ class FovusClient {
 
 
     List<ObjectMetaData> listFileObjects(String path, String jobId) {
-        println("Inside listFileObjects")
         def command = [config.getCliPath(), '--silence', 'job', 'list-objects']
         if (jobId) {
             def parts = path.tokenize('/')
@@ -169,15 +162,12 @@ class FovusClient {
             def output = result.output.toString()
 
             def jsonText = output.readLines().drop(2).join('\n')
-            println("Converting response -- $jsonText")
 
             def json = new JsonSlurper().parseText(jsonText)
             if (!(json instanceof List)) {
-                println("Converting response error")
                 throw new RuntimeException("No objects found for path: ${path}")
             }
 
-            println("Converted - ${json.toString()}")
 
 
             List<Map> jsonList = (List<Map>) json
@@ -199,12 +189,11 @@ class FovusClient {
                 )
                 metaDataList.add(objMetaData)
 
-                println("objMetaData --> ${objMetaData.toString()}")
             }
 
             return metaDataList
         } catch (Exception e) {
-            println("error ----- $e")
+            log.error "[FOVUS] Error listing file objects: ${e.message}"
         }
         return null;
     }

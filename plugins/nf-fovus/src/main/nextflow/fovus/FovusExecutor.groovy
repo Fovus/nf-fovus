@@ -55,7 +55,6 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     @Override
     Path getWorkDir() {
         def pipelineId = pipelineClient.getPipeline().getPipelineId();
-        println("pipelineId: -----------> $pipelineId")
         // Need to use /// to match the expected FovusS3FileSystem uri schema
 
         def workDirUri = URI.create("fovus:///fovus-storage/$pipelineId")
