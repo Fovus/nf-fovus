@@ -17,17 +17,17 @@
 
 package nextflow.fovus.nio.util;
 
-import com.amazonaws.services.s3.model.*;
-import nextflow.fovus.FovusClient;
-import nextflow.fovus.nio.ObjectMetaData;
-import nextflow.fovus.nio.S3Client;
-import nextflow.fovus.nio.FovusS3Path;
+import java.nio.file.NoSuchFileException;
+import java.util.List;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.nio.file.NoSuchFileException;
-import java.util.List;
+import com.amazonaws.services.s3.model.S3ObjectSummary;
+
+import nextflow.fovus.FovusClient;
+import nextflow.fovus.nio.FovusS3Path;
+import nextflow.fovus.nio.ObjectMetaData;
 
 public class S3ObjectSummaryLookup {
 
@@ -51,9 +51,6 @@ public class S3ObjectSummaryLookup {
         }
 
         final FovusClient client = s3Path.getFileSystem().getClient();
-        System.out.println("lookup: s3Path " + s3Path.toString());
-        System.out.println("===== Lookup Key:" + s3Path.getKey());
-        System.out.println("checking");
         /*
          * when `key` is an empty string retrieve the object meta-data of the bucket
          */

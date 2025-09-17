@@ -17,19 +17,21 @@
 
 package nextflow.fovus.nio;
 
-import com.amazonaws.services.s3.model.ListObjectsRequest;
-import com.amazonaws.services.s3.model.ObjectListing;
-import com.amazonaws.services.s3.model.S3ObjectSummary;
-import com.google.common.base.Preconditions;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
+
 import org.jsoup.helper.ValidationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
+import com.amazonaws.services.s3.model.ListObjectsRequest;
+import com.amazonaws.services.s3.model.S3ObjectSummary;
+import com.google.common.base.Preconditions;
 
 /**
  * S3 iterator over folders at first level.
@@ -180,11 +182,14 @@ public class FovusS3Iterator implements Iterator<Path> {
 
             if (folder.startsWith("jobs")) {
                 // pipelineId / taskHash / jobId
-                folderPath = fovusS3Path.getPipelineId() + "/" + fovusS3Path.getParts().get(1) + "/" + folder.substring(4) + "/";
+                folderPath = fovusS3Path.getPipelineId() + "/" + fovusS3Path.getParts().get(1) + "/";
             } else {
                 // Whatever after the files from the folder name
-                folderPath = folder.substring(5) + "/";
+                folderPath = fovusS3Path.getPipelineId() + "/";
             }
+
+            List<String> parts = Arrays.stream(folder.split("/")).toList();
+            folderPath += String.join("/", parts.subList(2, parts.size()));
 
             listPath.add(new FovusS3Path(s3FileSystem, "/" + bucket, folderPath));
         }
