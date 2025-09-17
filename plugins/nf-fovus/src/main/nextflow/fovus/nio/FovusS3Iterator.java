@@ -177,6 +177,9 @@ public class FovusS3Iterator implements Iterator<Path> {
         for (String folder : folders) {
             String folderPath = "";
             if (folder.equals("jobs") || folder.equals("files")) {
+            List<String> parts = Arrays.stream(folder.split("/")).toList();
+
+            if (parts.size() <= 2) {
                 continue;
             }
 
@@ -188,7 +191,6 @@ public class FovusS3Iterator implements Iterator<Path> {
                 folderPath = fovusS3Path.getPipelineId() + "/";
             }
 
-            List<String> parts = Arrays.stream(folder.split("/")).toList();
             folderPath += String.join("/", parts.subList(2, parts.size()));
 
             listPath.add(new FovusS3Path(s3FileSystem, "/" + bucket, folderPath));
