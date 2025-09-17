@@ -56,8 +56,6 @@ class FovusClientFactory {
 
         final creds = new BasicAWSCredentials(accessKey, secretKey)
         final credentials = new S3CredentialsProvider(new AWSStaticCredentialsProvider(creds));
-        println("credentials: " + credentials.getCredentials().AWSAccessKeyId)
-        println("credentials: " + credentials.getCredentials().AWSSecretKey)
 
 
         builder.withCredentials(credentials)

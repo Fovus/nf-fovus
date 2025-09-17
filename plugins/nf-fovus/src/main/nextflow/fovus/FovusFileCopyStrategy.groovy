@@ -233,7 +233,6 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
             result = "fovus-storage/files/${key}"
         }
 
-        println("getFovusMappingPath --> ${path.toString()} --- converted to ${result}");
         return result
     }
 }

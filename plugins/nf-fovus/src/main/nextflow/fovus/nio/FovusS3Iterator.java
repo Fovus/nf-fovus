@@ -17,19 +17,21 @@
 
 package nextflow.fovus.nio;
 
-import com.amazonaws.services.s3.model.ListObjectsRequest;
-import com.amazonaws.services.s3.model.ObjectListing;
-import com.amazonaws.services.s3.model.S3ObjectSummary;
-import com.google.common.base.Preconditions;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
+
 import org.jsoup.helper.ValidationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
+import com.amazonaws.services.s3.model.ListObjectsRequest;
+import com.amazonaws.services.s3.model.S3ObjectSummary;
+import com.google.common.base.Preconditions;
 
 /**
  * S3 iterator over folders at first level.
@@ -82,7 +84,6 @@ public class FovusS3Iterator implements Iterator<Path> {
     }
 
     private Iterator<FovusS3Path> getIterator() {
-        System.out.println("Inside getIterator : ");
         if (it == null) {
             List<FovusS3Path> listPath = new ArrayList<>();
 
@@ -123,20 +124,20 @@ public class FovusS3Iterator implements Iterator<Path> {
      */
     private void parseObjectListing(List<FovusS3Path> listPath, List<ObjectMetaData> objectMetaDataList) {
         log.trace("parseObjectListing {}", bucket);
-        System.out.println("parseObjectListing" + bucket);
-        // add all the objects i.e. the files
-//        for (final S3ObjectSummary objectSummary : current.getObjectSummaries()) {
-//            final String key = objectSummary.getKey();
-//            final FovusS3Path path = new FovusS3Path(s3FileSystem, "/" + bucket, key.split("/"));
-//            path.setObjectSummary(objectSummary);
-//            listPath.add(path);
-//        }
+        Set<String> folders = new HashSet<>();
         for (final ObjectMetaData objectMetaData : objectMetaDataList) {
             String metaDataKey = objectMetaData.getKey();
-            if (metaDataKey.endsWith("/")) {
-                continue;
-            }
             List<String> metaDataKeyParts = Arrays.stream(metaDataKey.split("/")).toList();
+
+            // Construct the folders from the last one (ignore the file name) to the first one by looping through the parts index from end to start
+            // If folder already exists, break the loop
+            for (int i = metaDataKeyParts.size() - 2; i >= 0; i--) {
+                String folder = String.join("/", metaDataKeyParts.subList(0, i + 1));
+                if (folders.contains(folder)) {
+                    break;
+                }
+                folders.add(folder);
+            }
 
             List<String> fovusS3PathParts = new ArrayList<>();
             fovusS3PathParts.add(fovusS3Path.getPipelineId());
@@ -154,7 +155,6 @@ public class FovusS3Iterator implements Iterator<Path> {
             // Adding the remaining parts starting with the actual task's working directory or stage-*/
             fovusS3PathParts.addAll(metaDataKeyParts.subList(2, metaDataKeyParts.size()));
             log.trace("+++ fovusfovusS3PathParts {}", fovusS3PathParts);
-            System.out.println("+++ fovusS3PathParts" + fovusS3PathParts);
 
             FovusS3Path path = new FovusS3Path(s3FileSystem, "/" + bucket, String.join("/", fovusS3PathParts));
 
@@ -174,12 +174,27 @@ public class FovusS3Iterator implements Iterator<Path> {
             listPath.add(path);
         }
 
-        // add all the common prefixes i.e. the directories
-        // TODO: Add support for common prefix for nested folders
-//        for (final String dir : current.getCommonPrefixes()) {
-//            if (dir.equals("/")) continue;
-//            listPath.add(new FovusS3Path(s3FileSystem, "/" + bucket, dir));
-//        }
+        for (String folder : folders) {
+            String folderPath = "";
+            if (folder.equals("jobs") || folder.equals("files")) {
+            List<String> parts = Arrays.stream(folder.split("/")).toList();
+
+            if (parts.size() <= 2) {
+                continue;
+            }
+
+            if (folder.startsWith("jobs")) {
+                // pipelineId / taskHash / jobId
+                folderPath = fovusS3Path.getPipelineId() + "/" + fovusS3Path.getParts().get(1) + "/";
+            } else {
+                // Whatever after the files from the folder name
+                folderPath = fovusS3Path.getPipelineId() + "/";
+            }
+
+            folderPath += String.join("/", parts.subList(2, parts.size()));
+
+            listPath.add(new FovusS3Path(s3FileSystem, "/" + bucket, folderPath));
+        }
     }
 
     /**

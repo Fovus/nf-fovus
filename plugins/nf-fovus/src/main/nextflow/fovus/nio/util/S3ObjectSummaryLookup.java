@@ -17,17 +17,17 @@
 
 package nextflow.fovus.nio.util;
 
-import com.amazonaws.services.s3.model.*;
-import nextflow.fovus.FovusClient;
-import nextflow.fovus.nio.ObjectMetaData;
-import nextflow.fovus.nio.S3Client;
-import nextflow.fovus.nio.FovusS3Path;
+import java.nio.file.NoSuchFileException;
+import java.util.List;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.nio.file.NoSuchFileException;
-import java.util.List;
+import com.amazonaws.services.s3.model.S3ObjectSummary;
+
+import nextflow.fovus.FovusClient;
+import nextflow.fovus.nio.FovusS3Path;
+import nextflow.fovus.nio.ObjectMetaData;
 
 public class S3ObjectSummaryLookup {
 
@@ -51,14 +51,10 @@ public class S3ObjectSummaryLookup {
         }
 
         final FovusClient client = s3Path.getFileSystem().getClient();
-        System.out.println("lookup: s3Path " + s3Path.toString());
-        System.out.println("===== Lookup Key:" + s3Path.getKey());
-        System.out.println("checking");
         /*
          * when `key` is an empty string retrieve the object meta-data of the bucket
          */
         if ("".equals(s3Path.getKey())) {
-            System.out.println("lookup - s3Path.getKey is empty");
             ObjectMetaData meta = client.getFileObject(s3Path.getBucket(), "");
             if (meta == null)
                 throw new NoSuchFileException("s3://" + s3Path.getBucket());
@@ -71,10 +67,8 @@ public class S3ObjectSummaryLookup {
             summary.setSize(meta.getSize());
             return summary;
         } else {
-            System.out.println("calling getFileObject");
             List<ObjectMetaData> metaDataList = client.listFileObjects(s3Path.getKey(), s3Path.getFileJobId());
             log.trace("metaDataList: {}", metaDataList);
-            System.out.println("metaDataList: " + metaDataList);
             if (metaDataList == null || metaDataList.isEmpty()) {
                 throw new NoSuchFileException("s3://" + s3Path.getKey());
             }
@@ -97,7 +91,6 @@ public class S3ObjectSummaryLookup {
             }
         }
 
-        System.out.println("Throwing NoSuchFileException");
         log.trace("Throwing NoSuchFileException");
         throw new NoSuchFileException("s3://" + s3Path.getBucket() + "/" + s3Path.getKey());
 
@@ -107,7 +100,6 @@ public class S3ObjectSummaryLookup {
         String foundKey = objectMetaData.getKey();
         String remoteFilePath = s3Path.toRemoteFilePath();
         log.trace("+++ Remote file path {}", remoteFilePath);
-        System.out.println("+++ Remote file path " + remoteFilePath);
 
         // they are different names return false
         if (!foundKey.startsWith(remoteFilePath)) {

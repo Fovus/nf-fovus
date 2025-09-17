@@ -147,9 +147,6 @@ public class S3Client {
 	 * @see com.amazonaws.services.s3.AmazonS3Client#putObject(String, String, InputStream, ObjectMetadata)
 	 */
 	public PutObjectResult putObject(String bucket, String keyName, InputStream inputStream, ObjectMetadata metadata, List<Tag> tags, String contentType) {
-        System.out.println("s3Put - bucketName" + bucket );
-        System.out.println("s3Put - keyName" + keyName );
-
         metadata.setSSEAlgorithm(ObjectMetadata.AES_256_SERVER_SIDE_ENCRYPTION);
 		PutObjectRequest req = new PutObjectRequest(bucket, keyName, inputStream, metadata);
 		if( cannedAcl != null ) {

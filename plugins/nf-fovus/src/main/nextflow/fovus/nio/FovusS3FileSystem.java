@@ -17,21 +17,22 @@
 
 package nextflow.fovus.nio;
 
-import com.amazonaws.services.s3.model.*;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
-import nextflow.fovus.FovusClient;
-import nextflow.fovus.nio.FovusS3FileSystemProvider;
-
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
-import java.nio.file.*;
+import java.nio.file.FileStore;
+import java.nio.file.FileSystem;
+import java.nio.file.Path;
+import java.nio.file.PathMatcher;
+import java.nio.file.WatchService;
 import java.nio.file.attribute.UserPrincipalLookupService;
 import java.nio.file.spi.FileSystemProvider;
-import java.util.List;
 import java.util.Properties;
 import java.util.Set;
+
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
+
+import nextflow.fovus.FovusClient;
 
 public class FovusS3FileSystem extends FileSystem {
 	
@@ -104,7 +105,6 @@ public class FovusS3FileSystem extends FileSystem {
 
 	@Override
 	public Path getPath(String first, String... more) {
-        System.out.println("getPath: "+ first);
 		if (more.length == 0) {
 			return new FovusS3Path(this, first);
 		}

@@ -36,7 +36,6 @@ public class FovusCliExecutor {
     public static CliExecutionResult executeCommand(String command) {
         StringBuilder stdout = new StringBuilder();
         StringBuilder stderr = new StringBuilder();
-        System.out.println("[FOVUS] Command command: " + command);
         try {
             Process process = Runtime.getRuntime().exec(command);
 
@@ -54,10 +53,6 @@ public class FovusCliExecutor {
             }
 
             int exitCode = process.waitFor();
-
-            System.out.println("[FOVUS] Command executed with exit code: " + exitCode);
-            System.out.println("[FOVUS] Command output: " + stdout);
-            System.out.println("[FOVUS] Command error: " + stderr);
 
             return new CliExecutionResult(exitCode, stdout.toString(), stderr.toString());
 

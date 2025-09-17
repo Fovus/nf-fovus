@@ -171,9 +171,6 @@ public final class FovusS3OutputStream extends OutputStream {
     }
 
     private ByteBuffer expandBuffer(ByteBuffer byteBuffer) {
-
-        log.trace("Inside expandBuffer");
-
         final float expandFactor = 2.5f;
         final int newCapacity = Math.min((int) (byteBuffer.capacity() * expandFactor), bufferSize);
 
@@ -196,13 +193,10 @@ public final class FovusS3OutputStream extends OutputStream {
      */
     @Override
     public void write(int b) throws IOException {
-        log.trace("Inside write");
         if (closed) {
             throw new IOException("Can't write into a closed stream");
         }
-//        log.trace("Inside write");
         if (buf == null) {
-            log.trace("buf is null, allocating");
             buf = allocate();
         } else if (!buf.hasRemaining()) {
             if (buf.position() < bufferSize) {
@@ -224,13 +218,8 @@ public final class FovusS3OutputStream extends OutputStream {
     @Override
     public void flush() throws IOException {
         // send out the current buffer
-        log.trace("Inside flush");
-        log.trace("Current size {}", buf.limit());
-        log.trace("Current buffer position {}", buf.position());
-        ;
         if (uploadBuffer(buf, false)) {
             tempFileOffset += buf.limit();
-            log.trace("tempFileOffset {}", tempFileOffset);
             // clear the current buffer
             buf = null;
             md5 = null;
@@ -252,7 +241,6 @@ public final class FovusS3OutputStream extends OutputStream {
             result.clear();
         } else {
             // allocate a new buffer
-            log.debug("Allocating new buffer of {} bytes, total buffers {}", bufferSize, bufferCounter.incrementAndGet());
             result = ByteBuffer.allocate(bufferSize);
         }
 
@@ -269,8 +257,6 @@ public final class FovusS3OutputStream extends OutputStream {
      */
     private boolean uploadBuffer(ByteBuffer buf, boolean last) throws IOException {
         // when the buffer is empty nothing to do
-        log.trace("Inside uploadBuffer");
-        log.trace("Buffer is null? {}", buf == null);
         if (buf == null || buf.position() == 0) {
             return false;
         }
@@ -281,7 +267,6 @@ public final class FovusS3OutputStream extends OutputStream {
 //        }
 
         if (tempFileOffset == 0) {
-            log.debug("Initializing temp file");
             init();
         }
 
@@ -290,11 +275,9 @@ public final class FovusS3OutputStream extends OutputStream {
 
         // Write buffer to the temp file
         try (FileOutputStream out = new FileOutputStream(tempFile, true)) {
-            log.debug("Writing to temp file");
             buf.flip();
             out.write(buf.array(), 0, buf.remaining());
         } catch (Exception e) {
-            log.debug("Failed to write to temp file {}", e);
             throw new IOException("Failed to write to temp file", e);
         }
 
@@ -323,9 +306,7 @@ public final class FovusS3OutputStream extends OutputStream {
             Path tmpDir = Files.createTempDirectory(Path.of("/tmp"), "fovus-");
             String filename = fovuS3Path.getFileName().toString();
             tempFile = new File(tmpDir.toFile(), filename);
-            log.debug("tempFile {}", tempFile);
         } catch (Exception e) {
-            log.debug("Failed to create temp directory and file {}", e.getMessage());
             throw new IOException("Failed to create temp directory and file", e);
         }
     }
@@ -370,8 +351,6 @@ public final class FovusS3OutputStream extends OutputStream {
      */
     @Override
     public void close() throws IOException {
-        log.trace("Inside close");
-        System.out.println("Inside close");
         if (closed || !(fovuS3Path instanceof FovusS3Path)) {
             return;
         }
