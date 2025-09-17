@@ -58,7 +58,6 @@ public class S3ObjectSummaryLookup {
          * when `key` is an empty string retrieve the object meta-data of the bucket
          */
         if ("".equals(s3Path.getKey())) {
-            System.out.println("lookup - s3Path.getKey is empty");
             ObjectMetaData meta = client.getFileObject(s3Path.getBucket(), "");
             if (meta == null)
                 throw new NoSuchFileException("s3://" + s3Path.getBucket());

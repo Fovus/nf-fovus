@@ -133,11 +133,7 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
     @Override
     public Path getPath(URI uri) {
         Preconditions.checkArgument(uri.getScheme().equals(getScheme()), "URI scheme must be %s", getScheme());
-        Path testPath = getFileSystem(uri).getPath("/" + uri.getAuthority() + uri.getPath());
-        System.out.println("testPath: " + testPath);
-        Path returnPath = getFileSystem(uri).getPath(uri.getPath());
-        System.out.println("returnPath: " + returnPath);
-        return returnPath;
+        return getFileSystem(uri).getPath(uri.getPath());
     }
 
     @Override
@@ -191,7 +187,6 @@ public class FovusS3FileSystemProvider extends FileSystemProvider implements Fil
                     .getClient()
                     .downloadJobFile(s3Path.getFileJobId(), tmpDir.toAbsolutePath().toString(), s3Path.getKey());
             Path tempFilePath = tmpDir.resolve(String.join("/", Arrays.copyOfRange(parts, 2, parts.length)));
-            System.out.println("tempFilePath: " + tempFilePath);
             result = new FileInputStream(tempFilePath.toFile());
 
 //            if (result == null)
