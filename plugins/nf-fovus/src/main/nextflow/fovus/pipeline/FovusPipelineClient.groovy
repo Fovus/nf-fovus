@@ -42,8 +42,17 @@ class FovusPipelineClient {
         return this.pipeline
     }
 
+    void updatePipelineStatus(FovusConfig config, FovusPipeline pipeline, FovusPipelineStatus status) {
+        log.info "[FOVUS] Updating pipeline status to ${status.name()}"
+
+        def command = [config.getCliPath(), '--silence', 'pipeline', 'update', '--pipeline-id', pipeline.getPipelineId(), '--status', status.name()]
+        def result = FovusUtil.executeCommand(command)
+        if (result.exitCode != 0) {
+            throw new RuntimeException("Failed to update Fovus pipeline status: ${result.error}")
+        }
+    }
+
     void setPipeline(String pipelineName, String pipelineId) {
         this.pipeline = new FovusPipeline(pipelineName, pipelineId)
     }
-
 }
