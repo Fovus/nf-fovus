@@ -14,6 +14,8 @@ import nextflow.util.Duration
 import nextflow.util.ServiceName
 import org.pf4j.ExtensionPoint
 
+import java.nio.file.Path
+
 @Slf4j
 @ServiceName('fovus')
 @CompileStatic
@@ -51,6 +53,15 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         this.pipelineClient.createPipeline(config, "FullRnaseqPipeline");
     }
 
+    @Override
+    boolean isForeignFile(Path path) {
+        // TODO: update dynamic mount point from configuration
+        if(path.toAbsolutePath().startsWith("/mnt/juicefs/")){
+            return false
+        }
+        return true
+    }
+
     /**
      * Create as task handler for each of Fovus job
      *
@@ -64,11 +75,6 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
 
         if(task.inputs.size() > 0){
             log.debug "[FOVUS] Moving local files > ${task}"
-            FovusUtil.moveLocalFilesToTaskDir(task, this);
-        }
-
-        if(task instanceof TaskArrayRun){
-            FovusUtil.copyFilesToTaskForArray(task)
         }
 
         log.debug "[FOVUS] Launching process > ${task.name} -- work folder: ${task.workDir}"

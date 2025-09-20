@@ -178,23 +178,6 @@ class FovusJobConfig {
 
 
     /**
-     * Skip syncing input files (eg, outputs from previous jobs) to remote storage
-     */
-    void skipRemoteInputSync(FovusExecutor executor) {
-        task.getInputFilesMap().each { stageName, filePath ->
-            {
-                final isRemoteFile = FovusUtil.isFovusRemoteFile(executor, filePath)
-                if (isRemoteFile) {
-                    workload.outputFileOption = 'exclude'
-                    workload.outputFileList = []
-                    workload.outputFileList << stageName
-                }
-            }
-        }
-
-    }
-
-    /**
      * Save the job config to a JSON file and return the file path.
      */
     String toJson() {

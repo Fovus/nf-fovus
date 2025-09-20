@@ -76,7 +76,6 @@ class FovusTaskHandler extends TaskHandler {
         } else {
             this.jobConfig = new FovusJobConfig(task)
         }
-        jobConfig.skipRemoteInputSync(executor)
         this.jobClient = new FovusJobClient(executor.config, jobConfig)
     }
 
@@ -214,6 +213,7 @@ class FovusTaskHandler extends TaskHandler {
 
         log.debug "[FOVUS] Submitting job > $task"
         def pipelineId = this.executor.pipelineClient.getPipeline().getPipelineId();
+
         jobId = jobClient.createJob(jobConfigFilePath, jobDirectory, pipelineId, includeList, jobConfig.jobName, isTaskArrayRun)
         updateStatus(jobId)
 
