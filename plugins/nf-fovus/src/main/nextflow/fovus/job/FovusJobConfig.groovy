@@ -128,23 +128,21 @@ class FovusJobConfig {
 
     private TaskConstraints createTaskConstraints(FovusJobConfig fovusJobConfig) {
         final extension = task.config.get('ext') as Map<String, Object>;
-        final nfVcpus = task.config.getCpus()
-        final nfMemory = task.config.getMemory()?.toGiga()?.toInteger()
         final nfStorage = task.config.getDisk()?.toGiga()?.toInteger()
 
-        def defaultTaskConstaints = fovusJobConfig.constraints.getTaskConstraints();
+        def defaultTaskConstraints = fovusJobConfig.constraints.getTaskConstraints();
         return new TaskConstraints(
-                minvCpu: extension?.minvCpu as Integer ?: nfVcpus ?: defaultTaskConstaints.minvCpu,
-                maxvCpu: extension?.maxvCpu as Integer ?: nfVcpus ?: defaultTaskConstaints.maxvCpu,
-                minvCpuMemGiB: extension?.minvCpuMemGiB as Integer ?: nfMemory ?: defaultTaskConstaints.minvCpuMemGiB,
-                minGpu: extension?.minGpu as Integer ?: defaultTaskConstaints.maxvCpu,
-                maxGpu: extension?.maxGpu as Integer ?: defaultTaskConstaints.maxGpu,
-                minGpuMemGiB: extension?.minGpuMemGiB as Integer ?: defaultTaskConstaints.minGpuMemGiB,
-                storageGiB: extension?.storageGiB as Integer ?: nfStorage ?: defaultTaskConstaints.storageGiB,
-                walltimeHours: extension?.walltimeHours as Integer ?: defaultTaskConstaints.walltimeHours,
-                isSingleThreadedTask: extension?.isSingleThreadedTask ?: defaultTaskConstaints.isSingleThreadedTask,
-                scalableParallelism: extension?.scalableParallelism ?: defaultTaskConstaints.scalableParallelism,
-                parallelismOptimization: extension?.parallelismOptimization ?: defaultTaskConstaints.parallelismOptimization,
+                minvCpu: extension?.minvCpu as Integer ?: defaultTaskConstraints.minvCpu,
+                maxvCpu: extension?.maxvCpu as Integer ?: defaultTaskConstraints.maxvCpu,
+                minvCpuMemGiB: extension?.minvCpuMemGiB as Integer ?: defaultTaskConstraints.minvCpuMemGiB,
+                minGpu: extension?.minGpu as Integer ?: defaultTaskConstraints.maxvCpu,
+                maxGpu: extension?.maxGpu as Integer ?: defaultTaskConstraints.maxGpu,
+                minGpuMemGiB: extension?.minGpuMemGiB as Integer ?: defaultTaskConstraints.minGpuMemGiB,
+                storageGiB: extension?.storageGiB as Integer ?: nfStorage ?: defaultTaskConstraints.storageGiB,
+                walltimeHours: extension?.walltimeHours as Integer ?: defaultTaskConstraints.walltimeHours,
+                isSingleThreadedTask: extension?.isSingleThreadedTask ?: defaultTaskConstraints.isSingleThreadedTask,
+                scalableParallelism: extension?.scalableParallelism ?: defaultTaskConstraints.scalableParallelism,
+                parallelismOptimization: extension?.parallelismOptimization ?: defaultTaskConstraints.parallelismOptimization,
         )
     }
 
