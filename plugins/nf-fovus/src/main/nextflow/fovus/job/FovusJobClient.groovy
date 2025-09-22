@@ -24,6 +24,14 @@ class FovusJobClient {
         this.jobConfig = jobConfig
     }
 
+    FovusJobClient(FovusConfig config) {
+        this.config = config
+    }
+
+    void setJobConfig(FovusJobConfig jobConfig) {
+        this.jobConfig = jobConfig
+    }
+
     String createJob(String jobConfigFilePath, String jobDirectory, String pipelineId, List<String> includeList, String jobName = null, isArrayJob = false) {
         def command = [config.getCliPath(), '--silence', '--nextflow', 'job', 'create', jobConfigFilePath, jobDirectory]
 
@@ -227,6 +235,24 @@ class FovusJobClient {
         if (result.exitCode != 0) {
             throw new RuntimeException("Failed to terminate Fovus job: ${result.error}")
         }
+    }
+
+    String getDefaultJobConfig(String benchmarkingProfileName) {
+        def command = [config.getCliPath(), 'job', 'get-default-config', '--benchmarking-profile-name', "${benchmarkingProfileName}"]
+
+        def result = FovusUtil.executeCommand(command)
+
+        log.debug "[FOVUS] getDefaultJobConfig with exit code: ${result.exitCode}"
+        if (result.exitCode != 0) {
+            log.debug "[FOVUS] Command error: ${result.error}"
+            return null
+        }
+
+        return result.output
+    }
+
+    String getDefaultJobConfig() {
+        getDefaultJobConfig("Default")
     }
 }
 

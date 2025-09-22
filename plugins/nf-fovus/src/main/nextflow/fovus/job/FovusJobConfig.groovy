@@ -25,6 +25,7 @@ class FovusJobConfig {
     Objective objective
     Workload workload
     String jobName
+    FovusJobClient jobClient
 
     private final TaskRun task
 
@@ -50,15 +51,23 @@ class FovusJobConfig {
 
     FovusJobConfig(){}
 
-    FovusJobConfig(TaskRun task) {
+    FovusJobConfig(FovusJobClient jobClient, TaskRun task) {
         def extension = task.config.get('ext') as Map<String, Object>
-        if(extension?.jobConfigFile == null && task.config.get('jobConfigFile') == null ){
-            throw new Error("jobConfigFile file path is missing!")
+        def jobConfigFilePath = extension?.jobConfigFile ?: task.config.get('jobConfigFile')
+        def benchmarkingProfileName = extension?.benchmarkingProfileName ?: task.config.get('benchmarkingProfileName')
+        def fovusJobConfig
+
+        if (jobConfigFilePath) {
+            fovusJobConfig = FovusJobConfigBuilder.fromJsonFile(jobConfigFilePath as String)
+        } else {
+            def defaultConfigFromBenchmarkName = jobClient.getDefaultJobConfig((benchmarkingProfileName ?: "Default") as String)
+
+            if (!defaultConfigFromBenchmarkName || defaultConfigFromBenchmarkName == "{}") {
+                throw new Error("[Fovus] No default job config found")
+            }
+            fovusJobConfig = FovusJobConfigBuilder.fromJsonString(defaultConfigFromBenchmarkName)
         }
 
-        def jobConfigFilePath = (extension.jobConfigFile ?: task.config.get('jobConfigFile')) as String
-
-        def fovusJobConfig = FovusJobConfigBuilder.fromJsonFile(jobConfigFilePath)
         this.task = task
         this.environment = createEnvironment(fovusJobConfig)
         def jobConstraints = createJobConstraints(fovusJobConfig)

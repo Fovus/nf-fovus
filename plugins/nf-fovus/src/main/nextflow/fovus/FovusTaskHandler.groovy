@@ -76,14 +76,17 @@ class FovusTaskHandler extends TaskHandler {
         this.wrapperFile = task.workDir.resolve(TaskRun.CMD_RUN)
         this.traceFile = task.workDir.resolve(TaskRun.CMD_TRACE)
 
+        this.jobClient = new FovusJobClient(executor.config)
+
         if(task instanceof TaskArrayRun){
-            def childeren = task.getChildren();
-            def firstTask = childeren.first();
+            def children = task.getChildren() as List<FovusTaskHandler>;
+            def firstTask = children.first();
             this.jobConfig = firstTask.getJobConfig();
         } else {
-            this.jobConfig = new FovusJobConfig(task)
+            this.jobConfig = new FovusJobConfig(this.jobClient, task)
         }
-        this.jobClient = new FovusJobClient(executor.config, jobConfig)
+
+        this.jobClient.setJobConfig(this.jobConfig)
     }
 
     /**
