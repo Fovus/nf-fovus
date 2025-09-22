@@ -80,14 +80,14 @@ class FovusJobClient {
                 return FovusJobStatus.TERMINATED
             case 'Terminating':
                 return FovusJobStatus.TERMINATING
-            case 'Uncompleted':
-                return FovusJobStatus.UNCOMPLETED
             case 'Walltime Reached':
                 return FovusJobStatus.WALLTIME_REACHED
             case 'Provisioning Infrastructure':
                 return FovusJobStatus.PROVISIONING_INFRASTRUCTURE
             case 'Cloud Strategy Optimization':
                 return FovusJobStatus.CLOUD_STRATEGY_OPTIMIZATION
+            case 'Waiting':
+                return FovusJobStatus.WAITING
             default:
                 log.error "[FOVUS] Unknown job status: ${jobStatus}"
                 throw new RuntimeException("Unknown job status: ${jobStatus}")
@@ -239,10 +239,17 @@ enum FovusJobStatus {
     RUNNING,
     TERMINATED,
     TERMINATING,
-    UNCOMPLETED,
     WALLTIME_REACHED,
     PROVISIONING_INFRASTRUCTURE,
-    CLOUD_STRATEGY_OPTIMIZATION
+    CLOUD_STRATEGY_OPTIMIZATION,
+    WAITING,
+    TERMINATED_INFRA,
+    TERMINATE_FAILED,
+    TIMEOUT,
+    SCHEDULED,
+    POST_PROCESSING_RUNNING,
+    POST_PROCESSING_FAILED,
+    POST_PROCESSING_WALLTIME_REACHED
 }
 
 enum FovusRunStatus {

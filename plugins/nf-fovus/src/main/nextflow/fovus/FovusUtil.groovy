@@ -72,6 +72,18 @@ class FovusUtil {
         return result
     }
 
+    static boolean isRecentlySubmitted(String jobId) {
+        def tsStr = jobId.split("-")[0]
+        def tsMs = tsStr.toLong()
+
+        // Current UTC time in ms
+        def nowMs = System.currentTimeMillis()
+        def diffMs = nowMs - tsMs
+
+        // Check if within 1 minute (100000 ms)
+        return diffMs <= 1 * 60 * 1000 && diffMs >= 0
+    }
+
 }
 
 @MapConstructor
