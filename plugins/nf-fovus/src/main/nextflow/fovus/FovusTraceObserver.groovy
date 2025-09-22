@@ -25,20 +25,17 @@ class FovusTraceObserver implements TraceObserverV2 {
 
     @Override
     void onFlowCreate(Session session) {
-        // TODO: Check if this is needed or not. Should we create pipeline here on in FovusExecutor?
         log.info "Pipeline is starting! 🚀"
-        log.info "Get or create pipeline from session config pipeline name..."
+        FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, fovusConfig, fovusConfig.getPipelineName())
     }
 
     @Override
     void onFlowBegin() {
-        // TODO: Update pipeline status to running
         pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), FovusPipelineStatus.RUNNING)
     }
 
     @Override
     void onFlowComplete() {
-        // TODO: Update pipeline status to COMPLETED only if all tasks are completed successfully
         if (!isPipelineFailed) {
             pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), FovusPipelineStatus.COMPLETED)
         }
@@ -46,7 +43,6 @@ class FovusTraceObserver implements TraceObserverV2 {
 
     @Override
     void onFlowError(TaskEvent event) {
-        // TODO: Update pipeline status to failed
         isPipelineFailed = true
         pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), FovusPipelineStatus.FAILED)
     }
