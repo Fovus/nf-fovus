@@ -46,7 +46,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         config = new FovusConfig(session.config.navigate('fovus') as Map);
         log.debug "[FOVUS] Creating fovus pipeline."
         this.pipelineClient = new FovusPipelineClient();
-        
+
         FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, config, this.config.getPipelineName())
     }
 
@@ -56,7 +56,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         if(path.toAbsolutePath().startsWith("/mnt/juicefs/")){
             return false
         }
-        return true
+        return super.isForeignFile(path)
     }
 
     /**
