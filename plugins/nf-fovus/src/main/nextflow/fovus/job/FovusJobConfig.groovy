@@ -13,7 +13,10 @@ import java.nio.file.Files
 /**
  * Configurations for Fovus job.
  *
- * Responsible for mapping NextFlow task configs to Fovus job configs.
+ * Precedences of configuration (highest to lowest):
+ *   <li><b>Process-level overrides</b> in {@code ext}: explicit settings on the Nextflow process.</li>
+ *   <li><b>JSON job config file</b>: provide default configuration values for a single process. Usage: Specify the path to the JSON job config file via {@code ext.jobConfigFile}.</li>
+ *   <li><b>Benchmark's defaults</b>: When the JSON was not specified for a process, the configuration will be loaded from the benchmarking profile name.</li>
  */
 @Slf4j
 @CompileStatic

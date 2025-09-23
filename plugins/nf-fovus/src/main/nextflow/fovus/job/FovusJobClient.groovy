@@ -242,9 +242,9 @@ class FovusJobClient {
 
         def result = FovusUtil.executeCommand(command)
 
-        log.debug "[FOVUS] getDefaultJobConfig with exit code: ${result.exitCode}"
+        log.trace "[FOVUS] getDefaultJobConfig with exit code: ${result.exitCode}"
         if (result.exitCode != 0) {
-            log.debug "[FOVUS] Command error: ${result.error}"
+            log.trace "[FOVUS] Command error: ${result.error}"
             return null
         }
 
