@@ -165,7 +165,7 @@ class FovusJobConfig {
         }
 
         // Get the script file and run it
-        final runCommand = "time ./${TaskRun.CMD_RUN}"
+        final runCommand = "./${TaskRun.CMD_RUN}"
 
         return new Workload(
                 runCommand: runCommand,

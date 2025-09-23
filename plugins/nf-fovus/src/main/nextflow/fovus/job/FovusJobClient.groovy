@@ -5,6 +5,7 @@ import groovy.transform.CompileStatic
 import groovy.transform.MapConstructor
 import groovy.util.logging.Slf4j
 import nextflow.fovus.FovusConfig
+import nextflow.fovus.FovusUtil
 
 import java.nio.file.Path
 
@@ -50,7 +51,7 @@ class FovusJobClient {
 
         // Get the Job ID (the last line of the output)
         def jobId = result.output.trim().split('\n')[-1]
-        log.debug "[FOVUS] Job created with ID: ${jobId}"
+        log.trace"[FOVUS] Job created with ID: ${jobId}"
 
         return jobId
     }
@@ -60,7 +61,7 @@ class FovusJobClient {
         def result = executeCommand(command.join(' '))
 
         def jobStatus = result.output.trim().split('\n')[-1]
-        log.debug "[FOVUS] Job Id: ${jobId}, status: ${jobStatus}"
+        log.trace"[FOVUS] Job Id: ${jobId}, status: ${jobStatus}"
 
         switch (jobStatus) {
             case 'Created':
@@ -118,7 +119,13 @@ class FovusJobClient {
         try {
             def result = executeCommand(command.join(' '))
             def runStatus = getStatusFromJsonOutput(result.output)
-            log.debug "[FOVUS] Job Id: ${jobId}, status: ${runStatus}"
+
+            // If status not found immmidiately after submission then consider as CREATED
+            if(runStatus == "Status Not Found" && FovusUtil.isRecentlySubmitted(jobId)){
+                runStatus = FovusRunStatus.CREATED
+            }
+
+            log.trace"[FOVUS] Job Id: ${jobId}, status: ${runStatus}"
 
             switch (runStatus) {
                 case 'Pending':
@@ -143,11 +150,10 @@ class FovusJobClient {
                     log.error "[FOVUS] Unknown job status: ${runStatus}"
                     throw new RuntimeException("Unknown job status: ${runStatus}")
             }
-        }catch(Exception e) {
-            log.error("getRunStatus error, ex=${e.message}")
-            return "true"
+        } catch(Exception e) {
+            log.error("getRunStatus error, ex=${e.message}");
+            throw new RuntimeException("getRunStatusError")
         }
-
     }
 
     @MapConstructor
@@ -169,7 +175,7 @@ class FovusJobClient {
 
         while (attempt < maxRetries) {
             attempt++
-            log.debug "[FOVUS] Executing command (attempt ${attempt}/${maxRetries}): ${command}"
+            log.trace"[FOVUS] Executing command (attempt ${attempt}/${maxRetries}): ${command}"
 
             def stdout = new StringBuilder()
             def stderr = new StringBuilder()
@@ -184,9 +190,9 @@ class FovusJobClient {
                     error: stderr.toString()
             )
 
-            log.debug "[FOVUS] Command executed with exit code: ${result.exitCode}"
-            log.debug "[FOVUS] Command output: ${result.output}"
-            log.debug "[FOVUS] Command error: ${result.error}"
+            log.trace"[FOVUS] Command executed with exit code: ${result.exitCode}"
+            log.trace"[FOVUS] Command output: ${result.output}"
+            log.trace"[FOVUS] Command error: ${result.error}"
 
             if (result.exitCode == 0) {
                 // Success, break out of retry loop
@@ -206,7 +212,7 @@ class FovusJobClient {
     public void downloadJobOutputs(String jobDirectoryPath, String jobId) {
         def downloadJobCommand = [config.getCliPath(), 'job', 'download', jobDirectoryPath, '--job-id', jobId]
 
-        log.debug "[FOVUS] Download job outputs"
+        log.trace"[FOVUS] Download job outputs"
         def result = executeCommand(downloadJobCommand.join(' '))
 
         if (result.exitCode != 0) {
