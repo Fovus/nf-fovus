@@ -486,7 +486,7 @@ public class FovusPath implements Path {
 
         FovusPath path = (FovusPath) other;
 
-        if (Objects.equals(fileType, path.fileType)) {
+        if (!Objects.equals(fileType, path.fileType)) {
             return false;
         }
 

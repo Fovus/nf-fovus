@@ -103,6 +103,12 @@ public class FovusPathIterator implements Iterator<Path> {
         for (final FovusFileMetadata fovusFileMetadata : fovusFileMetadataList) {
             String metaDataKey = fovusFileMetadata.getKey(); // E.g, files/folder1/text.txt
             FovusPath path = new FovusPath(fovusFileSystem, FovusPath.FOVUS_PATH_PREFIX + "/" + metaDataKey);
+
+            if (path.equals(fovusPath)) {
+                // Skip if the new path is the same as the initial target fovusPath to avoid circular file
+                continue;
+            }
+
             listPath.add(path);
 
 
@@ -115,7 +121,7 @@ public class FovusPathIterator implements Iterator<Path> {
 
             Path parentPath = path.getParent();
             // Only loop until we reach the root or if the parentPath is fovusPath
-            while (parentPath != null && !parentPath.equals(fovusPath)) {
+            while (parentPath != null && !fovusPath.startsWith(parentPath) && !fovusPath.equals(parentPath)) {
                 String parentKey = ((FovusPath) parentPath).getKey();
                 if (folders.contains(parentKey)) break;
 
