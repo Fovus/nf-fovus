@@ -49,7 +49,7 @@ public class FovusFileMetadataLookup {
             return fileMetadata;
         }
 
-        final FovusJobClient fovusJobClient = fovusPath.getFileSystem().getClient();
+        final FovusJobClient fovusJobClient = fovusPath.getFileSystem().getJobClient();
         /*
          * when `key` is an empty string retrieve the object meta-data of the fileType/ directory
          */

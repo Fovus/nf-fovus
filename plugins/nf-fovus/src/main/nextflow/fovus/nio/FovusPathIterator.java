@@ -82,7 +82,7 @@ public class FovusPathIterator implements Iterator<Path> {
 
             // iterator over this list
             // TODO: Support paginated requests
-            List<FovusFileMetadata> fovusFileMetadataList = fovusFileSystem.getClient().listFileObjects(fovusPath.getFileType(), key.substring(0, key.length() - 1));
+            List<FovusFileMetadata> fovusFileMetadataList = fovusFileSystem.getJobClient().listFileObjects(fovusPath.getFileType(), key.substring(0, key.length() - 1));
 
             parseObjectListing(listPath, fovusFileMetadataList);
 

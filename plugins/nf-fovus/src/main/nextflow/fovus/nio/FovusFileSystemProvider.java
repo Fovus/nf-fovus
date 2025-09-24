@@ -164,7 +164,7 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
         final Optional<FovusFileAttributes> attrs = readAttr1(source);
         final boolean isDir = attrs.isPresent() && attrs.get().isDirectory();
         final String type = isDir ? "directory" : "file";
-        final FovusJobClient fovusJobClient = source.getFileSystem().getClient();
+        final FovusJobClient fovusJobClient = source.getFileSystem().getJobClient();
         log.debug("Fovus download {} from={} to={}", type, FilesEx.toUriString(source), localDestination);
 
         if (isDir) {

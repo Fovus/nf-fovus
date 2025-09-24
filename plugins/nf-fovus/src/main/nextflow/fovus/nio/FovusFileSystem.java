@@ -37,7 +37,7 @@ public class FovusFileSystem extends FileSystem {
 
     private final FovusFileSystemProvider provider;
 
-    private final FovusJobClient client;
+    private final FovusJobClient jobClient;
 
 
     private final String fileType;
@@ -45,7 +45,7 @@ public class FovusFileSystem extends FileSystem {
 
     public FovusFileSystem(FovusFileSystemProvider provider, FovusJobClient client, URI uri) {
         this.provider = provider;
-        this.client = client;
+        this.jobClient = client;
         this.fileType = FovusPath.getFileTypeOfUri(uri);
     }
 
@@ -115,7 +115,7 @@ public class FovusFileSystem extends FileSystem {
         throw new UnsupportedOperationException();
     }
 
-    public FovusJobClient getClient() {
-        return client;
+    public FovusJobClient getJobClient() {
+        return jobClient;
     }
 }
