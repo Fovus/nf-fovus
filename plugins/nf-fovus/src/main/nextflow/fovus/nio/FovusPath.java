@@ -52,14 +52,9 @@ public class FovusPath implements Path {
 
     private String fileType;
 
-    private String fileJobId;
 
     public List<String> getParts() {
         return new ArrayList<>(parts);
-    }
-
-    public String getFileJobId() {
-        return fileJobId;
     }
 
     /**
@@ -151,18 +146,14 @@ public class FovusPath implements Path {
                 .<String>builder().addAll(mutableParts);
         return Joiner.on(PATH_SEPARATOR).join(builder.build());
     }
-    
+
     /**
      * Get the corresponding remote file path of this {@link FovusPath} object relatively to /fovus-storage/
      */
     public String toRemoteFilePath() {
         return getFileType() + PATH_SEPARATOR + getKey();
     }
-
-    public Boolean isJobFile() {
-        return this.fileJobId != null;
-    }
-
+    
     @Override
     public FovusFileSystem getFileSystem() {
         return this.fileSystem;

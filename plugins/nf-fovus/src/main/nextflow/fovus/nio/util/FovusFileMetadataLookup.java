@@ -54,14 +54,14 @@ public class FovusFileMetadataLookup {
          * when `key` is an empty string retrieve the object meta-data of the fileType/ directory
          */
         if ("".equals(fovusPath.getKey())) {
-            FovusFileMetadata meta = fovusJobClient.getFileObject(fovusPath.getFileType() + "/", "");
+            FovusFileMetadata meta = fovusJobClient.getFileObject(fovusPath.getFileType(), "");
             if (meta == null)
                 throw new NoSuchFileException("fovus:/" + FovusPath.FOVUS_PATH_PREFIX + "/" + fovusPath.getFileType());
 
             meta.setKey(fovusPath.getKey());
             return meta;
         } else {
-            List<FovusFileMetadata> metaDataList = fovusJobClient.listFileObjects(fovusPath.getFileType() + "/" + fovusPath.getKey(), fovusPath.getFileJobId());
+            List<FovusFileMetadata> metaDataList = fovusJobClient.listFileObjects(fovusPath.getFileType(), fovusPath.getKey());
             log.trace("metaDataList: {}", metaDataList);
             if (metaDataList == null || metaDataList.isEmpty()) {
                 throw new NoSuchFileException("fovus://" + fovusPath.getKey());

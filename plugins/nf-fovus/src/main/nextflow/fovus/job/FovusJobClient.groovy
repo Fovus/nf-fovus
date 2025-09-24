@@ -252,7 +252,7 @@ class FovusJobClient {
     String getDefaultJobConfig() {
         getDefaultJobConfig("Default")
     }
-    
+
     /**
      * Download a file from Fovus Storage (either jobs of files type) to a local directory.
      * @param jobId The job ID to download from (if any)
@@ -306,20 +306,28 @@ class FovusJobClient {
     }
 
 
-    // TODO: Validate the logic
-    List<FovusFileMetadata> listFileObjects(String path, String jobId) {
+    /**
+     * List the files in the provided path.
+     *
+     * @param fileType jobs or files
+     * @param path The path to list files from that is relative to files/ or jobs/.
+     * @return List of FovusFileMetadata objects
+     */
+    List<FovusFileMetadata> listFileObjects(String fileType, String path) {
         def command = [config.getCliPath(), '--silence', 'job', 'list-objects']
-        if (jobId) {
+
+        if (fileType == "jobs") {
             def parts = path.tokenize('/')
-            def afterTwo = parts.size() > 2 ? parts[2..-1].join('/') : path
-            command << afterTwo
+            if (parts.isEmpty()) {
+                throw new RuntimeException("Invalid Fovus path: ${path}")
+            }
+            final jobId = parts[0]
+            final jobRelativePath = parts.size() > 1 ? parts[1..-1].join('/') : ""
+            command << jobRelativePath
             command << '--job-id'
             command << jobId.toString()
         } else {
-            // Remove the files/ or jobs/ prefix
-            def pathWithoutPrefix = path.startsWith("files/") ? path.substring(6) : path.startsWith("jobs/") ? path.substring(5) : path
-
-            command << pathWithoutPrefix
+            command << path
         }
 
         def result = FovusUtil.executeCommand(command)
@@ -366,8 +374,8 @@ class FovusJobClient {
     }
 
 
-    FovusFileMetadata getFileObject(String path, String jobId) {
-        List<FovusFileMetadata> metaDataList = listFileObjects(path, jobId)
+    FovusFileMetadata getFileObject(String fileType, String path) {
+        List<FovusFileMetadata> metaDataList = listFileObjects(fileType, path)
 
         if (metaDataList == null || metaDataList.size() == 0) {
             return null

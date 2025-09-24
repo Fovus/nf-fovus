@@ -25,9 +25,9 @@ import nextflow.file.FileSystemPathFactory
 import java.nio.file.Path
 
 /**
- * Implements the a factory strategy to parse and build S3 path URIs
+ * Implements the a factory strategy to parse and build Fovus path URIs
  *
- * @author Paolo Di Tommaso <paolo.ditommaso@gmail.com>
+ * Adapted from S3PathFactory
  */
 @Slf4j
 @CompileStatic
@@ -35,8 +35,6 @@ class FovusPathFactory extends FileSystemPathFactory {
 
     @Override
     protected Path parseUri(String str) {
-        // normalise 's3' path
-        log.debug "ParseURI: $str"
         if (str.startsWith('fovus://') && str[8] != '/') {
             final path = "fovus:///${str.substring(8)}"
             return create(path)
@@ -65,19 +63,19 @@ class FovusPathFactory extends FileSystemPathFactory {
     }
 
     /**
-     * Creates a {@link FovusPath} from a S3 formatted URI.
+     * Creates a {@link FovusPath} from a Fovus formatted URI.
      *
      * @param path
-     *      A S3 URI path e.g. s3:///BUCKET_NAME/some/data.
-     *      NOTE it expect the s3 prefix provided with triple `/` .
+     *      A Fovus storage URI path e.g. fovus:///fovus-storage/files/some/data.
+     *      NOTE fovus-storage must be prefix with triple `/`.
      *      This is required by the underlying implementation expecting the host name in the URI to be empty
      *      and the bucket name to be the first path element
      * @return
      *      The corresponding {@link FovusPath}
      */
     static FovusPath create(String path) {
-        if (!path) throw new IllegalArgumentException("Missing S3 path argument")
-        if (!path.startsWith('fovus:///')) throw new IllegalArgumentException("S3 path must start with fovus:/// prefix -- offending value '$path'")
+        if (!path) throw new IllegalArgumentException("Missing Fovus path argument")
+        if (!path.startsWith('fovus:///')) throw new IllegalArgumentException("Fovus path must start with fovus:/// prefix -- offending value '$path'")
         // note: this URI constructor parse the path parameter and extract the `scheme` and `authority` components
         final uri = new URI(null, null, path, null, null)
 

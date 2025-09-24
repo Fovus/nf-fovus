@@ -27,9 +27,9 @@ import nextflow.util.SerializerRegistrant
 import org.pf4j.Extension
 
 /**
- * Register the S3Path serializer
+ * Register the FovusPath serializer.
  *
- * @author Paolo Di Tommaso <paolo.ditommaso@gmail.com>
+ * Adapted from S3PathSerializer
  */
 @Slf4j
 @Extension
@@ -45,7 +45,7 @@ class FovusPathSerializer extends Serializer<FovusPath> implements SerializerReg
     void write(Kryo kryo, Output output, FovusPath target) {
         final scheme = target.getFileSystem().provider().getScheme()
         final path = target.toString()
-        log.trace "S3Path serialization > scheme: $scheme; path: $path"
+        log.trace "FovusPath serialization > scheme: $scheme; path: $path"
         output.writeString(scheme)
         output.writeString(path)
     }
