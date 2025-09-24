@@ -22,7 +22,7 @@ import java.nio.file.attribute.FileTime;
 
 import static java.lang.String.format;
 
-public class FovusS3FileAttributes implements BasicFileAttributes {
+public class FovusFileAttributes implements BasicFileAttributes {
 	
 	private final FileTime lastModifiedTime;
 	private final long size;
@@ -30,8 +30,8 @@ public class FovusS3FileAttributes implements BasicFileAttributes {
 	private final boolean regularFile;
 	private final String key;
 
-	public FovusS3FileAttributes(String key, FileTime lastModifiedTime, long size,
-			boolean isDirectory, boolean isRegularFile) {
+    public FovusFileAttributes(String key, FileTime lastModifiedTime, long size,
+                               boolean isDirectory, boolean isRegularFile) {
 		this.key = key;
 		this.lastModifiedTime = lastModifiedTime;
 		this.size = size;

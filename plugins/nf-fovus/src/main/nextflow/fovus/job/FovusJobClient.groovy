@@ -6,10 +6,7 @@ import groovy.transform.MapConstructor
 import groovy.util.logging.Slf4j
 import nextflow.fovus.FovusConfig
 import nextflow.fovus.FovusUtil
-import nextflow.fovus.nio.ObjectMetaData
-
-import java.nio.file.Path
-
+import nextflow.fovus.nio.FovusFileMetadata
 
 /**
  * Client for executing Fovus CLI commands
@@ -255,83 +252,62 @@ class FovusJobClient {
     String getDefaultJobConfig() {
         getDefaultJobConfig("Default")
     }
-
-    void uploadJobFile(String basePath, String filePath, String jobId) {
-        def command = []
-        if (jobId) {
-            def parts = filePath.split('/');
-            command = [config.getCliPath(), '--silence', 'job', 'upload', basePath, parts[2..-2].join('/'), '--job-id', jobId]
-        } else {
-            command = [config.getCliPath(), '--silence', 'storage', 'upload', basePath, filePath.substring(0, filePath.lastIndexOf('/'))]
-        }
-        def result = FovusUtil.executeCommand(command)
-
-        if (result.exitCode != 0) {
-            throw new RuntimeException("Failed to upload file: ${result.error}")
-        }
-    }
-
-    String uploadEmptyDirectory(String filePath, String jobId) {
-        def command = []
-        if (jobId) {
-            def parts = filePath.tokenize('/')
-            def afterTwo = parts.size() > 2 ? parts[2..-1].join('/') : filePath
-            command = [config.getCliPath(), '--silence', 'job', 'upload', afterTwo, '--job-id', jobId, '--empty-dir', 'True']
-        } else {
-            def basePath = "dummy"
-            command = [config.getCliPath(), '--silence', 'storage', 'upload', basePath, filePath, '--empty-dir', 'True']
-        }
-        def result = FovusUtil.executeCommand(command)
-
-        if (result.exitCode != 0) {
-            throw new RuntimeException("Failed to upload file: ${result.error}")
-        }
-        return jobId
-    }
-
-    String downloadJobFile(String jobId, String targetPath, String filePath) {
-        // TODO: Update the functions to support both jobs and files.
-        // TODO: Refactor the inputs name to use directory and compatible with the CLI (ie, using CLI terminologies).
-        //      FilePath should be FOVUS PATH (relative), and targetPath should be local directory.
-        log.debug "[FOVUS] Downloading job file: ${filePath}"
-        log.debug "[FOVUS] Downloading job file to: ${targetPath}"
-        log.debug "[FOVUS] Downloading job file with jobId: ${jobId}"
-        def parts = filePath.split('/');
+    
+    /**
+     * Download a file from Fovus Storage (either jobs of files type) to a local directory.
+     * @param jobId The job ID to download from (if any)
+     * @param fovusPath The Fovus Storage path (relative to jobs/ or files/).
+     *  The component after the last / will be used as value for the --include-paths option. If this is a directory, need to add / at the end.
+     * @param localPath The local directory to download to
+     */
+    void downloadFile(String fovusPath, String localPath, String fileType) {
+        log.debug "[FOVUS] Downloading file: ${fovusPath} to ${localPath}"
         def command
-
-        if (jobId) {
-            command = [config.getCliPath(), '--silence', 'job', 'download', targetPath, '--job-id', jobId, '--include-paths', parts[2..-1].join('/')]
+        if (fileType == "jobs") {
+            command = getJobFileDownloadCommand(fovusPath, localPath)
         } else {
-            def pathWithoutPrefix = filePath.startsWith("files/") ? filePath.substring(6) : filePath.startsWith("jobs/") ? filePath.substring(5) : filePath
-            def fovusPath = ""
-            parts = pathWithoutPrefix.split('/')
-            if (parts.size() > 1) {
-                fovusPath = parts[0..-2].join('/')
-            }
-            log.debug "[FOVUS] Downloading job file fovusPath: ${fovusPath}"
-            def fileName = parts[-1] ?: "*"
-            def localDirectory = targetPath.split('/')[0..-2].join('/')
-            command = [config.getCliPath(), '--silence', 'storage', 'download', fovusPath, localDirectory, "--include-paths", fileName]
+            command = getStorageFileDownloadCommand(fovusPath, localPath)
         }
-        log.debug "[FOVUS] Downloading job file command: ${command.join(' ')}"
         def result = FovusUtil.executeCommand(command)
 
         if (result.exitCode != 0) {
             throw new RuntimeException("Failed to upload file: ${result.error}")
         }
+    }
 
-        // Eg, /tmp/fovus-7637548319521497736/ffa827451eca6c3774e874c4d47396
-        def downloadedPath
-        if (jobId) {
-            downloadedPath = targetPath + '/' + parts[2..-1].join('/')
-        } else {
-            downloadedPath = targetPath
+    private final List<String> getJobFileDownloadCommand(String fovusPath, String localPath) {
+        final parts = fovusPath.split("/");
+        final String jobId = parts[0]
+        final includePath = parts[1..-1].join('/')
+
+        def command = [config.getCliPath(), '--silence', 'job', 'download', localPath, '--job-id', jobId]
+
+        if (!includePath.isEmpty()) {
+            command << '--include-paths'
+            command << includePath
         }
-        return downloadedPath
+
+        return command
+    }
+
+    private final List<String> getStorageFileDownloadCommand(String fovusPath, String localPath) {
+        final parts = fovusPath.split("/");
+        def fovusPathDir
+        def includePath
+        if (fovusPath.endsWith("/")) {
+            fovusPathDir = parts[0..-1].join('/')
+            includePath = "*"
+        } else {
+            fovusPathDir = parts.size() > 1 ? parts[0..-2].join('/') : ""
+            includePath = parts[-1]
+        }
+        def command = [config.getCliPath(), '--silence', 'storage', 'download', fovusPathDir, localPath, '--include-paths', includePath]
+        return command
     }
 
 
-    List<ObjectMetaData> listFileObjects(String path, String jobId) {
+    // TODO: Validate the logic
+    List<FovusFileMetadata> listFileObjects(String path, String jobId) {
         def command = [config.getCliPath(), '--silence', 'job', 'list-objects']
         if (jobId) {
             def parts = path.tokenize('/')
@@ -365,23 +341,20 @@ class FovusJobClient {
 
 
             List<Map> jsonList = (List<Map>) json
-            List<ObjectMetaData> metaDataList = []
+            List<FovusFileMetadata> metaDataList = []
 
             for (Map obj : jsonList) {
                 def lastModifiedStr = obj['LastModified'] as String
                 def dateFormat = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX")
                 Date lastModifiedDate = dateFormat.parse(lastModifiedStr)
 
-                def objMetaData = new ObjectMetaData(
+                def objMetadata = new FovusFileMetadata(
                         obj['Key'] as String,
                         lastModifiedDate,
                         obj['ETag'] as String,
-                        obj['ChecksumAlgorithm'] as List<String>,
-                        obj['ChecksumType'] as String,
                         (obj['Size'] as Number).longValue(),
-                        obj['StorageClass'] as String
                 )
-                metaDataList.add(objMetaData)
+                metaDataList.add(objMetadata)
 
             }
 
@@ -393,8 +366,8 @@ class FovusJobClient {
     }
 
 
-    ObjectMetaData getFileObject(String path, String jobId) {
-        List<ObjectMetaData> metaDataList = listFileObjects(path, jobId)
+    FovusFileMetadata getFileObject(String path, String jobId) {
+        List<FovusFileMetadata> metaDataList = listFileObjects(path, jobId)
 
         if (metaDataList == null || metaDataList.size() == 0) {
             return null

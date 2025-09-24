@@ -23,15 +23,15 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 
 /**
- * Implements {@link BasicFileAttributeView} for S3 file storage
+ * Implements {@link BasicFileAttributeView} for Fovus file objects
  *
- * @author Paolo Di Tommaso <paolo.ditommaso@gmail.com>
+ * Adapted from S3FileAttributesView
  */
-public class FovusS3FileAttributesView implements BasicFileAttributeView  {
+public class FovusFileAttributesView implements BasicFileAttributeView {
 
-    private FovusS3FileAttributes target;
+    private FovusFileAttributes target;
 
-    FovusS3FileAttributesView(FovusS3FileAttributes target) {
+    FovusFileAttributesView(FovusFileAttributes target) {
         this.target = target;
     }
 

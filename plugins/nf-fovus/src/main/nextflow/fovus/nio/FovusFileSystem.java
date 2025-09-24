@@ -40,18 +40,14 @@ public class FovusFileSystem extends FileSystem {
 
     private final FovusJobClient client;
 
-    private final String endpoint;
 
-    private final String bucketName;
+    private final String fileType;
 
-    private final Properties properties;
 
-    public FovusFileSystem(FovusFileSystemProvider provider, FovusJobClient client, URI uri, Properties props) {
+    public FovusFileSystem(FovusFileSystemProvider provider, FovusJobClient client, URI uri) {
         this.provider = provider;
         this.client = client;
-        this.endpoint = uri.getHost();
-        this.bucketName = FovusPath.bucketName(uri);
-        this.properties = props;
+        this.fileType = FovusPath.getFileTypeOfUri(uri);
     }
 
     @Override
@@ -59,23 +55,20 @@ public class FovusFileSystem extends FileSystem {
         return provider;
     }
 
-    public Properties properties() {
-        return properties;
-    }
 
     @Override
     public void close() {
-        this.provider.fileSystems.remove(bucketName);
+        this.provider.fileSystems.remove(fileType);
     }
 
     @Override
     public boolean isOpen() {
-        return this.provider.fileSystems.containsKey(bucketName);
+        return this.provider.fileSystems.containsKey(fileType);
     }
 
     @Override
     public boolean isReadOnly() {
-        return false;
+        return true;
     }
 
     @Override
@@ -86,13 +79,6 @@ public class FovusFileSystem extends FileSystem {
     @Override
     public Iterable<Path> getRootDirectories() {
         ImmutableList.Builder<Path> builder = ImmutableList.builder();
-
-        //TODO: FOVUS Remove
-//		for (Bucket bucket : client.listBuckets()) {
-//            System.out.println("getRootDirectories" + bucket.getName());
-//			builder.add(new FovusS3Path(this, bucket.getName()));
-//		}
-
         return builder.build();
     }
 
@@ -132,19 +118,5 @@ public class FovusFileSystem extends FileSystem {
 
     public FovusJobClient getClient() {
         return client;
-    }
-
-    /**
-     * get the endpoint associated with this fileSystem.
-     *
-     * @return string
-     * @see <a href="http://docs.aws.amazon.com/general/latest/gr/rande.html">http://docs.aws.amazon.com/general/latest/gr/rande.html</a>
-     */
-    public String getEndpoint() {
-        return endpoint;
-    }
-
-    public String getBucketName() {
-        return bucketName;
     }
 }

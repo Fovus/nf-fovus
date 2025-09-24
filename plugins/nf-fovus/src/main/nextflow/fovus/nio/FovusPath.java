@@ -17,14 +17,9 @@
 
 package nextflow.fovus.nio;
 
-import com.amazonaws.services.s3.model.S3ObjectId;
-import com.amazonaws.services.s3.model.S3ObjectSummary;
-import com.amazonaws.services.s3.model.Tag;
 import com.google.common.base.*;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
-import nextflow.file.TagAwareFile;
-//import nextflow.fovus.nio.util.FovusJobCache;
 
 import javax.annotation.Nullable;
 import java.io.File;
@@ -32,60 +27,59 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.*;
 import java.util.*;
+import java.util.Objects;
 
 import static com.google.common.collect.Iterables.*;
 import static java.lang.String.format;
 
-public class FovusPath implements Path, TagAwareFile {
+public class FovusPath implements Path {
 
     public static final String PATH_SEPARATOR = "/";
 
-    /**
-     * bucket name
-     */
-    private final String bucket;
+    public static final String FOVUS_PATH_PREFIX = "/fovus-storage";
 
     /**
-     * Parts without bucket name.
+     * Parts without fovus-storage prefix and fileType name.
      */
     private final List<String> parts;
 
     /**
      * actual filesystem
      */
-    private FovusFileSystem fileSystem;
+    private final FovusFileSystem fileSystem;
 
-    private S3ObjectSummary objectSummary;
+    private FovusFileMetadata fileMetadata;
 
-    private Map<String, String> tags;
+    private String fileType;
 
-    private String contentType;
-
-    private String storageClass;
-
-    public String getFileJobId() {
-        return fileJobId;
-    }
-
-    public String getPipelineId() {
-        assert !parts.isEmpty();
-        return parts.get(0);
-    }
+    private String fileJobId;
 
     public List<String> getParts() {
         return new ArrayList<>(parts);
     }
 
-    private String fileJobId;
+    public String getFileJobId() {
+        return fileJobId;
+    }
 
     /**
-     * path must be a string of the form "/{bucket}", "/{bucket}/{key}" or just
-     * "{key}".
+     * Get the file type of this Fovus Path
+     *
+     * @return files or jobs.
+     */
+    public String getFileType() {
+        return fileType;
+    }
+
+    /**
+     * path must be a string of the form "/fovus-storages/{fileType}/", "/fovus-storages/{fileType}/{key}", or just "{key}".
      * Examples:
      * <ul>
-     *  <li>"/{bucket}//{value}" good, empty key paths are ignored </li>
-     * <li> "//{key}" error, missing bucket</li>
-     * <li> "/" error, missing bucket </li>
+     * <li> "/fovus-storages/files/input.txt" good </li>
+     * <li> "folder1/input.txt" good </li>
+     * <li> "input.txt" good, use case would include getting the file name </li>
+     * <li> "//input.txt" error, missing fovus-storage and file type</li>
+     * <li> "/files/input.txt" error, missing fovus-storage </li>
      * </ul>
      *
      */
@@ -94,35 +88,33 @@ public class FovusPath implements Path, TagAwareFile {
     }
 
     /**
-     * Build an S3Path from path segments. '/' are stripped from each segment.
+     * Build an FovusPath from path segments. '/' are stripped from each segment.
      *
-     * @param first should be star with a '/' and the first element is the bucket
+     * @param first If it is an absolute path, it should star with a '/' and the first element is 'fovus-storage' prefix, followed by {fileType}/.
      * @param more  directories and files
      */
     public FovusPath(FovusFileSystem fileSystem, String first,
                      String... more) {
+        this.fileType = null;
 
-        String bucket = null;
         List<String> parts = Lists.newArrayList(Splitter.on(PATH_SEPARATOR).split(first));
         if (first.endsWith(PATH_SEPARATOR)) {
             parts.remove(parts.size() - 1);
         }
 
         if (first.startsWith(PATH_SEPARATOR)) { // absolute path
-            Preconditions.checkArgument(parts.size() >= 1,
-                    "path must start with bucket name");
-            Preconditions.checkArgument(!parts.get(1).isEmpty(),
-                    "bucket name must be not empty");
+            Preconditions.checkArgument(parts.size() >= 2 &&
+                            parts.get(1).equals("fovus-storage") &&
+                            (parts.get(2).equals("jobs") || parts.get(2).equals("files") || parts.get(2).equals("shared")),
+                    "Invalid Fovus file path. Path must start with fovus-storage prefix and followed by 'files' or 'jobs' or 'shared");
 
-            bucket = parts.get(1);
-
-            if (!parts.isEmpty()) {
-                parts = parts.subList(2, parts.size());
+            fileType = parts.get(2);
+            if (fileType.equals("shared")) {
+                throw new UnsupportedOperationException("Shared files are not currently supported");
             }
-        }
 
-        if (bucket != null) {
-            bucket = bucket.replace("/", "");
+            // Get the remaining parts after /fovus-storage/{fileType}/
+            parts = parts.subList(3, parts.size());
         }
 
         List<String> moreSplitted = Lists.newArrayList();
@@ -133,38 +125,20 @@ public class FovusPath implements Path, TagAwareFile {
 
         parts.addAll(moreSplitted);
 
-        this.bucket = bucket;
         this.parts = KeyParts.parse(parts);
         this.fileSystem = fileSystem;
     }
 
-    private FovusPath(FovusFileSystem fileSystem, String bucket,
+    private FovusPath(FovusFileSystem fileSystem, String fileType,
                       Iterable<String> keys) {
-        this.bucket = bucket;
+        this.fileType = fileType;
         this.parts = KeyParts.parse(keys);
         this.fileSystem = fileSystem;
     }
 
-    public static boolean validateCombinedHash(List<String> parts, int expectedLength) {
-        if (parts == null || parts.size() < 3) {
-            return false;
-        }
-
-        // Combine first two parts
-        String combinedHash = parts.get(1) + parts.get(2);
-
-        // Validate
-        if (combinedHash == null) return false;
-        return combinedHash.matches("^[0-9a-fA-F]{" + expectedLength + "}$");
-    }
-
-    public String getBucket() {
-        return bucket;
-    }
-
     /**
-     * key for amazon without final slash.
-     * <b>note:</b> the final slash need to be added to save a directory (Amazon s3 spec)
+     * The Fovus path file key that is relative to /fovus-storage/{fileType}
+     * <b>note:</b> the final slash need to be added to save a directory
      */
     public String getKey() {
         if (parts.isEmpty()) {
@@ -172,33 +146,17 @@ public class FovusPath implements Path, TagAwareFile {
         }
 
         List<String> mutableParts = new ArrayList<>(parts);
-        if (FovusPath.validateCombinedHash(mutableParts, 32)) {
-//            String jobTimestamp = FovusJobCache.getOrCreateJobTimestamp(mutableParts.get(1) + mutableParts.get(2), fileSystem.getClient());
-            String jobTimestamp = "";
-            mutableParts.set(1, jobTimestamp);
-            this.fileJobId = jobTimestamp;
-        }
 
         ImmutableList.Builder<String> builder = ImmutableList
                 .<String>builder().addAll(mutableParts);
         return Joiner.on(PATH_SEPARATOR).join(builder.build());
     }
-
-    public S3ObjectId toS3ObjectId() {
-        return new S3ObjectId(bucket, getKey());
-    }
-
+    
     /**
      * Get the corresponding remote file path of this {@link FovusPath} object relatively to /fovus-storage/
      */
     public String toRemoteFilePath() {
-        if (!isJobFile()) {
-            return "files/" + getKey();
-        }
-
-        String fileKey = getKey();
-        String fileNameWithoutPipelineId = fileKey.substring(fileKey.indexOf(PATH_SEPARATOR) + 1);
-        return "jobs/" + fileNameWithoutPipelineId;
+        return getFileType() + PATH_SEPARATOR + getKey();
     }
 
     public Boolean isJobFile() {
@@ -212,13 +170,13 @@ public class FovusPath implements Path, TagAwareFile {
 
     @Override
     public boolean isAbsolute() {
-        return bucket != null;
+        return fileType != null;
     }
 
     @Override
     public Path getRoot() {
         if (isAbsolute()) {
-            return new FovusPath(fileSystem, bucket, ImmutableList.<String>of());
+            return new FovusPath(fileSystem, FOVUS_PATH_PREFIX + PATH_SEPARATOR + getFileType());
         }
 
         return null;
@@ -226,27 +184,29 @@ public class FovusPath implements Path, TagAwareFile {
 
     @Override
     public Path getFileName() {
-        if (!parts.isEmpty()) {
-            return new FovusPath(fileSystem, null, parts.subList(parts.size() - 1,
-                    parts.size()));
-        } else {
-            // bucket dont have fileName
-            return null;
-        }
-    }
-
-    @Override
-    public Path getParent() {
-        // bucket is not present in the parts
         if (parts.isEmpty()) {
             return null;
         }
 
-        if (parts.size() == 1 && (bucket == null || bucket.isEmpty())) {
+        return new FovusPath(
+                fileSystem,
+                null,
+                parts.subList(parts.size() - 1, parts.size())
+        );
+    }
+
+    @Override
+    public Path getParent() {
+        if (parts.isEmpty()) {
             return null;
         }
 
-        return new FovusPath(fileSystem, bucket,
+        // Here, we only know the file name, so we can't get the parent
+        if (parts.size() == 1 && fileType == null) {
+            return null;
+        }
+
+        return new FovusPath(fileSystem, fileType,
                 parts.subList(0, parts.size() - 1));
     }
 
@@ -278,13 +238,14 @@ public class FovusPath implements Path, TagAwareFile {
 
         FovusPath path = (FovusPath) other;
 
-        if (path.parts.size() == 0 && path.bucket == null &&
-                (this.parts.size() != 0 || this.bucket != null)) {
+        // Here, we don't know the fileType of the other path
+        if (path.parts.isEmpty() && path.fileType == null &&
+                (!this.parts.isEmpty() || this.fileType != null)) {
             return false;
         }
 
-        if ((path.getBucket() != null && !path.getBucket().equals(this.getBucket())) ||
-                (path.getBucket() == null && this.getBucket() != null)) {
+        if ((path.getFileType() != null && !path.getFileType().equals(this.getFileType())) ||
+                (path.getFileType() == null && this.getFileType() != null)) {
             return false;
         }
 
@@ -319,8 +280,8 @@ public class FovusPath implements Path, TagAwareFile {
 
         FovusPath path = (FovusPath) other;
 
-        if ((path.getBucket() != null && !path.getBucket().equals(this.getBucket())) ||
-                (path.getBucket() != null && this.getBucket() == null)) {
+        if ((path.getFileType() != null && !path.getFileType().equals(this.getFileType())) ||
+                (path.getFileType() != null && this.getFileType() == null)) {
             return false;
         }
 
@@ -349,7 +310,7 @@ public class FovusPath implements Path, TagAwareFile {
         if (parts == null || parts.size() == 0)
             return this;
 
-        return new FovusPath(fileSystem, bucket, normalize0(parts));
+        return new FovusPath(fileSystem, fileType, normalize0(parts));
     }
 
     private Iterable<String> normalize0(List<String> parts) {
@@ -362,17 +323,17 @@ public class FovusPath implements Path, TagAwareFile {
         Preconditions.checkArgument(other instanceof FovusPath,
                 "other must be an instance of %s", FovusPath.class.getName());
 
-        FovusPath s3Path = (FovusPath) other;
+        FovusPath fovusPath = (FovusPath) other;
 
-        if (s3Path.isAbsolute()) {
-            return s3Path;
+        if (fovusPath.isAbsolute()) {
+            return fovusPath;
         }
 
-        if (s3Path.parts.isEmpty()) { // other is relative and empty
+        if (fovusPath.parts.isEmpty()) { // other is relative and empty
             return this;
         }
 
-        return new FovusPath(fileSystem, bucket, concat(parts, s3Path.parts));
+        return new FovusPath(fileSystem, fileType, concat(parts, fovusPath.parts));
     }
 
     @Override
@@ -385,20 +346,20 @@ public class FovusPath implements Path, TagAwareFile {
         Preconditions.checkArgument(other instanceof FovusPath,
                 "other must be an instance of %s", FovusPath.class.getName());
 
-        FovusPath s3Path = (FovusPath) other;
+        FovusPath fovusPath = (FovusPath) other;
 
         Path parent = getParent();
 
-        if (parent == null || s3Path.isAbsolute()) {
-            return s3Path;
+        if (parent == null || fovusPath.isAbsolute()) {
+            return fovusPath;
         }
 
-        if (s3Path.parts.isEmpty()) { // other is relative and empty
+        if (fovusPath.parts.isEmpty()) { // other is relative and empty
             return parent;
         }
 
-        return new FovusPath(fileSystem, bucket, concat(
-                parts.subList(0, parts.size() - 1), s3Path.parts));
+        return new FovusPath(fileSystem, fileType, concat(
+                parts.subList(0, parts.size() - 1), fovusPath.parts));
     }
 
     @Override
@@ -410,7 +371,7 @@ public class FovusPath implements Path, TagAwareFile {
     public Path relativize(Path other) {
         Preconditions.checkArgument(other instanceof FovusPath,
                 "other must be an instance of %s", FovusPath.class.getName());
-        FovusPath s3Path = (FovusPath) other;
+        FovusPath fovusPath = (FovusPath) other;
 
         if (this.equals(other)) {
             return new FovusPath(this.getFileSystem(), "");
@@ -418,27 +379,27 @@ public class FovusPath implements Path, TagAwareFile {
 
         Preconditions.checkArgument(isAbsolute(),
                 "Path is already relative: %s", this);
-        Preconditions.checkArgument(s3Path.isAbsolute(),
-                "Cannot relativize against a relative path: %s", s3Path);
-        Preconditions.checkArgument(bucket.equals(s3Path.getBucket()),
-                "Cannot relativize paths with different buckets: '%s', '%s'",
+        Preconditions.checkArgument(fovusPath.isAbsolute(),
+                "Cannot relativize against a relative path: %s", fovusPath);
+        Preconditions.checkArgument(fileType.equals(fovusPath.getFileType()),
+                "Cannot relativize paths with different file type: '%s', '%s'",
                 this, other);
 
-        Preconditions.checkArgument(parts.size() <= s3Path.parts.size(),
+        Preconditions.checkArgument(parts.size() <= fovusPath.parts.size(),
                 "Cannot relativize against a parent path: '%s', '%s'",
                 this, other);
 
 
         int startPart = 0;
         for (int i = 0; i < this.parts.size(); i++) {
-            if (this.parts.get(i).equals(s3Path.parts.get(i))) {
+            if (this.parts.get(i).equals(fovusPath.parts.get(i))) {
                 startPart++;
             }
         }
 
         List<String> resultParts = new ArrayList<>();
-        for (int i = startPart; i < s3Path.parts.size(); i++) {
-            resultParts.add(s3Path.parts.get(i));
+        for (int i = startPart; i < fovusPath.parts.size(); i++) {
+            resultParts.add(fovusPath.parts.get(i));
         }
 
         return new FovusPath(fileSystem, null, resultParts);
@@ -448,13 +409,13 @@ public class FovusPath implements Path, TagAwareFile {
     public URI toUri() {
         StringBuilder builder = new StringBuilder();
         builder.append("fovus://");
-        if (fileSystem.getEndpoint() != null) {
-            builder.append(fileSystem.getEndpoint());
-        }
-        builder.append("/");
-        builder.append(bucket);
+        builder.append(FOVUS_PATH_PREFIX);
+        builder.append(PATH_SEPARATOR);
+        builder.append(fileType);
         builder.append(PATH_SEPARATOR);
         builder.append(Joiner.on(PATH_SEPARATOR).join(parts));
+
+        // Eg: fovus:///fovus-storage/{fileType}/{key}
         return URI.create(builder.toString());
     }
 
@@ -512,8 +473,9 @@ public class FovusPath implements Path, TagAwareFile {
         StringBuilder builder = new StringBuilder();
 
         if (isAbsolute()) {
+            builder.append(FOVUS_PATH_PREFIX);
             builder.append(PATH_SEPARATOR);
-            builder.append(bucket);
+            builder.append(fileType);
             builder.append(PATH_SEPARATOR);
         }
 
@@ -523,87 +485,48 @@ public class FovusPath implements Path, TagAwareFile {
     }
 
     @Override
-    public boolean equals(Object o) {
-        if (this == o) {
+    public boolean equals(Object other) {
+        if (this == other) {
             return true;
         }
-        if (o == null || getClass() != o.getClass()) {
+        if (other == null || getClass() != other.getClass()) {
             return false;
         }
 
-        FovusPath paths = (FovusPath) o;
+        FovusPath path = (FovusPath) other;
 
-        if (bucket != null ? !bucket.equals(paths.bucket)
-                : paths.bucket != null) {
-            return false;
-        }
-        if (!parts.equals(paths.parts)) {
+        if (Objects.equals(fileType, path.fileType)) {
             return false;
         }
 
-        return true;
+        return parts.equals(path.parts);
     }
 
     @Override
     public int hashCode() {
-        int result = bucket != null ? bucket.hashCode() : 0;
+        int result = fileType != null ? fileType.hashCode() : 0;
         result = 31 * result + parts.hashCode();
         return result;
     }
 
     /**
-     * This method returns the cached {@link S3ObjectSummary} instance if this path has been created
-     * while iterating a directory structures by the {@link FovusS3Iterator}.
+     * This method returns the cached {@link FovusFileMetadata} instance if this path has been created
+     * while iterating a directory structures by the {@link FovusPathIterator}.
      * <br>
      * After calling this method the cached object is reset, so any following method invocation will return {@code null}.
      * This is necessary to discard the object meta-data and force to reload file attributes when required.
      *
-     * @return The cached {@link S3ObjectSummary} for this path if any.
+     * @return The cached {@link FovusFileMetadata} for this path if any.
      */
-    public S3ObjectSummary fetchObjectSummary() {
-        S3ObjectSummary result = objectSummary;
-        objectSummary = null;
+    public FovusFileMetadata getFileMetadata() {
+        FovusFileMetadata result = fileMetadata;
+        fileMetadata = null;
         return result;
     }
 
     // note: package scope to limit the access to this setter
-    void setObjectSummary(S3ObjectSummary objectSummary) {
-        this.objectSummary = objectSummary;
-    }
-
-    @Override
-    public void setTags(Map<String, String> tags) {
-        this.tags = tags;
-    }
-
-    @Override
-    public void setContentType(String type) {
-        this.contentType = type;
-    }
-
-    @Override
-    public void setStorageClass(String storageClass) {
-        this.storageClass = storageClass;
-    }
-
-    public List<Tag> getTagsList() {
-        // nothing found, just return
-        if (tags == null)
-            return Collections.emptyList();
-        // create a list of Tag out of the Map
-        List<Tag> result = new ArrayList<>();
-        for (Map.Entry<String, String> entry : tags.entrySet()) {
-            result.add(new Tag(entry.getKey(), entry.getValue()));
-        }
-        return result;
-    }
-
-    public String getContentType() {
-        return contentType;
-    }
-
-    public String getStorageClass() {
-        return storageClass;
+    void setFileMetadata(FovusFileMetadata fileMetadata) {
+        this.fileMetadata = fileMetadata;
     }
 
 
@@ -643,13 +566,17 @@ public class FovusPath implements Path, TagAwareFile {
         }
     }
 
-    public static String bucketName(URI uri) {
+    /*
+     * Helper method to get file type from URI to create a file system per file type
+     */
+    public static String getFileTypeOfUri(URI uri) {
         final String path = uri.getPath();
         if (path == null || !path.startsWith("/"))
-            throw new IllegalArgumentException("Invalid S3 path: " + uri);
+            throw new IllegalArgumentException("Invalid Fovus path: " + uri);
         final String[] parts = path.split("/");
-        // note the element 0 contains the slash char
-        return parts.length > 1 ? parts[1] : null;
+        // Part 0 is empty string
+        // Part 1 is "fovus-storage"
+        // Part 2 is "fileType"
+        return parts.length > 2 ? parts[2] : null;
     }
 }
-

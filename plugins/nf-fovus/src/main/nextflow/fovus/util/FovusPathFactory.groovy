@@ -56,18 +56,11 @@ class FovusPathFactory extends FileSystemPathFactory {
 
     @Override
     protected String getBashLib(Path target) {
-        // TODO: Update
-//        return S3BashLib.script()
-
         return ""
     }
 
     @Override
     protected String getUploadCmd(String source, Path target) {
-        // TODO: Update
-//        return target instanceof FovusPath
-//                ? FovusFileCopyStrategy.uploadCmd(source, target)
-//                : null
         return null
     }
 
