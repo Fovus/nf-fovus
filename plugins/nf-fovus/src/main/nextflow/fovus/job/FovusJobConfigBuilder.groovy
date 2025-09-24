@@ -9,11 +9,10 @@ import com.fasterxml.jackson.core.JsonParser
 import com.fasterxml.jackson.databind.DeserializationContext
 import com.fasterxml.jackson.databind.JsonDeserializer
 import com.fasterxml.jackson.databind.ObjectMapper
-import java.nio.file.Paths
 
 @CompileStatic
 class FovusJobConfigBuilder {
-    static FovusJobConfig fromJsonFile(String path) {
+    static FovusJobConfig fromJsonString(String jsonData) {
 
         def mapper = new ObjectMapper()
         SimpleModule module = new SimpleModule()
@@ -21,22 +20,22 @@ class FovusJobConfigBuilder {
         mapper.registerModule(module)
 
         mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
-        def defaultJobConfig =  mapper.readValue(Paths.get(path).toFile(), FovusJobConfig)
+        def defaultJobConfig = mapper.readValue(jsonData, FovusJobConfig)
 
-        def json = new JsonSlurper().parse(new File(path))
-        if(json instanceof Map){
+        def json = new JsonSlurper().parseText(jsonData)
+        if (json instanceof Map) {
             def envData = json.environment
             if (envData instanceof Map && envData?.containerized) {
                 def containerData = envData.containerized
-                if(containerData instanceof Map){
+                if (containerData instanceof Map) {
                     def containerized = new Containerized(
                             container: containerData.container,
                             imagePath: containerData.imagePath,
                             version: containerData.version
                     )
 
-                    def environment = new ContainerizedEnvironment(containerized: containerized);
-                    defaultJobConfig.environment = environment;
+                    def environment = new ContainerizedEnvironment(containerized: containerized)
+                    defaultJobConfig.environment = environment
                 }
 
             } else if (envData instanceof Map && envData?.monolithicList) {
@@ -46,7 +45,13 @@ class FovusJobConfigBuilder {
             }
         }
 
-        return defaultJobConfig;
+        return defaultJobConfig
+
+    }
+
+    static FovusJobConfig fromJsonFile(String path) {
+        String jsonData = new File(path).getText()
+        return fromJsonString(jsonData)
     }
 }
 
@@ -65,5 +70,4 @@ class EnvironmentDeserializer extends JsonDeserializer<Environment> {
         return null // fallback
     }
 }
-
 

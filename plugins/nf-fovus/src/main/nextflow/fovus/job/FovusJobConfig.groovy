@@ -13,7 +13,10 @@ import java.nio.file.Files
 /**
  * Configurations for Fovus job.
  *
- * Responsible for mapping NextFlow task configs to Fovus job configs.
+ * Precedences of configuration (highest to lowest):
+ *   <li><b>Process-level overrides</b> in {@code ext}: explicit settings on the Nextflow process.</li>
+ *   <li><b>JSON job config file</b>: provide default configuration values for a single process. Usage: Specify the path to the JSON job config file via {@code ext.jobConfigFile}.</li>
+ *   <li><b>Benchmark's defaults</b>: When the JSON was not specified for a process, the configuration will be loaded from the benchmarking profile name.</li>
  */
 @Slf4j
 @CompileStatic
@@ -25,6 +28,7 @@ class FovusJobConfig {
     Objective objective
     Workload workload
     String jobName
+    FovusJobClient jobClient
 
     private final TaskRun task
 
@@ -50,15 +54,23 @@ class FovusJobConfig {
 
     FovusJobConfig(){}
 
-    FovusJobConfig(TaskRun task) {
+    FovusJobConfig(FovusJobClient jobClient, TaskRun task) {
         def extension = task.config.get('ext') as Map<String, Object>
-        if(extension?.jobConfigFile == null && task.config.get('jobConfigFile') == null ){
-            throw new Error("jobConfigFile file path is missing!")
+        def jobConfigFilePath = extension?.jobConfigFile ?: task.config.get('jobConfigFile')
+        def benchmarkingProfileName = extension?.benchmarkingProfileName ?: task.config.get('benchmarkingProfileName')
+        def fovusJobConfig
+
+        if (jobConfigFilePath) {
+            fovusJobConfig = FovusJobConfigBuilder.fromJsonFile(jobConfigFilePath as String)
+        } else {
+            def defaultConfigFromBenchmarkName = jobClient.getDefaultJobConfig((benchmarkingProfileName ?: "Default") as String)
+
+            if (!defaultConfigFromBenchmarkName || defaultConfigFromBenchmarkName == "{}") {
+                throw new Error("[Fovus] No default job config found")
+            }
+            fovusJobConfig = FovusJobConfigBuilder.fromJsonString(defaultConfigFromBenchmarkName)
         }
 
-        def jobConfigFilePath = (extension.jobConfigFile ?: task.config.get('jobConfigFile')) as String
-
-        def fovusJobConfig = FovusJobConfigBuilder.fromJsonFile(jobConfigFilePath)
         this.task = task
         this.environment = createEnvironment(fovusJobConfig)
         def jobConstraints = createJobConstraints(fovusJobConfig)
@@ -119,23 +131,21 @@ class FovusJobConfig {
 
     private TaskConstraints createTaskConstraints(FovusJobConfig fovusJobConfig) {
         final extension = task.config.get('ext') as Map<String, Object>;
-        final nfVcpus = task.config.getCpus()
-        final nfMemory = task.config.getMemory()?.toGiga()?.toInteger()
         final nfStorage = task.config.getDisk()?.toGiga()?.toInteger()
 
-        def defaultTaskConstaints = fovusJobConfig.constraints.getTaskConstraints();
+        def defaultTaskConstraints = fovusJobConfig.constraints.getTaskConstraints();
         return new TaskConstraints(
-                minvCpu: extension?.minvCpu as Integer ?: nfVcpus ?: defaultTaskConstaints.minvCpu,
-                maxvCpu: extension?.maxvCpu as Integer ?: nfVcpus ?: defaultTaskConstaints.maxvCpu,
-                minvCpuMemGiB: extension?.minvCpuMemGiB as Integer ?: nfMemory ?: defaultTaskConstaints.minvCpuMemGiB,
-                minGpu: extension?.minGpu as Integer ?: defaultTaskConstaints.maxvCpu,
-                maxGpu: extension?.maxGpu as Integer ?: defaultTaskConstaints.maxGpu,
-                minGpuMemGiB: extension?.minGpuMemGiB as Integer ?: defaultTaskConstaints.minGpuMemGiB,
-                storageGiB: extension?.storageGiB as Integer ?: nfStorage ?: defaultTaskConstaints.storageGiB,
-                walltimeHours: extension?.walltimeHours as Integer ?: defaultTaskConstaints.walltimeHours,
-                isSingleThreadedTask: extension?.isSingleThreadedTask ?: defaultTaskConstaints.isSingleThreadedTask,
-                scalableParallelism: extension?.scalableParallelism ?: defaultTaskConstaints.scalableParallelism,
-                parallelismOptimization: extension?.parallelismOptimization ?: defaultTaskConstaints.parallelismOptimization,
+                minvCpu: extension?.minvCpu as Integer ?: defaultTaskConstraints.minvCpu,
+                maxvCpu: extension?.maxvCpu as Integer ?: defaultTaskConstraints.maxvCpu,
+                minvCpuMemGiB: extension?.minvCpuMemGiB as Integer ?: defaultTaskConstraints.minvCpuMemGiB,
+                minGpu: extension?.minGpu as Integer ?: defaultTaskConstraints.maxvCpu,
+                maxGpu: extension?.maxGpu as Integer ?: defaultTaskConstraints.maxGpu,
+                minGpuMemGiB: extension?.minGpuMemGiB as Integer ?: defaultTaskConstraints.minGpuMemGiB,
+                storageGiB: extension?.storageGiB as Integer ?: nfStorage ?: defaultTaskConstraints.storageGiB,
+                walltimeHours: extension?.walltimeHours as Integer ?: defaultTaskConstraints.walltimeHours,
+                isSingleThreadedTask: extension?.isSingleThreadedTask ?: defaultTaskConstraints.isSingleThreadedTask,
+                scalableParallelism: extension?.scalableParallelism ?: defaultTaskConstraints.scalableParallelism,
+                parallelismOptimization: extension?.parallelismOptimization ?: defaultTaskConstraints.parallelismOptimization,
         )
     }
 
