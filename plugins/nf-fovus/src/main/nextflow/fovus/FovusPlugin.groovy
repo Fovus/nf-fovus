@@ -17,6 +17,8 @@
 package nextflow.fovus
 
 import groovy.transform.CompileStatic
+import nextflow.file.FileHelper
+import nextflow.fovus.nio.FovusFileSystemProvider
 import nextflow.plugin.BasePlugin
 import org.pf4j.PluginWrapper
 
@@ -30,5 +32,11 @@ class FovusPlugin extends BasePlugin {
 
     FovusPlugin(PluginWrapper wrapper) {
         super(wrapper)
+    }
+
+    @Override
+    void start() {
+        super.start()
+        FileHelper.getOrInstallProvider(FovusFileSystemProvider)
     }
 }
