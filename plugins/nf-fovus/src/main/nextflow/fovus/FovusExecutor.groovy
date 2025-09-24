@@ -5,7 +5,6 @@ import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
 import nextflow.executor.TaskArrayExecutor
 import nextflow.fovus.pipeline.FovusPipelineClient
-import nextflow.processor.TaskArrayRun
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskMonitor
 import nextflow.processor.TaskPollingMonitor
@@ -45,12 +44,10 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         super.register()
 
         config = new FovusConfig(session.config.navigate('fovus') as Map);
-        log.debug "[FOVUS] Creating fovus pipeline"
+        log.debug "[FOVUS] Creating fovus pipeline."
         this.pipelineClient = new FovusPipelineClient();
-        log.debug("session --> ${this.session}")
-        log.debug("name --> ${this.name}")
-
-        this.pipelineClient.createPipeline(config, "FullRnaseqPipeline");
+        
+        FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, config, this.config.getPipelineName())
     }
 
     @Override
