@@ -4,7 +4,7 @@ import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
 import nextflow.executor.TaskArrayExecutor
-import nextflow.processor.TaskArrayRun
+import nextflow.fovus.pipeline.FovusPipelineClient
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskMonitor
 import nextflow.processor.TaskPollingMonitor
@@ -13,12 +13,16 @@ import nextflow.util.Duration
 import nextflow.util.ServiceName
 import org.pf4j.ExtensionPoint
 
+import java.nio.file.Path
+
 @Slf4j
 @ServiceName('fovus')
 @CompileStatic
 class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecutor {
 
     protected FovusConfig config
+
+    protected FovusPipelineClient pipelineClient;
 
     /**
      * Map the local work directory with Fovus job id
@@ -39,7 +43,20 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     protected void register() {
         super.register()
 
-        config = new FovusConfig(session.config.navigate('fovus') as Map)
+        config = new FovusConfig(session.config.navigate('fovus') as Map);
+        log.debug "[FOVUS] Creating fovus pipeline."
+        this.pipelineClient = new FovusPipelineClient();
+
+        FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, config, this.config.getPipelineName())
+    }
+
+    @Override
+    boolean isForeignFile(Path path) {
+        // TODO: update dynamic mount point from configuration
+        if(path.toAbsolutePath().startsWith("/mnt/juicefs/")){
+            return false
+        }
+        return super.isForeignFile(path)
     }
 
     /**
@@ -54,15 +71,10 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         assert task.workDir
 
         if(task.inputs.size() > 0){
-            log.trace "[FOVUS] Moving local files > ${task}"
-            FovusUtil.moveLocalFilesToTaskDir(task, this);
+            log.debug "[FOVUS] Moving local files > ${task}"
         }
 
-        if(task instanceof TaskArrayRun){
-            FovusUtil.copyFilesToTaskForArray(task)
-        }
-
-        log.trace "[FOVUS] Launching process > ${task.name} -- work folder: ${task.workDir}"
+        log.debug "[FOVUS] Launching process > ${task.name} -- work folder: ${task.workDir}"
         return new FovusTaskHandler(task, this)
     }
 

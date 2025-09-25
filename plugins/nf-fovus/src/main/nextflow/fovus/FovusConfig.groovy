@@ -18,10 +18,18 @@ import groovy.transform.PackageScope
 class FovusConfig {
 
     final private String cliPath
+    final private String pipelineName
 
     FovusConfig(Map config) {
         this.cliPath = config.cliPath ?: "fovus"
+        this.pipelineName = config.pipelineName
+
+        if (pipelineName == null || pipelineName.isEmpty()) {
+            throw new IllegalArgumentException("[FOVUS] Pipeline name is required.")
+        }
     }
 
     String getCliPath() {cliPath}
+
+    String getPipelineName() { pipelineName }
 }

@@ -6,8 +6,6 @@ import groovy.transform.Canonical
 import groovy.transform.CompileStatic
 import groovy.transform.MapConstructor
 import groovy.util.logging.Slf4j
-import nextflow.fovus.FovusExecutor
-import nextflow.fovus.FovusUtil
 import nextflow.processor.TaskRun
 
 import java.nio.file.Files
@@ -15,7 +13,10 @@ import java.nio.file.Files
 /**
  * Configurations for Fovus job.
  *
- * Responsible for mapping NextFlow task configs to Fovus job configs.
+ * Precedences of configuration (highest to lowest):
+ *   <li><b>Process-level overrides</b> in {@code ext}: explicit settings on the Nextflow process.</li>
+ *   <li><b>JSON job config file</b>: provide default configuration values for a single process. Usage: Specify the path to the JSON job config file via {@code ext.jobConfigFile}.</li>
+ *   <li><b>Benchmark's defaults</b>: When the JSON was not specified for a process, the configuration will be loaded from the benchmarking profile name.</li>
  */
 @Slf4j
 @CompileStatic
@@ -27,6 +28,7 @@ class FovusJobConfig {
     Objective objective
     Workload workload
     String jobName
+    FovusJobClient jobClient
 
     private final TaskRun task
 
@@ -52,15 +54,23 @@ class FovusJobConfig {
 
     FovusJobConfig(){}
 
-    FovusJobConfig(TaskRun task) {
+    FovusJobConfig(FovusJobClient jobClient, TaskRun task) {
         def extension = task.config.get('ext') as Map<String, Object>
-        if(extension?.jobConfigFile == null && task.config.get('jobConfigFile') == null ){
-            throw new Error("jobConfigFile file path is missing!")
+        def jobConfigFilePath = extension?.jobConfigFile ?: task.config.get('jobConfigFile')
+        def benchmarkingProfileName = extension?.benchmarkingProfileName ?: task.config.get('benchmarkingProfileName')
+        def fovusJobConfig
+
+        if (jobConfigFilePath) {
+            fovusJobConfig = FovusJobConfigBuilder.fromJsonFile(jobConfigFilePath as String)
+        } else {
+            def defaultConfigFromBenchmarkName = jobClient.getDefaultJobConfig((benchmarkingProfileName ?: "Default") as String)
+
+            if (!defaultConfigFromBenchmarkName || defaultConfigFromBenchmarkName == "{}") {
+                throw new Error("[Fovus] No default job config found")
+            }
+            fovusJobConfig = FovusJobConfigBuilder.fromJsonString(defaultConfigFromBenchmarkName)
         }
 
-        def jobConfigFilePath = (extension.jobConfigFile ?: task.config.get('jobConfigFile')) as String
-
-        def fovusJobConfig = FovusJobConfigBuilder.fromJsonFile(jobConfigFilePath)
         this.task = task
         this.environment = createEnvironment(fovusJobConfig)
         def jobConstraints = createJobConstraints(fovusJobConfig)
@@ -120,20 +130,22 @@ class FovusJobConfig {
     }
 
     private TaskConstraints createTaskConstraints(FovusJobConfig fovusJobConfig) {
-        final extension = task.config.get('ext') as Map<String, Object>
-        def defaultTaskConstaints = fovusJobConfig.constraints.getTaskConstraints();
+        final extension = task.config.get('ext') as Map<String, Object>;
+        final nfStorage = task.config.getDisk()?.toGiga()?.toInteger()
+
+        def defaultTaskConstraints = fovusJobConfig.constraints.getTaskConstraints();
         return new TaskConstraints(
-                minvCpu: extension?.minvCpu as Integer ?: defaultTaskConstaints.minvCpu,
-                maxvCpu: extension?.maxvCpu as Integer ?: defaultTaskConstaints.maxvCpu,
-                minvCpuMemGiB: extension?.minvCpuMemGiB as Integer ?: defaultTaskConstaints.minvCpuMemGiB,
-                minGpu: extension?.minGpu as Integer ?: defaultTaskConstaints.maxvCpu,
-                maxGpu: extension?.maxGpu as Integer ?: defaultTaskConstaints.maxGpu,
-                minGpuMemGiB: extension?.minGpuMemGiB as Integer ?: defaultTaskConstaints.minGpuMemGiB,
-                storageGiB: extension?.storageGiB as Integer ?: defaultTaskConstaints.storageGiB,
-                walltimeHours: extension?.walltimeHours as Integer ?: defaultTaskConstaints.walltimeHours,
-                isSingleThreadedTask: extension?.isSingleThreadedTask ?: defaultTaskConstaints.isSingleThreadedTask,
-                scalableParallelism: extension?.scalableParallelism ?: defaultTaskConstaints.scalableParallelism,
-                parallelismOptimization: extension?.parallelismOptimization ?: defaultTaskConstaints.parallelismOptimization,
+                minvCpu: extension?.minvCpu as Integer ?: defaultTaskConstraints.minvCpu,
+                maxvCpu: extension?.maxvCpu as Integer ?: defaultTaskConstraints.maxvCpu,
+                minvCpuMemGiB: extension?.minvCpuMemGiB as Integer ?: defaultTaskConstraints.minvCpuMemGiB,
+                minGpu: extension?.minGpu as Integer ?: defaultTaskConstraints.maxvCpu,
+                maxGpu: extension?.maxGpu as Integer ?: defaultTaskConstraints.maxGpu,
+                minGpuMemGiB: extension?.minGpuMemGiB as Integer ?: defaultTaskConstraints.minGpuMemGiB,
+                storageGiB: extension?.storageGiB as Integer ?: nfStorage ?: defaultTaskConstraints.storageGiB,
+                walltimeHours: extension?.walltimeHours as Integer ?: defaultTaskConstraints.walltimeHours,
+                isSingleThreadedTask: extension?.isSingleThreadedTask ?: defaultTaskConstraints.isSingleThreadedTask,
+                scalableParallelism: extension?.scalableParallelism ?: defaultTaskConstraints.scalableParallelism,
+                parallelismOptimization: extension?.parallelismOptimization ?: defaultTaskConstraints.parallelismOptimization,
         )
     }
 
@@ -174,23 +186,6 @@ class FovusJobConfig {
 
 
     /**
-     * Skip syncing input files (eg, outputs from previous jobs) to remote storage
-     */
-    void skipRemoteInputSync(FovusExecutor executor) {
-        task.getInputFilesMap().each { stageName, filePath ->
-            {
-                final isRemoteFile = FovusUtil.isFovusRemoteFile(executor, filePath)
-                if (isRemoteFile) {
-                    workload.outputFileOption = 'exclude'
-                    workload.outputFileList = []
-                    workload.outputFileList << stageName
-                }
-            }
-        }
-
-    }
-
-    /**
      * Save the job config to a JSON file and return the file path.
      */
     String toJson() {
@@ -201,7 +196,7 @@ class FovusJobConfig {
         def jsonString = JsonOutput.prettyPrint(JsonOutput.toJson(this))
         Files.write(jobConfigFile, jsonString.bytes)
 
-        log.trace "[FOVUS] Job config file for ${task.name} saved to ${jobConfigFile.toString()}"
+        log.debug "[FOVUS] Job config file for ${task.name} saved to ${jobConfigFile.toString()}"
 
         return jobConfigFile.toString()
     }

@@ -4,9 +4,12 @@ import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import nextflow.executor.SimpleFileCopyStrategy
 import nextflow.processor.TaskBean
+import nextflow.processor.TaskProcessor
 import nextflow.util.Escape
 
+import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 
 /**
  * Defines the script operation to handle remote files staging on Fovus
@@ -23,54 +26,27 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
         this.executor = executor
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
-    String stageInputFile(Path path, String targetName) {
-        def fovusRemotePath = FovusUtil.getFovusRemotePath(executor, path)
-        if (fovusRemotePath == null) {
-            return 'true'
+    String getEnvScript(Map environment, boolean container) {
+        if( !environment )
+            return null
+
+        // create the *bash* environment script
+        if( !container ) {
+            return TaskProcessor.bashEnvironmentScript(environment)
         }
-
-        return super.stageInputFile(fovusRemotePath, targetName)
-    }
-
-    @Override
-    String getStageInputFilesScript(Map<String,Path> inputFiles) {
-        assert inputFiles != null
-
-        def len = inputFiles.size()
-        def delete = []
-        def links = []
-        for( Map.Entry<String,Path> entry : inputFiles ) {
-            final stageName = entry.key
-            final storePath = entry.value
-
-            final inputWorkDir = FovusUtil.getWorkDirOfFile(executor.getWorkDir(), storePath)
-            final jobId = FovusUtil.getJobId(executor, inputWorkDir);
-
-            if(jobId == null){
-                continue
-            }
-            // Delete all previous files with the same name
-            // Note: the file deletion is only needed to prevent
-            // file name collisions when re-running the runner script
-            // for debugging purpose. However, this can cause the creation
-            // of a very big runner script when a large number of files is
-            // given due to the file name duplication. Therefore the rationale
-            // here is to keep the deletion only when a file input number is
-            // given (which is more likely during pipeline development) and
-            // drop in any case  when they are more than 100
-            if( len<100 )
-                delete << "rm -f ${Escape.path(stageName)}"
-
-            // link them
-            links << stageInputFile( storePath, stageName )
+        else {
+            log.debug("environment --> ${environment}")
+            final wrapper = new StringBuilder()
+            wrapper << "nxf_container_env() {\n"
+            wrapper << 'cat << EOF\n'
+            wrapper << TaskProcessor.bashEnvironmentScript(environment, true)
+            wrapper << "chmod +x \$PWD/nextflow-bin/* || true\n"
+            wrapper << "export PATH=\"\$PWD/nextflow-bin:\\\$PATH\" \n"
+            wrapper << 'EOF\n'
+            wrapper << '}\n'
+            return wrapper.toString()
         }
-
-        // return a big string containing the command
-        return (delete + links).join(separatorChar)
     }
 
     /**

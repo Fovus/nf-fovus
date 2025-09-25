@@ -1,3 +1,4 @@
-nextflow.fovus.HelloFactory
-nextflow.fovus.HelloExtension
+nextflow.fovus.FovusTraceObserverFactory
 nextflow.fovus.FovusExecutor
+nextflow.fovus.util.FovusPathFactory
+nextflow.fovus.util.FovusPathSerializer
