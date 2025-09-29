@@ -52,6 +52,23 @@ class FovusPipelineClient {
         }
     }
 
+    FovusPipeline getPipeline(FovusConfig config, String pipelineId) {
+        def command = [config.getCliPath(), '--silence', 'pipeline', 'get', '--pipeline-id', pipelineId]
+        def result = FovusUtil.executeCommand(command)
+        if (result.exitCode != 0) {
+            throw new RuntimeException("Failed to get Fovus pipeline: ${result.error}")
+        }
+
+        final jsonData = new JsonSlurper().parseText(result.output)
+        final pipeline = new FovusPipeline(
+                jsonData["name"] as String,
+                jsonData["pipelineId"] as String,
+                jsonData["status"] as FovusPipelineStatus
+        )
+
+        return pipeline
+    }
+
     void setPipeline(String pipelineName, String pipelineId) {
         this.pipeline = new FovusPipeline(pipelineName, pipelineId)
     }

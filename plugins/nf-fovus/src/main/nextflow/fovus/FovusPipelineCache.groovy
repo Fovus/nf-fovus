@@ -14,8 +14,13 @@ class FovusPipelineCache {
                                         String pipelineName) {
         def existingPipelineId = getPipelineId(pipelineName)
         if (existingPipelineId) {
-            pipelineClient.setPipeline(pipelineName, existingPipelineId)
-            return existingPipelineId
+            final existingPipeline = pipelineClient.getPipeline(fovusConfig, existingPipelineId)
+            final existingPipelineStatus = existingPipeline.status.toString()
+
+            if (existingPipelineStatus in ["CREATED", "COMPLETED", "RUNNING", "FAILED"]) {
+                pipelineClient.setPipeline(pipelineName, existingPipelineId)
+                return existingPipelineId
+            }
         }
 
         def newPipelineId = pipelineClient.createPipeline(fovusConfig, pipelineName)
