@@ -2,7 +2,6 @@ package nextflow.fovus.pipeline
 
 import groovy.json.JsonSlurper
 import groovy.transform.CompileStatic
-import groovy.transform.MapConstructor
 import groovy.util.logging.Slf4j
 import nextflow.fovus.FovusConfig
 import nextflow.fovus.FovusUtil
@@ -43,8 +42,7 @@ class FovusPipelineClient {
     }
 
     void updatePipelineStatus(FovusConfig config, FovusPipeline pipeline, FovusPipelineStatus status) {
-        log.info "[FOVUS] Updating pipeline status to ${status.name()}"
-
+        log.trace "[FOVUS] Updating pipeline status to ${status.name()}"
         def command = [config.getCliPath(), '--silence', 'pipeline', 'update', '--pipeline-id', pipeline.getPipelineId(), '--status', status.name()]
         def result = FovusUtil.executeCommand(command)
         if (result.exitCode != 0) {

@@ -2,7 +2,6 @@ package nextflow.fovus.job
 
 import groovy.json.JsonSlurper
 import groovy.transform.CompileStatic
-import groovy.transform.MapConstructor
 import groovy.util.logging.Slf4j
 import nextflow.fovus.FovusConfig
 import nextflow.fovus.FovusUtil
@@ -48,7 +47,12 @@ class FovusJobClient {
             command << includeList.join(",")
         }
 
-        def result = executeCommand(command.join(' '))
+        if (config.projectName != null && config.projectName != "") {
+            command << "--project-name"
+            command << config.projectName
+        }
+
+        def result = FovusUtil.executeCommand(command)
 
 
         if (result.exitCode != 0) {
@@ -64,7 +68,7 @@ class FovusJobClient {
 
     FovusJobStatus getJobStatus(String jobId) {
         def command = [config.getCliPath(), 'job', 'status', '--job-id', jobId]
-        def result = executeCommand(command.join(' '))
+        def result = FovusUtil.executeCommand(command)
 
         def jobStatus = result.output.trim().split('\n')[-1]
         log.trace"[FOVUS] Job Id: ${jobId}, status: ${jobStatus}"
@@ -123,7 +127,7 @@ class FovusJobClient {
     FovusRunStatus getRunStatus(String jobId, String runName) {
         def command = [config.getCliPath(), 'job', 'list-runs', '--job-id', jobId, '--run-names', runName]
         try {
-            def result = executeCommand(command.join(' '))
+            def result = FovusUtil.executeCommand(command)
             def runStatus = getStatusFromJsonOutput(result.output)
 
             // If status not found immmidiately after submission then consider as CREATED
@@ -157,69 +161,16 @@ class FovusJobClient {
                     throw new RuntimeException("Unknown job status: ${runStatus}")
             }
         } catch(Exception e) {
-            log.error("getRunStatus error, ex=${e.message}");
+            log.error("getRunStatus error, ex=${e.message}")
             throw new RuntimeException("getRunStatusError")
         }
-    }
-
-    @MapConstructor
-    class CliExecutionResult {
-        int exitCode
-        String output
-        String error
-    }
-
-    /**
-     * Helper method to execute Fovus CLI commands
-     * @param command
-     * @return
-     */
-    private CliExecutionResult executeCommand(String command) {
-        int maxRetries = 3
-        int attempt = 0
-        CliExecutionResult result = null
-
-        while (attempt < maxRetries) {
-            attempt++
-            log.trace"[FOVUS] Executing command (attempt ${attempt}/${maxRetries}): ${command}"
-
-            def stdout = new StringBuilder()
-            def stderr = new StringBuilder()
-
-            def process = command.execute()
-            process.consumeProcessOutput(stdout, stderr)
-            process.waitFor()
-
-            result = new CliExecutionResult(
-                    exitCode: process.exitValue(),
-                    output: stdout.toString(),
-                    error: stderr.toString()
-            )
-
-            log.trace"[FOVUS] Command executed with exit code: ${result.exitCode}"
-            log.trace"[FOVUS] Command output: ${result.output}"
-            log.trace"[FOVUS] Command error: ${result.error}"
-
-            if (result.exitCode == 0) {
-                // Success, break out of retry loop
-                break
-            } else {
-                log.warn "[FOVUS] Command failed on attempt ${attempt} with exit code ${result.exitCode}"
-                if (attempt < maxRetries) {
-                    log.info "[FOVUS] Retrying command in 2s..."
-                    sleep(2000)  // small backoff before retry
-                }
-            }
-        }
-
-        return result
     }
 
     public void downloadJobOutputs(String jobDirectoryPath, String jobId) {
         def downloadJobCommand = [config.getCliPath(), 'job', 'download', jobDirectoryPath, '--job-id', jobId]
 
         log.trace"[FOVUS] Download job outputs"
-        def result = executeCommand(downloadJobCommand.join(' '))
+        def result = FovusUtil.executeCommand(downloadJobCommand)
 
         if (result.exitCode != 0) {
             throw new RuntimeException("Failed to download Fovus job outputs: ${result.error}")
@@ -228,7 +179,7 @@ class FovusJobClient {
 
     public void terminateJob(String jobId) {
         def command = [config.getCliPath(), 'job', 'terminate', '--job-id', jobId]
-        def result = executeCommand(command.join(' '))
+        def result = FovusUtil.executeCommand(command)
 
         if (result.exitCode != 0) {
             throw new RuntimeException("Failed to terminate Fovus job: ${result.error}")
@@ -276,7 +227,7 @@ class FovusJobClient {
     }
 
     private final List<String> getJobFileDownloadCommand(String fovusPath, String localPath) {
-        final parts = fovusPath.split("/");
+        final parts = fovusPath.split("/")
         final String jobId = parts[0]
         final includePath = parts[1..-1].join('/')
 
@@ -291,7 +242,7 @@ class FovusJobClient {
     }
 
     private final List<String> getStorageFileDownloadCommand(String fovusPath, String localPath) {
-        final parts = fovusPath.split("/");
+        final parts = fovusPath.split("/")
         def fovusPathDir
         def includePath
         if (fovusPath.endsWith("/")) {
@@ -370,7 +321,7 @@ class FovusJobClient {
         } catch (Exception e) {
             log.error "[FOVUS] Error listing file objects: ${e.message}"
         }
-        return null;
+        return null
     }
 
 
