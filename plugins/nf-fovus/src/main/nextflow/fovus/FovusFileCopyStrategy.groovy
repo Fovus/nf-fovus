@@ -7,9 +7,7 @@ import nextflow.processor.TaskBean
 import nextflow.processor.TaskProcessor
 import nextflow.util.Escape
 
-import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.Paths
 
 /**
  * Defines the script operation to handle remote files staging on Fovus
@@ -28,25 +26,49 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
 
     @Override
     String getEnvScript(Map environment, boolean container) {
-        if( !environment )
-            return null
+        final result = new StringBuilder()
+        final copy = environment ? new LinkedHashMap<String, String>(environment) : Collections.<String, String> emptyMap()
+
+        final path = copy.containsKey('PATH')
+        // remove any external PATH
+        if (path)
+            copy.remove('PATH')
+
+        if (!executor.remoteBinDir) return super.getEnvScript(copy, container)
 
         // create the *bash* environment script
         if( !container ) {
-            return TaskProcessor.bashEnvironmentScript(environment)
+            result << "export PATH=${executor.remoteBinDir}:\$PATH\n"
+
+            final envScript = super.getEnvScript(copy, false)
+            if (envScript) result << envScript
+
+            return result.toString()
         }
-        else {
-            log.debug("environment --> ${environment}")
-            final wrapper = new StringBuilder()
-            wrapper << "nxf_container_env() {\n"
-            wrapper << 'cat << EOF\n'
-            wrapper << TaskProcessor.bashEnvironmentScript(environment, true)
-            wrapper << "chmod +x \$PWD/nextflow-bin/* || true\n"
-            wrapper << "export PATH=\"\$PWD/nextflow-bin:\\\$PATH\" \n"
-            wrapper << 'EOF\n'
-            wrapper << '}\n'
-            return wrapper.toString()
-        }
+
+        final wrapper = new StringBuilder()
+        wrapper << "nxf_container_env() {\n"
+        wrapper << 'cat << EOF\n'
+        wrapper << TaskProcessor.bashEnvironmentScript(environment, true)
+        wrapper << "export PATH=${executor.remoteBinDir}:\$PATH\n"
+        wrapper << 'EOF\n'
+        wrapper << '}\n'
+        return wrapper.toString()
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * Additionally, change the permission of the file to 777 so the remote mount point can access the input file
+     */
+    @Override
+    String stageInputFile(Path path, String targetName) {
+        Path remotePath = executor.getRemotePath(path)
+        def stageCmd = super.stageInputFile(remotePath, targetName)
+
+        // Change file permission to 777 in background so they can be executable on the compute node
+        "chmod 777 ${Escape.path(path.toAbsolutePath().toString())}".execute()
+        return stageCmd
     }
 
     /**

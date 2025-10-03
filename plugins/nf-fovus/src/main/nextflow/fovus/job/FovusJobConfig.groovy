@@ -52,6 +52,10 @@ class FovusJobConfig {
         this.jobName = jobName
     }
 
+    void setRunCommand(String runCmd) {
+        this.workload.runCommand = runCmd
+    }
+
     FovusJobConfig(){}
 
     FovusJobConfig(FovusJobClient jobClient, TaskRun task) {

@@ -1,9 +1,11 @@
 package nextflow.fovus
 
 import groovy.transform.CompileStatic
+import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
 import nextflow.executor.TaskArrayExecutor
+import nextflow.extension.FilesEx
 import nextflow.fovus.juicefs.FovusJuiceFsClient
 import nextflow.fovus.pipeline.FovusPipelineClient
 import nextflow.processor.TaskHandler
@@ -20,11 +22,13 @@ import java.nio.file.Path
 @ServiceName('fovus')
 @CompileStatic
 class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecutor {
-
+    private static final String FOVUS_WORK_DIR = '/mnt/juicefs'
     protected FovusConfig config
 
     protected FovusPipelineClient pipelineClient;
     protected FovusJuiceFsClient juiceFsClient;
+    protected Path juiceFsMountDir;
+    protected Path remoteBinDir;
 
     /**
      * Map the local work directory with Fovus job id
@@ -53,6 +57,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
 
         juiceFsClient = new FovusJuiceFsClient(config)
         validateWorkDir()
+        uploadBinDir()
     }
 
     private void validateWorkDir() {
@@ -61,13 +66,34 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         juiceFsClient.validateOrMountJuiceFs(session.workDir.parent)
     }
 
+    protected void uploadBinDir() {
+        /*
+         * upload local binaries
+         */
+        if (session.binDir && !session.binDir.empty() && !session.disableRemoteBinDir) {
+            def tempDir = getTempDir()
+            def copyBinDir = FilesEx.copyTo(session.binDir, tempDir)
+            remoteBinDir = getRemotePath(copyBinDir)
+
+            // Change permission to executable in background
+            def changePermissionCmd = "chmod -R 755 ${copyBinDir}"
+            changePermissionCmd.execute()
+        }
+    }
+
+    @PackageScope
+    Path getRemoteBinDir() {
+        return remoteBinDir
+    }
+
+    @Override
+    Path getWorkDir() {
+        return session.workDir.resolve(this.pipelineClient.getPipeline().pipelineId)
+    }
+
     @Override
     boolean isForeignFile(Path path) {
-        // TODO: update dynamic mount point from configuration
-        if(path.toAbsolutePath().startsWith("/mnt/juicefs/")){
-            return false
-        }
-        return super.isForeignFile(path)
+        return true
     }
 
     /**
@@ -108,4 +134,10 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     String getArrayLaunchCommand(String taskDir) {
         return TaskArrayExecutor.super.getArrayLaunchCommand(taskDir);
     }
+
+    Path getRemotePath(Path file) {
+        // Replace the juicefs mount point part with the FOVUS_WORK_DIR
+        return Path.of(FOVUS_WORK_DIR, file.toString().replace(juiceFsMountDir.toString(), ""))
+    }
+
 }
