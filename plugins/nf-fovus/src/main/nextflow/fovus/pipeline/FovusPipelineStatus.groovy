@@ -4,5 +4,8 @@ enum FovusPipelineStatus {
     CREATED,
     RUNNING,
     COMPLETED,
-    FAILED
+    FAILED,
+    DELETED,
+    DELETE_FAILED,
+    DELETING
 }
