@@ -2,3 +2,4 @@ nextflow.fovus.FovusTraceObserverFactory
 nextflow.fovus.FovusExecutor
 nextflow.fovus.util.FovusPathFactory
 nextflow.fovus.util.FovusPathSerializer
+nextflow.fovus.FovusConfig
