@@ -157,8 +157,7 @@ class FovusTaskHandler extends TaskHandler {
         task.stdout = outputFile
 
         // TODO: Download and read the exit file. Assuming successful exit for now
-        // task.exitStatus = readExitFile()
-        task.exitStatus = 0
+        task.exitStatus = readExitFile()
 
         if (taskStatus != FovusJobStatus.COMPLETED || taskStatus != FovusRunStatus.COMPLETED) {
             task.stderr = errorFile
