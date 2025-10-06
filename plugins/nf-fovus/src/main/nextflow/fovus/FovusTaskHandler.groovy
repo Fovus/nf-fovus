@@ -6,7 +6,8 @@ import nextflow.executor.BashWrapperBuilder
 import nextflow.fovus.job.FovusJobClient
 import nextflow.fovus.job.FovusJobConfig
 import nextflow.fovus.job.FovusJobStatus
-import nextflow.fovus.job.FovusRunStatus
+import nextflow.fovus.task.FovusTaskClient
+import nextflow.fovus.task.FovusTaskStatus
 import nextflow.processor.TaskArrayRun
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskRun
@@ -45,20 +46,21 @@ class FovusTaskHandler extends TaskHandler {
     protected FovusJobConfig jobConfig;
 
     protected FovusJobClient jobClient;
+    protected FovusTaskClient taskClient;
 
     private List<FovusJobStatus> RUNNING_JOB_STATUSES = [
             FovusJobStatus.PENDING,
             FovusJobStatus.PROVISIONING_INFRASTRUCTURE,
-            FovusRunStatus.CREATED,
-            FovusRunStatus.RUNNING,
-            FovusRunStatus.REQUEUED,
+            FovusJobStatus.CREATED,
+            FovusJobStatus.RUNNING,
+            FovusJobStatus.REQUEUED,
     ]
 
-    private List<FovusRunStatus> RUNNING_RUN_STATUSES = [
-            FovusRunStatus.CREATED,
-            FovusRunStatus.RUNNING,
-            FovusRunStatus.REQUEUED,
-            FovusRunStatus.UNCOMPLETE
+    private List<FovusTaskStatus> RUNNING_RUN_STATUSES = [
+            FovusTaskStatus.CREATED,
+            FovusTaskStatus.RUNNING,
+            FovusTaskStatus.REQUEUED,
+            FovusTaskStatus.UNCOMPLETE
     ]
 
     FovusJobConfig getJobConfig() {
@@ -78,6 +80,7 @@ class FovusTaskHandler extends TaskHandler {
         this.traceFile = task.workDir.resolve(TaskRun.CMD_TRACE)
 
         this.jobClient = new FovusJobClient(executor.config)
+        this.taskClient = new FovusTaskClient(executor.config)
 
         if(task instanceof TaskArrayRun){
             def children = task.getChildren() as List<FovusTaskHandler>;
@@ -111,8 +114,8 @@ class FovusTaskHandler extends TaskHandler {
 
             return isRunning
         }
-        final runName = this.task.workDirStr.split("/")[-1];
-        final taskStatus = jobClient.getRunStatus(jobId, runName)
+        final taskName = this.task.workDirStr.split("/")[-1];
+        final taskStatus = taskClient.getTaskStatus(jobId, taskName)
         final isRunning = taskStatus in RUNNING_RUN_STATUSES
 
         if (isRunning) {
@@ -139,15 +142,15 @@ class FovusTaskHandler extends TaskHandler {
         if(this.task instanceof TaskArrayRun){
             log.debug("TaskArrayRun is detected: ${this.task} jobId: --> $jobId")
             taskStatus = jobClient.getJobStatus(jobId)
-            final isJobTerminated = jobStatus in [FovusJobStatus.COMPLETED, FovusJobStatus.FAILED, FovusJobStatus.WALLTIME_REACHED, FovusJobStatus.TERMINATED]
+            final isJobTerminated = taskStatus in [FovusJobStatus.COMPLETED, FovusJobStatus.FAILED, FovusJobStatus.WALLTIME_REACHED, FovusJobStatus.TERMINATED]
 
             if (!isJobTerminated) {
                 return false
             }
         } else {
-            final runName = this.task.workDirStr.split("/")[-1];
-            taskStatus = jobClient.getRunStatus(jobId, runName)
-            final isRunTerminated = taskStatus in [FovusRunStatus.COMPLETED, FovusRunStatus.FAILED, FovusRunStatus.WALLTIME_REACHED, FovusRunStatus.TERMINATED]
+            final taskName = this.task.workDirStr.split("/")[-1];
+            taskStatus = taskClient.getTaskStatus(jobId, taskName)
+            final isRunTerminated = taskStatus in [FovusTaskStatus.COMPLETED, FovusTaskStatus.FAILED, FovusTaskStatus.WALLTIME_REACHED, FovusTaskStatus.TERMINATED]
 
             if (!isRunTerminated) {
                 return false
@@ -159,7 +162,7 @@ class FovusTaskHandler extends TaskHandler {
         // TODO: Download and read the exit file. Assuming successful exit for now
         task.exitStatus = readExitFile()
 
-        if (taskStatus != FovusJobStatus.COMPLETED || taskStatus != FovusRunStatus.COMPLETED) {
+        if (taskStatus != FovusJobStatus.COMPLETED || taskStatus != FovusTaskStatus.COMPLETED) {
             task.stderr = errorFile
 
             switch (taskStatus) {
