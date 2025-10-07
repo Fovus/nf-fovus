@@ -58,38 +58,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     private void validateWorkDir() {
         // Or should we auto map to session.workDir/pipelines?
         assert session.workDir.endsWith("pipelines"), "[FOVUS] Working directory must end with pipelines. Current work directory: ${session.workDir}"
-
-
-        // Get all JuiceFs mount points
-        // Example output: JuiceFS:juiceFsName on /mnt/mountPoint
-        def getJuiceFsMountsCmd = ['mount', '|', 'grep', 'JuiceFS']
-        def result = getJuiceFsMountsCmd.execute().text
-
-        def juiceFsMounts = result.split('\n')
-        if (juiceFsMounts.length == 0) {
-            throw new RuntimeException("No JuiceFS mount was found")
-        }
-
-        final juiceFsStatus = juiceFsClient.getJuiceFsStatus()
-        for (def mount : juiceFsMounts) {
-            if (mount.isEmpty()) {
-                continue
-            }
-            final parts = mount.split(" ")
-            final fsName = parts[0].split(":")[1]
-            final mountPoint = parts[2]
-
-            final matchedFsName = juiceFsStatus.setting.name == fsName
-            final hasMountSession = juiceFsStatus.sessions.any { it.mountPoint == mountPoint }
-            final isValidaWorkDir = session.workDir.parent.toAbsolutePath().toString() == mountPoint
-
-            if (matchedFsName && hasMountSession && isValidaWorkDir) {
-                return
-            }
-
-            throw new RuntimeException("[FOVUS] Invalid working directory: ${session.workDir}")
-        }
-
+        juiceFsClient.validateOrMountJuiceFs(session.workDir.parent)
     }
 
     @Override
