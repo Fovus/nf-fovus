@@ -11,6 +11,7 @@ import nextflow.processor.TaskArrayRun
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskRun
 import nextflow.processor.TaskStatus
+import nextflow.util.Escape
 
 import java.nio.file.Path
 
@@ -156,8 +157,7 @@ class FovusTaskHandler extends TaskHandler {
         task.stdout = outputFile
 
         // TODO: Download and read the exit file. Assuming successful exit for now
-        // task.exitStatus = readExitFile()
-        task.exitStatus = 0
+        task.exitStatus = readExitFile()
 
         if (taskStatus != FovusJobStatus.COMPLETED || taskStatus != FovusRunStatus.COMPLETED) {
             task.stderr = errorFile
@@ -204,7 +204,12 @@ class FovusTaskHandler extends TaskHandler {
 
     @Override
     void submit() {
+        final remoteRunScript = executor.getRemotePath(wrapperFile)
+        final remoteWorkDir = remoteRunScript.getParent()
+        final runCommand = "cd ${remoteWorkDir} && ./${TaskRun.CMD_RUN}"
+        jobConfig.setRunCommand(runCommand)
         final jobConfigFilePath = jobConfig.toJson()
+
         final isTaskArrayRun = task instanceof TaskArrayRun;
         def jobDirectory = task.workDir.getParent().toString();
 
@@ -228,6 +233,9 @@ class FovusTaskHandler extends TaskHandler {
         updateStatus(jobId)
 
         executor.jobIdMap.put(task.workDir.toString(), jobId);
+
+        // Change the run scripts permission in background
+        "chmod +x ${Escape.path(wrapperFile)} ${Escape.path(scriptFile)}".execute()
     }
 
     private int readExitFile() {
