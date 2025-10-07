@@ -104,68 +104,6 @@ class FovusJobClient {
         }
     }
 
-    def getStatusFromJsonOutput(fullOutputString) {
-        // 1. Extract the JSON part from the string
-        // This regex looks for a '[' followed by anything, ending with a ']'
-        def matcher = (fullOutputString =~ /(?s)\[.*\]/)
-        if (matcher.find()) {
-            def jsonPart = matcher.group(0) // Get the full matched JSON string
-
-            // 2. Parse the JSON part
-            def slurper = new JsonSlurper()
-            def parsedData =  (List<Map<String, Object>>)  slurper.parseText(jsonPart)
-
-            // 3. Access the status from the first element of the array
-            // Use null-safe operator and Elvis operator for robustness
-            return parsedData[0]?.get("status") as String ?: "Status Not Found"
-        } else {
-            // Handle case where no JSON part is found
-            return "No JSON found in output"
-        }
-    }
-
-    FovusRunStatus getRunStatus(String jobId, String runName) {
-        def command = [config.getCliPath(), 'job', 'list-runs', '--job-id', jobId, '--run-names', runName]
-        try {
-            def result = FovusUtil.executeCommand(command)
-            def runStatus = getStatusFromJsonOutput(result.output)
-
-            // If status not found immmidiately after submission then consider as CREATED
-            if(runStatus == "Status Not Found" && FovusUtil.isRecentlySubmitted(jobId)){
-                runStatus = FovusRunStatus.CREATED
-            }
-
-            log.trace"[FOVUS] Job Id: ${jobId}, status: ${runStatus}"
-
-            switch (runStatus) {
-                case 'Pending':
-                    return FovusRunStatus.CREATED
-                case 'Completed':
-                    return FovusRunStatus.COMPLETED
-                case 'Failed':
-                    return FovusRunStatus.FAILED
-                case 'Running':
-                    return FovusRunStatus.RUNNING
-                case 'Requeued':
-                    return FovusRunStatus.REQUEUED
-                case 'Terminated':
-                    return FovusRunStatus.TERMINATED
-                case 'Terminating':
-                    return FovusRunStatus.TERMINATING
-                case 'Uncompleted':
-                    return FovusRunStatus.UNCOMPLETE
-                case 'Walltime Reached':
-                    return FovusRunStatus.WALLTIME_REACHED
-                default:
-                    log.error "[FOVUS] Unknown job status: ${runStatus}"
-                    throw new RuntimeException("Unknown job status: ${runStatus}")
-            }
-        } catch(Exception e) {
-            log.error("getRunStatus error, ex=${e.message}")
-            throw new RuntimeException("getRunStatusError")
-        }
-    }
-
     public void downloadJobOutputs(String jobDirectoryPath, String jobId) {
         def downloadJobCommand = [config.getCliPath(), 'job', 'download', jobDirectoryPath, '--job-id', jobId]
 
@@ -356,16 +294,4 @@ enum FovusJobStatus {
     POST_PROCESSING_RUNNING,
     POST_PROCESSING_FAILED,
     POST_PROCESSING_WALLTIME_REACHED
-}
-
-enum FovusRunStatus {
-    CREATED,
-    COMPLETED,
-    FAILED,
-    REQUEUED,
-    RUNNING,
-    TERMINATED,
-    TERMINATING,
-    UNCOMPLETE,
-    WALLTIME_REACHED
 }
