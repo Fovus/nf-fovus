@@ -22,7 +22,7 @@ import java.nio.file.Path
 @ServiceName('fovus')
 @CompileStatic
 class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecutor {
-    private static final String FOVUS_WORK_DIR = '/mnt/juicefs'
+    private static final String REMOTE_JUICEFS_MOUNT_POINT = '/fovus-juicefs'
     protected FovusConfig config
 
     protected FovusPipelineClient pipelineClient;
@@ -136,8 +136,8 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     }
 
     Path getRemotePath(Path file) {
-        // Replace the juicefs mount point part with the FOVUS_WORK_DIR
-        return Path.of(FOVUS_WORK_DIR, file.toString().replace(juiceFsMountDir.toString(), ""))
+        // Replace the juicefs mount point part with the REMOTE_JUICEFS_MOUNT_POINT
+        return Path.of(REMOTE_JUICEFS_MOUNT_POINT, file.toString().replace(juiceFsMountDir.toString(), ""))
     }
 
 }
