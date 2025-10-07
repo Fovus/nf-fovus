@@ -64,6 +64,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         // Or should we auto map to session.workDir/pipelines?
         assert session.workDir.endsWith("pipelines"), "[FOVUS] Working directory must end with pipelines. Current work directory: ${session.workDir}"
         juiceFsClient.validateOrMountJuiceFs(session.workDir.parent)
+        juiceFsMountDir = session.workDir.parent
     }
 
     protected void uploadBinDir() {
