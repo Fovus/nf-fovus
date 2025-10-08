@@ -239,6 +239,8 @@ class FovusTaskHandler extends TaskHandler {
 
         // Change the run scripts permission in background
         "chmod +x ${Escape.path(wrapperFile)} ${Escape.path(scriptFile)}".execute()
+        // Allow creating new files in work directory
+        "chmod 777 ${Escape.path(task.workDir)}".execute()
     }
 
     private int readExitFile() {
