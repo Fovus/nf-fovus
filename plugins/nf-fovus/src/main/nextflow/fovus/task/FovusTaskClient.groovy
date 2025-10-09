@@ -58,7 +58,7 @@ class FovusTaskClient {
                     return FovusTaskStatus.COMPLETED
                 case 'Failed':
                     return FovusTaskStatus.FAILED
-                case 'Taskning':
+                case 'Running':
                     return FovusTaskStatus.RUNNING
                 case 'Requeued':
                     return FovusTaskStatus.REQUEUED

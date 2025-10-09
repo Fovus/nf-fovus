@@ -159,7 +159,6 @@ class FovusTaskHandler extends TaskHandler {
 
         task.stdout = outputFile
 
-        // TODO: Download and read the exit file. Assuming successful exit for now
         task.exitStatus = readExitFile()
 
         if (taskStatus != FovusJobStatus.COMPLETED || taskStatus != FovusTaskStatus.COMPLETED) {
@@ -179,9 +178,6 @@ class FovusTaskHandler extends TaskHandler {
         }
 
         status = TaskStatus.COMPLETED
-
-        final jobDirectoryPath = task.workDir.getParent().toString()
-        jobClient.downloadJobOutputs(jobDirectoryPath, jobId)
         return true
     }
 

@@ -94,7 +94,14 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
 
     @Override
     boolean isForeignFile(Path path) {
-        return true
+        if (path.scheme != getStageDir().scheme) {
+            return true
+        }
+
+        final mountDir = session.workDir.parent.toAbsolutePath()
+        final isInsideMountDir = path.toAbsolutePath().startsWith(mountDir)
+
+        return !isInsideMountDir
     }
 
     /**
