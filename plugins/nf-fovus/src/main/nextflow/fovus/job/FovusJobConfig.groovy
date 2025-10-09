@@ -9,6 +9,7 @@ import groovy.util.logging.Slf4j
 import nextflow.processor.TaskRun
 
 import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * Configurations for Fovus job.
@@ -192,10 +193,7 @@ class FovusJobConfig {
     /**
      * Save the job config to a JSON file and return the file path.
      */
-    String toJson() {
-        final workDir = task.workDir
-        final jobConfigFile = workDir.resolve("${jobName}_config.json")
-
+    String toJson(Path jobConfigFile) {
         // Write the job config to a file
         def jsonString = JsonOutput.prettyPrint(JsonOutput.toJson(this))
         Files.write(jobConfigFile, jsonString.bytes)

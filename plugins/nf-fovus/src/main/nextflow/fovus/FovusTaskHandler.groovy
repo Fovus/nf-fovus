@@ -63,6 +63,8 @@ class FovusTaskHandler extends TaskHandler {
             FovusTaskStatus.UNCOMPLETE
     ]
 
+    final static FOVUS_JOB_CONFIG_FOLDER = "./work/.nextflow/fovus/job_config"
+
     FovusJobConfig getJobConfig() {
         return this.jobConfig
     }
@@ -207,7 +209,15 @@ class FovusTaskHandler extends TaskHandler {
         final remoteWorkDir = remoteRunScript.getParent()
         final runCommand = "cd ${remoteWorkDir} && ./${TaskRun.CMD_RUN}"
         jobConfig.setRunCommand(runCommand)
-        final jobConfigFilePath = jobConfig.toJson()
+
+        // Save to config to JSON
+        final jobConfigFolder = new File(FOVUS_JOB_CONFIG_FOLDER)
+        if (!jobConfigFolder.exists()) {
+            jobConfigFolder.mkdirs()
+        }
+
+        final jobConfigFile = File.createTempFile("${jobConfig.jobName}_", ".json", new File(FOVUS_JOB_CONFIG_FOLDER))
+        final jobConfigFilePath = jobConfig.toJson(jobConfigFile.toPath())
 
         final isTaskArrayRun = task instanceof TaskArrayRun;
         def jobDirectory = task.workDir.getParent().toString();
