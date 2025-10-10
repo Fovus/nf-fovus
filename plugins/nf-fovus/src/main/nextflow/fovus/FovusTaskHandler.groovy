@@ -14,7 +14,10 @@ import nextflow.processor.TaskRun
 import nextflow.processor.TaskStatus
 import nextflow.util.Escape
 
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 
 import static nextflow.processor.TaskStatus.*
 
@@ -62,6 +65,8 @@ class FovusTaskHandler extends TaskHandler {
             FovusTaskStatus.REQUEUED,
             FovusTaskStatus.UNCOMPLETE
     ]
+
+    final static FOVUS_JOB_CONFIG_FOLDER = "./work/.nextflow/fovus/job_config"
 
     FovusJobConfig getJobConfig() {
         return this.jobConfig
@@ -159,7 +164,6 @@ class FovusTaskHandler extends TaskHandler {
 
         task.stdout = outputFile
 
-        // TODO: Download and read the exit file. Assuming successful exit for now
         task.exitStatus = readExitFile()
 
         if (taskStatus != FovusJobStatus.COMPLETED || taskStatus != FovusTaskStatus.COMPLETED) {
@@ -179,9 +183,6 @@ class FovusTaskHandler extends TaskHandler {
         }
 
         status = TaskStatus.COMPLETED
-
-        final jobDirectoryPath = task.workDir.getParent().toString()
-        jobClient.downloadJobOutputs(jobDirectoryPath, jobId)
         return true
     }
 
@@ -207,13 +208,28 @@ class FovusTaskHandler extends TaskHandler {
 
     @Override
     void submit() {
-        final remoteRunScript = executor.getRemotePath(wrapperFile)
-        final remoteWorkDir = remoteRunScript.getParent()
-        final runCommand = "cd ${remoteWorkDir} && ./${TaskRun.CMD_RUN}"
-        jobConfig.setRunCommand(runCommand)
-        final jobConfigFilePath = jobConfig.toJson()
+        def runCommand
+        final isTaskArrayRun = task instanceof TaskArrayRun
 
-        final isTaskArrayRun = task instanceof TaskArrayRun;
+        if (isTaskArrayRun) {
+            prepareArrayTasks(task as TaskArrayRun)
+            runCommand = "./run.sh"
+        } else {
+            final remoteRunScript = executor.getRemotePath(wrapperFile)
+            final remoteWorkDir = remoteRunScript.getParent()
+            runCommand = "cd ${remoteWorkDir} && ./${TaskRun.CMD_RUN}"
+        }
+        jobConfig.setRunCommand(runCommand)
+
+        // Save to config to JSON
+        final jobConfigFolder = new File(FOVUS_JOB_CONFIG_FOLDER)
+        if (!jobConfigFolder.exists()) {
+            jobConfigFolder.mkdirs()
+        }
+
+        final jobConfigFile = File.createTempFile("${jobConfig.jobName}_", ".json", new File(FOVUS_JOB_CONFIG_FOLDER))
+        final jobConfigFilePath = jobConfig.toJson(jobConfigFile.toPath())
+
         def jobDirectory = task.workDir.getParent().toString();
 
         if(isTaskArrayRun){
@@ -221,7 +237,7 @@ class FovusTaskHandler extends TaskHandler {
         }
         List<String> includeList = []
         if(isTaskArrayRun){
-            for(TaskHandler taskHandler : task.getChildren()){
+            for (TaskHandler taskHandler : (task as TaskArrayRun).getChildren()) {
                 log.debug "[FOVUS] List of directory > ${taskHandler.getTask().workDir.toString()}"
                 includeList.add("${taskHandler.getTask().workDir.toString().tokenize("/")[-1]}/");
             }
@@ -239,6 +255,8 @@ class FovusTaskHandler extends TaskHandler {
 
         // Change the run scripts permission in background
         "chmod +x ${Escape.path(wrapperFile)} ${Escape.path(scriptFile)}".execute()
+        // Allow creating new files in work directory
+        "chmod 777 ${Escape.path(task.workDir)}".execute()
     }
 
     private int readExitFile() {
@@ -284,5 +302,36 @@ class FovusTaskHandler extends TaskHandler {
     protected String getJobName(TaskRun task) {
         final result = prependWorkflowPrefix(task.name, environment)
         return normalizeJobName(result)
+    }
+
+    private void prepareArrayTasks(TaskArrayRun task) {
+        task.children.eachWithIndex { handler, int i ->
+            handler = handler as FovusTaskHandler
+            def subTaskName = handler.task.workDir.getName()
+            def subTaskFolder = task.workDir.resolve(subTaskName)
+            Files.createDirectories(subTaskFolder)
+            log.trace "[FOVUS] Creating subtask ${i} for ${task.name}> ${subTaskFolder}"
+
+            final remoteTaskWorkDir = executor.getRemotePath(handler.getTask().workDir.toAbsolutePath())
+            final runScript = """
+            #!/bin/bash
+            cd "${remoteTaskWorkDir}"
+            ./${TaskRun.CMD_RUN}
+            """.stripIndent().leftTrim()
+
+            // Save script as run.sh
+            final runScriptPath = subTaskFolder.resolve("run.sh")
+            Files.write(
+                    runScriptPath,
+                    runScript.getBytes(StandardCharsets.UTF_8),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE
+            )
+
+            "chmod +x ${Escape.path(runScriptPath)}".execute()
+            "chmod +x ${Escape.path(handler.wrapperFile)} ${Escape.path(handler.scriptFile)}".execute()
+            "chmod 777 ${Escape.path(handler.task.workDir)}".execute()
+        }
     }
 }
