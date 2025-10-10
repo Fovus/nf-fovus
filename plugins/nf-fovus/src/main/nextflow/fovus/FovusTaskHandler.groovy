@@ -331,6 +331,7 @@ class FovusTaskHandler extends TaskHandler {
 
             "chmod +x ${Escape.path(runScriptPath)}".execute()
             "chmod +x ${Escape.path(handler.wrapperFile)} ${Escape.path(handler.scriptFile)}".execute()
+            "chmod 777 ${Escape.path(handler.task.workDir)}".execute()
         }
     }
 }
