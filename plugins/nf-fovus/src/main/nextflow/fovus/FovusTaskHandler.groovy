@@ -305,7 +305,8 @@ class FovusTaskHandler extends TaskHandler {
     }
 
     private void prepareArrayTasks(TaskArrayRun task) {
-        task.children.eachWithIndex { TaskHandler handler, int i ->
+        task.children.eachWithIndex { handler, int i ->
+            handler = handler as FovusTaskHandler
             def subTaskName = handler.task.workDir.getName()
             def subTaskFolder = task.workDir.resolve(subTaskName)
             Files.createDirectories(subTaskFolder)
@@ -327,6 +328,9 @@ class FovusTaskHandler extends TaskHandler {
                     StandardOpenOption.TRUNCATE_EXISTING,
                     StandardOpenOption.WRITE
             )
+
+            "chmod +x ${Escape.path(runScriptPath)}".execute()
+            "chmod +x ${Escape.path(handler.wrapperFile)} ${Escape.path(handler.scriptFile)}".execute()
         }
     }
 }
