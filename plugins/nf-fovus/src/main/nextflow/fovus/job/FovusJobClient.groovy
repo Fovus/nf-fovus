@@ -47,6 +47,11 @@ class FovusJobClient {
             command << includeList.join(",")
         }
 
+        if (isArrayJob) {
+            command << "--exclude-paths"
+            command << ".*"
+        }
+
         if (config.projectName != null && config.projectName != "") {
             command << "--project-name"
             command << config.projectName

@@ -14,7 +14,10 @@ import nextflow.processor.TaskRun
 import nextflow.processor.TaskStatus
 import nextflow.util.Escape
 
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 
 import static nextflow.processor.TaskStatus.*
 
@@ -205,9 +208,17 @@ class FovusTaskHandler extends TaskHandler {
 
     @Override
     void submit() {
-        final remoteRunScript = executor.getRemotePath(wrapperFile)
-        final remoteWorkDir = remoteRunScript.getParent()
-        final runCommand = "cd ${remoteWorkDir} && ./${TaskRun.CMD_RUN}"
+        def runCommand
+        final isTaskArrayRun = task instanceof TaskArrayRun
+
+        if (isTaskArrayRun) {
+            prepareArrayTasks(task as TaskArrayRun)
+            runCommand = "./run.sh"
+        } else {
+            final remoteRunScript = executor.getRemotePath(wrapperFile)
+            final remoteWorkDir = remoteRunScript.getParent()
+            runCommand = "cd ${remoteWorkDir} && ./${TaskRun.CMD_RUN}"
+        }
         jobConfig.setRunCommand(runCommand)
 
         // Save to config to JSON
@@ -219,7 +230,6 @@ class FovusTaskHandler extends TaskHandler {
         final jobConfigFile = File.createTempFile("${jobConfig.jobName}_", ".json", new File(FOVUS_JOB_CONFIG_FOLDER))
         final jobConfigFilePath = jobConfig.toJson(jobConfigFile.toPath())
 
-        final isTaskArrayRun = task instanceof TaskArrayRun;
         def jobDirectory = task.workDir.getParent().toString();
 
         if(isTaskArrayRun){
@@ -227,7 +237,7 @@ class FovusTaskHandler extends TaskHandler {
         }
         List<String> includeList = []
         if(isTaskArrayRun){
-            for(TaskHandler taskHandler : task.getChildren()){
+            for (TaskHandler taskHandler : (task as TaskArrayRun).getChildren()) {
                 log.debug "[FOVUS] List of directory > ${taskHandler.getTask().workDir.toString()}"
                 includeList.add("${taskHandler.getTask().workDir.toString().tokenize("/")[-1]}/");
             }
@@ -292,5 +302,31 @@ class FovusTaskHandler extends TaskHandler {
     protected String getJobName(TaskRun task) {
         final result = prependWorkflowPrefix(task.name, environment)
         return normalizeJobName(result)
+    }
+
+    private void prepareArrayTasks(TaskArrayRun task) {
+        task.children.eachWithIndex { TaskHandler handler, int i ->
+            def subTaskName = handler.task.workDir.getName()
+            def subTaskFolder = task.workDir.resolve(subTaskName)
+            Files.createDirectories(subTaskFolder)
+            log.trace "[FOVUS] Creating subtask ${i} for ${task.name}> ${subTaskFolder}"
+
+            final remoteTaskWorkDir = executor.getRemotePath(handler.getTask().workDir.toAbsolutePath())
+            final runScript = """
+            #!/bin/bash
+            cd "${remoteTaskWorkDir}"
+            ./${TaskRun.CMD_RUN}
+            """.stripIndent().leftTrim()
+
+            // Save script as run.sh
+            final runScriptPath = subTaskFolder.resolve("run.sh")
+            Files.write(
+                    runScriptPath,
+                    runScript.getBytes(StandardCharsets.UTF_8),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE
+            )
+        }
     }
 }
