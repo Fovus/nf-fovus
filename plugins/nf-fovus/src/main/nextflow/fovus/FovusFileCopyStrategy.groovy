@@ -50,7 +50,7 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
         wrapper << "nxf_container_env() {\n"
         wrapper << 'cat << EOF\n'
         wrapper << TaskProcessor.bashEnvironmentScript(environment, true)
-        wrapper << "export PATH=${executor.remoteBinDir}:\$PATH\n"
+        wrapper << "export PATH=${executor.remoteBinDir}:${Escape.variable("\$PATH")}\n"
         wrapper << 'EOF\n'
         wrapper << '}\n'
         return wrapper.toString()
