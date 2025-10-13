@@ -63,7 +63,6 @@ class FovusTaskHandler extends TaskHandler {
             FovusTaskStatus.CREATED,
             FovusTaskStatus.RUNNING,
             FovusTaskStatus.REQUEUED,
-            FovusTaskStatus.UNCOMPLETE
     ]
 
     final static FOVUS_JOB_CONFIG_FOLDER = "./work/.nextflow/fovus/job_config"
@@ -155,7 +154,7 @@ class FovusTaskHandler extends TaskHandler {
         } else {
             final taskName = this.task.workDirStr.split("/")[-1];
             taskStatus = taskClient.getTaskStatus(jobId, taskName)
-            final isRunTerminated = taskStatus in [FovusTaskStatus.COMPLETED, FovusTaskStatus.FAILED, FovusTaskStatus.WALLTIME_REACHED, FovusTaskStatus.TERMINATED]
+            final isRunTerminated = taskStatus in [FovusTaskStatus.COMPLETED, FovusTaskStatus.FAILED, FovusTaskStatus.WALLTIME_REACHED, FovusTaskStatus.TERMINATED, FovusTaskStatus.UNCOMPLETE]
 
             if (!isRunTerminated) {
                 return false
