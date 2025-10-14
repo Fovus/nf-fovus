@@ -1,5 +1,6 @@
 package nextflow.fovus.pipeline
 
+import groovy.json.JsonGenerator
 import groovy.json.JsonSlurper
 import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
@@ -69,5 +70,18 @@ class FovusPipelineClient {
 
     void setPipeline(String pipelineName, String pipelineId) {
         this.pipeline = new FovusPipeline(pipelineName, pipelineId)
+    }
+
+    void configResource(FovusConfig config, FovusPipeline pipeline, List<ResourceConfiguration> configurations) {
+        def jsonGenerator = new JsonGenerator.Options().excludeNulls().build()
+        def configurationsJson = jsonGenerator.toJson(configurations)
+
+        def command = [config.getCliPath(), '--silence', 'pipeline', 'config-resource', '--pipeline-id', pipeline.getPipelineId(), '--configurations', configurationsJson]
+
+        def result = FovusUtil.executeCommand(command)
+
+        if (result.exitCode != 0) {
+            throw new RuntimeException("Failed to configure Fovus pipeline resources: ${result.error}")
+        }
     }
 }
