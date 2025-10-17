@@ -16,4 +16,10 @@ class ResourceConfiguration {
     Float minGpu
     Float maxGpu
     Float minGpuMemGiB
+    String computingDevice
+    Boolean enableHyperthreading
+    Boolean allowPreemptible
+    String[] supportedCpuArchitectures
+    Boolean isResumableWorkload
+    Float walltimeHours
 }
