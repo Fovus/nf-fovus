@@ -57,7 +57,7 @@ class FovusTraceObserver implements TraceObserverV2 {
                     configurations.add(config)
                 }
             }
-            pipelineClient.configResource(fovusConfig, pipelineClient.getPipeline(), configurations.toList())
+            pipelineClient.preConfigResources(fovusConfig, pipelineClient.getPipeline(), configurations.toList())
         } catch (Exception e) {
             log.trace "[FOVUS] Cannot configure pipeline resources: ${e.message}"
         }
@@ -96,12 +96,42 @@ class FovusTraceObserver implements TraceObserverV2 {
 
         ext.forEach { key, value ->
             switch (key) {
-                case "timeToCostPriorityRatio":
-                    resourceConfig.timeToCostPriorityRatio = value
+                case "allowPreemptible":
+                    if (value instanceof Boolean) {
+                        resourceConfig.allowPreemptible = value
+                    }
+                    break
+                case "computingDevice":
+                    if (value instanceof String) {
+                        if (value.toLowerCase().contains("gpu"))
+                            resourceConfig.computingDevice = "cpu + gpu"
+                        else
+                            resourceConfig.computingDevice = "cpu"
+                    }
+                    break
+                case "enableHyperthreading":
+                    if (value instanceof Boolean) {
+                        resourceConfig.enableHyperthreading = value
+                    }
                     break
                 case "maxvCpu":
                     if (value instanceof Float) {
                         resourceConfig.maxvCpu = value
+                    }
+                    break
+                case "maxGpu":
+                    if (value instanceof Float) {
+                        resourceConfig.maxGpu = value
+                    }
+                    break
+                case "minGpu":
+                    if (value instanceof Float) {
+                        resourceConfig.minGpu = value
+                    }
+                    break
+                case "minGpuMemGiB":
+                    if (value instanceof Float) {
+                        resourceConfig.minGpuMemGiB = value
                     }
                     break
                 case "minvCpu":
@@ -114,19 +144,33 @@ class FovusTraceObserver implements TraceObserverV2 {
                         resourceConfig.minvCpuMemGiB = value
                     }
                     break
-                case "minGpu":
-                    if (value instanceof Float) {
-                        resourceConfig.minGpu = value
+                case "supportedCpuArchitectures":
+                    try {
+                        String[] supportedArchList = []
+                        final supportedArchString = value.toString().toLowerCase()
+                        if (supportedArchString.contains("x86-64"))
+                            supportedArchList << "x86-64"
+                        if (supportedArchString.contains("arm-64"))
+                            supportedArchList << "arm-64"
+
+                        if (supportedArchList.size() > 0)
+                            resourceConfig.supportedCpuArchitectures = supportedArchList
+
+                    } catch (Exception e) {
+                        // Do nothing
                     }
                     break
-                case "maxGpu":
-                    if (value instanceof Float) {
-                        resourceConfig.maxGpu = value
+                case "timeToCostPriorityRatio":
+                    resourceConfig.timeToCostPriorityRatio = value
+                    break
+                case "isResumableWorkload":
+                    if (value instanceof Boolean) {
+                        resourceConfig.isResumableWorkload = value
                     }
                     break
-                case "minGpuMemGiB":
-                    if (value instanceof Float) {
-                        resourceConfig.minGpuMemGiB = value
+                case "walltimeHours":
+                    if (value instanceof Integer) {
+                        resourceConfig.walltimeHours = value
                     }
                     break
                 default:

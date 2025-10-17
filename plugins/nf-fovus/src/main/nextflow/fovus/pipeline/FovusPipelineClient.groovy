@@ -72,11 +72,11 @@ class FovusPipelineClient {
         this.pipeline = new FovusPipeline(pipelineName, pipelineId)
     }
 
-    void configResource(FovusConfig config, FovusPipeline pipeline, List<ResourceConfiguration> configurations) {
+    void preConfigResources(FovusConfig config, FovusPipeline pipeline, List<ResourceConfiguration> configurations) {
         def jsonGenerator = new JsonGenerator.Options().excludeNulls().build()
         def configurationsJson = jsonGenerator.toJson(configurations)
 
-        def command = [config.getCliPath(), '--silence', 'pipeline', 'config-resource', '--pipeline-id', pipeline.getPipelineId(), '--configurations', configurationsJson]
+        def command = [config.getCliPath(), '--silence', 'pipeline', 'pre-config-resource', '--pipeline-id', pipeline.getPipelineId(), '--configurations', configurationsJson]
 
         def result = FovusUtil.executeCommand(command)
 
