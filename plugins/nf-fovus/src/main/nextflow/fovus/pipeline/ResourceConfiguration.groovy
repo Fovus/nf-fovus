@@ -22,4 +22,5 @@ class ResourceConfiguration {
     String[] supportedCpuArchitectures
     Boolean isResumableWorkload
     Float walltimeHours
+    Float storageGiB
 }
