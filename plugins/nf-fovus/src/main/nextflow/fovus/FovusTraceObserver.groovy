@@ -169,8 +169,13 @@ class FovusTraceObserver implements TraceObserverV2 {
                     }
                     break
                 case "walltimeHours":
-                    if (value instanceof Integer) {
+                    if (value instanceof Float) {
                         resourceConfig.walltimeHours = value
+                    }
+                    break
+                case "storageGiB":
+                    if (value instanceof Float) {
+                        resourceConfig.storageGiB = value
                     }
                     break
                 default:
