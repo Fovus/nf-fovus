@@ -46,7 +46,8 @@ class FovusTaskClient {
 
             // If status not found immediately after submission then consider as CREATED
             if (taskStatus == "Status Not Found" && FovusUtil.isRecentlySubmitted(jobId)) {
-                taskStatus = FovusTaskStatus.CREATED
+                log.trace "[FOVUS] Use CREATED for recently submitted task. Job Id: ${jobId}, task name: ${taskName}"
+                return FovusTaskStatus.CREATED
             }
 
             log.trace "[FOVUS] Job Id: ${jobId}, status: ${taskStatus}"
