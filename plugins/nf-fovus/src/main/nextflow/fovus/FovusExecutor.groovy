@@ -22,7 +22,7 @@ import java.nio.file.Path
 @ServiceName('fovus')
 @CompileStatic
 class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecutor {
-    private static final String REMOTE_JUICEFS_MOUNT_POINT = '/fovus-juicefs'
+    private static final String REMOTE_JUICEFS_MOUNT_POINT = '/fovus-storage-cached'
     protected FovusConfig config
 
     protected FovusPipelineClient pipelineClient;
