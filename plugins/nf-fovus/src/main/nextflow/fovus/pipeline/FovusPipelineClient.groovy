@@ -76,7 +76,7 @@ class FovusPipelineClient {
         def jsonGenerator = new JsonGenerator.Options().excludeNulls().build()
         def configurationsJson = jsonGenerator.toJson(configurations)
 
-        def command = [config.getCliPath(), '--silence', 'pipeline', 'pre-config-resources', '--pipeline-id', pipeline.getPipelineId(), '--configurations', configurationsJson]
+        def command = [config.getCliPath(), '--silence', 'pipeline', 'pre-config-resources', '--pipeline-id', pipeline.getPipelineId(), '--configurations', "'${configurationsJson}'"]
 
         def result = FovusUtil.executeCommand(command)
 
