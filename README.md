@@ -166,3 +166,93 @@ Follow these steps to package, upload and publish the plugin:
 3. Create a pull request
    against [nextflow-io/plugins](https://github.com/nextflow-io/plugins/blob/main/plugins.json) to
    make the plugin accessible to Nextflow.
+
+# 🚀 NF Plugin Release Notes
+
+## 📦 Plugin Packaging, Upload, and Publishing
+
+### 1. Verify Plugin Version
+Update the plugin manifest file to confirm the correct version before release:
+```
+plugins/nf-hello/src/resources/META-INF/MANIFEST.MF
+```
+
+---
+
+### 2. Build the Plugin
+Build the plugin artifacts using:
+```bash
+make buildPlugins
+```
+
+---
+
+### 3. Create `gradle.properties`
+Create a file named `gradle.properties` in the project root directory **(do not commit this file to Git)** with the following content:
+
+```properties
+# DO NOT COMMIT this file to git
+github_organization=Fovus
+github_username=<username>
+github_access_token=ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+github_commit_email=abc@example.com
+```
+
+---
+
+### 4. Upload the Plugin
+Run the following Gradle task to upload and create a release for the plugin on GitHub:
+```bash
+./gradlew :plugins:nf-fovus:upload
+```
+
+---
+
+### 5. Verify GitHub Release
+Ensure the release process was successful:
+- A new GitHub **release** should be triggered automatically.
+- The **ZIP artifact** containing the updated version should be available in the release assets.
+
+---
+
+### 6. Retrieve Metadata File
+After the release, obtain the generated metadata file:
+```
+fovus-<version>-meta.json
+```
+
+---
+
+## 🧾 Update `fovus-nextflow-plugin` Repository for Official Release
+
+### 1. Create a New Branch
+In the `fovus-nextflow-plugin` repository, create a new branch following this naming convention:
+```
+<Ownername>-nf-fovus-<version>
+```
+Example:
+```
+<name>-nf-fovus-1.2.0
+```
+
+---
+
+### 2. Update `plugins.json`
+Append the contents of the `fovus-<version>-meta.json` file under the `nf-fovus` array in `plugins.json`.
+
+Example:
+```json
+{
+  "nf-fovus": [
+    {
+        "version": "1.0.0",
+        "url": "https://github.com/nextflow-io/nf-fovus/releases/download/1.0.0/nf-fovus-1.0.0.zip",
+        "date": "2025-10-25T12:19:41.477854805-07:00",
+        "sha512sum": "3982cfcfef1e20716197419eb660dfb173062e8a1a7e0d12c2af702accde049a06953d49868389a0b936be15e9c5bfc906611aa587d1e5dcc61b0aa7123f2e24",
+        "requires": ">=25.01.0-edge"
+     }
+  ]
+}
+```
+
+Then, **create a Pull Request** to submit the update for an official release.
