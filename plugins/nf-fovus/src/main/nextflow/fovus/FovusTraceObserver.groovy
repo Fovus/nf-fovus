@@ -146,7 +146,7 @@ class FovusTraceObserver implements TraceObserverV2 {
                     break
                 case "supportedCpuArchitectures":
                     try {
-                        String[] supportedArchList = []
+                        def supportedArchList = []
                         final supportedArchString = value.toString().toLowerCase()
                         if (supportedArchString.contains("x86-64"))
                             supportedArchList << "x86-64"
@@ -154,7 +154,7 @@ class FovusTraceObserver implements TraceObserverV2 {
                             supportedArchList << "arm-64"
 
                         if (supportedArchList.size() > 0)
-                            resourceConfig.supportedCpuArchitectures = supportedArchList
+                            resourceConfig.supportedCpuArchitectures = supportedArchList as String[]
 
                     } catch (Exception e) {
                         // Do nothing
