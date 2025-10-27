@@ -1,0 +1,85 @@
+/*
+ * Copyright 2013-2024, Seqera Labs
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package groovy.fovus.util
+
+import groovy.transform.CompileStatic
+import groovy.util.logging.Slf4j
+import nextflow.Global
+import groovy.fovus.nio.FovusPath
+import nextflow.file.FileHelper
+import nextflow.file.FileSystemPathFactory
+
+import java.nio.file.Path
+
+/**
+ * Implements the a factory strategy to parse and build Fovus path URIs
+ *
+ * Adapted from S3PathFactory
+ */
+@Slf4j
+@CompileStatic
+class FovusPathFactory extends FileSystemPathFactory {
+
+    @Override
+    protected Path parseUri(String str) {
+        if (str.startsWith('fovus://') && str[8] != '/') {
+            final path = "fovus:///${str.substring(8)}"
+            return create(path)
+        }
+        return null
+    }
+
+    static private Map config() {
+        final result = Global.config?.get('fovus') as Map
+        return result != null ? result : Collections.emptyMap()
+    }
+
+    @Override
+    protected String toUriString(Path path) {
+        return path instanceof FovusPath ? "fovus:/$path".toString() : null
+    }
+
+    @Override
+    protected String getBashLib(Path target) {
+        return ""
+    }
+
+    @Override
+    protected String getUploadCmd(String source, Path target) {
+        return null
+    }
+
+    /**
+     * Creates a {@link FovusPath} from a Fovus formatted URI.
+     *
+     * @param path
+     *      A Fovus storage URI path e.g. fovus:///fovus-storage/files/some/data.
+     *      NOTE fovus-storage must be prefix with triple `/`.
+     *      This is required by the underlying implementation expecting the host name in the URI to be empty
+     *      and the bucket name to be the first path element
+     * @return
+     *      The corresponding {@link FovusPath}
+     */
+    static FovusPath create(String path) {
+        if (!path) throw new IllegalArgumentException("Missing Fovus path argument")
+        if (!path.startsWith('fovus:///')) throw new IllegalArgumentException("Fovus path must start with fovus:/// prefix -- offending value '$path'")
+        // note: this URI constructor parse the path parameter and extract the `scheme` and `authority` components
+        final uri = new URI(null, null, path, null, null)
+
+        log.debug "ParseURI create: $path"
+        return (FovusPath) FileHelper.getOrCreateFileSystemFor(uri, config()).provider().getPath(uri)
+    }
+}
