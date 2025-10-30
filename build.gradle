@@ -1,0 +1,33 @@
+plugins {
+    id 'io.nextflow.nextflow-plugin' version '1.0.0-beta.10'
+}
+
+version = '1.0.0'
+
+dependencies {
+    // This dependency is exported to consumers, that is to say found on their compile classpath.
+//    compileOnly "io.nextflow:nextflow:$nextflowVersion"
+    compileOnly 'org.slf4j:slf4j-api:2.0.16'
+    compileOnly 'org.pf4j:pf4j:3.12.0'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.2'
+    implementation 'com.fasterxml.jackson.core:jackson-annotations:2.17.2'
+    implementation 'com.fasterxml.jackson.core:jackson-core:2.17.2'
+
+    // see https://docs.gradle.org/4.1/userguide/dependency_management.html#sec:module_replacement
+    modules {
+        module("commons-logging:commons-logging") { replacedBy("org.slf4j:jcl-over-slf4j") }
+    }
+}
+
+nextflowPlugin {
+    nextflowVersion = '25.10.0'
+    provider = 'Fovus corporation'
+    className = 'fovus.plugin.FovusPlugin'
+    extensionPoints = [
+        'fovus.plugin.FovusTraceObserverFactory',
+        'fovus.plugin.FovusExecutor',
+        'fovus.plugin.util.FovusPathFactory',
+        'fovus.plugin.util.FovusPathSerializer',
+        'fovus.plugin.FovusConfig',
+    ]
+}

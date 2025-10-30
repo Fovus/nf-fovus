@@ -1,6 +1,0 @@
-Manifest-Version: 1.0
-Plugin-Id: nf-fovus
-Plugin-Version: 0.1.0
-Plugin-Class: nextflow.fovus.FovusPlugin
-Plugin-Provider: nextflow
-Plugin-Requires: >=25.01.0-edge
