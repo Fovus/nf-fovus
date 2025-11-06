@@ -61,8 +61,13 @@ class FovusJobConfig {
 
     FovusJobConfig(FovusJobClient jobClient, TaskRun task) {
         def extension = task.config.get('ext') as Map<String, Object>
-        def jobConfigFilePath = extension?.jobConfigFile ?: task.config.get('jobConfigFile')
-        def benchmarkingProfileName = extension?.benchmarkingProfileName ?: task.config.get('benchmarkingProfileName')
+        def jobConfigFilePath = (extension?.jobConfigFile != null)
+                ? extension.jobConfigFile
+                : task.config.get('jobConfigFile')
+
+        def benchmarkingProfileName = (extension?.benchmarkingProfileName != null)
+                ? extension.benchmarkingProfileName
+                : task.config.get('benchmarkingProfileName')
         def fovusJobConfig
 
         if (jobConfigFilePath) {
@@ -88,25 +93,25 @@ class FovusJobConfig {
     }
 
     private Environment createEnvironment(FovusJobConfig fovusJobConfig) {
-        final extension = task.config.get('ext') as Map<String, Object>;
-        if(extension?.container != null || fovusJobConfig.getEnvironment() instanceof ContainerizedEnvironment){
+        def extension = task.config.get('ext') as Map<String, Object>;
+        if (extension?.container != null || fovusJobConfig.getEnvironment() instanceof ContainerizedEnvironment) {
             def existingContainerizedEnv = fovusJobConfig.getEnvironment() as ContainerizedEnvironment
-            def Containerized containerized = new Containerized(
-                    container: extension?.container ?: existingContainerizedEnv.containerized.container,
-                    version: extension?.version ?: existingContainerizedEnv.containerized.version,
-                    imagePath: extension?.imagePath ?: existingContainerizedEnv.containerized.imagePath,
-            );
+            // Create a new Containerized object, using extension values if not null
+            def containerized = new Containerized(
+                    container: (extension?.container != null) ? extension.container : existingContainerizedEnv.containerized.container,
+                    version: (extension?.version != null) ? extension.version : existingContainerizedEnv.containerized.version,
+                    imagePath: (extension?.imagePath != null) ? extension.imagePath : existingContainerizedEnv.containerized.imagePath
+            )
             return new ContainerizedEnvironment(containerized: containerized)
         } else {
             // TODO: Add support for adding monolithic software
         }
+
     }
 
     private JobConstraints createJobConstraints(FovusJobConfig fovusJobConfig) {
-        final extension = task.config.get('ext') as Map<String, Object>
-
+        def extension = task.config.get('ext') as Map<String, Object>;
         def defaultJobConstraints = fovusJobConfig.getConstraints().jobConstraints;
-
         def cpuArchitectures = defaultJobConstraints.supportedCpuArchitectures;
 
         if(extension?.supportedCpuArchitectures != null){
@@ -123,40 +128,58 @@ class FovusJobConfig {
             }
         }
         return new JobConstraints(
-                benchmarkingProfileName: extension?.benchmarkingProfileName ?: defaultJobConstraints.benchmarkingProfileName,
-                computingDevice: extension?.computingDevice ?: defaultJobConstraints.computingDevice,
-                allowPreemptible: extension?.allowPreemptible ?: defaultJobConstraints.allowPreemptible,
-                enableHyperthreading: extension?.enableHyperthreading ?: defaultJobConstraints.enableHyperthreading,
-                isHybridStrategyAllowed: extension?.isHybridStrategyAllowed ?: defaultJobConstraints.isHybridStrategyAllowed,
+                benchmarkingProfileName: (extension?.benchmarkingProfileName != null)
+                        ? extension.benchmarkingProfileName
+                        : defaultJobConstraints.benchmarkingProfileName,
+                computingDevice: (extension?.computingDevice != null)
+                        ? extension.computingDevice
+                        : defaultJobConstraints.computingDevice,
+                allowPreemptible: (extension?.allowPreemptible != null)
+                        ? extension.allowPreemptible
+                        : defaultJobConstraints.allowPreemptible,
+                enableHyperthreading: (extension?.enableHyperthreading != null)
+                        ? extension.enableHyperthreading
+                        : defaultJobConstraints.enableHyperthreading,
+                isHybridStrategyAllowed: (extension?.isHybridStrategyAllowed != null)
+                        ? extension.isHybridStrategyAllowed
+                        : defaultJobConstraints.isHybridStrategyAllowed,
                 supportedCpuArchitectures: cpuArchitectures,
-                isResumableWorkload: extension?.isResumableWorkload ?: defaultJobConstraints.isResumableWorkload,
-                isSubjectToLicenseAvailability: extension?.isSubjectToLicenseAvailability ?: defaultJobConstraints.isSubjectToLicenseAvailability,
+                isResumableWorkload: (extension?.isResumableWorkload != null)
+                        ? extension.isResumableWorkload
+                        : defaultJobConstraints.isResumableWorkload,
+                isSubjectToLicenseAvailability: (extension?.isSubjectToLicenseAvailability != null)
+                        ? extension.isSubjectToLicenseAvailability
+                        : defaultJobConstraints.isSubjectToLicenseAvailability
         )
     }
 
     private TaskConstraints createTaskConstraints(FovusJobConfig fovusJobConfig) {
-        final extension = task.config.get('ext') as Map<String, Object>;
+        def extension = task.config.get('ext') as Map<String, Object>;
         final nfStorage = task.config.getDisk()?.toGiga()?.toInteger()
 
         def defaultTaskConstraints = fovusJobConfig.constraints.getTaskConstraints();
         return new TaskConstraints(
-                minvCpu: extension?.minvCpu as Integer ?: defaultTaskConstraints.minvCpu,
-                maxvCpu: extension?.maxvCpu as Integer ?: defaultTaskConstraints.maxvCpu,
-                minvCpuMemGiB: extension?.minvCpuMemGiB as Integer ?: defaultTaskConstraints.minvCpuMemGiB,
-                minGpu: extension?.minGpu as Integer ?: defaultTaskConstraints.maxvCpu,
-                maxGpu: extension?.maxGpu as Integer ?: defaultTaskConstraints.maxGpu,
-                minGpuMemGiB: extension?.minGpuMemGiB as Integer ?: defaultTaskConstraints.minGpuMemGiB,
-                storageGiB: extension?.storageGiB as Integer ?: nfStorage ?: defaultTaskConstraints.storageGiB,
-                walltimeHours: extension?.walltimeHours as Integer ?: defaultTaskConstraints.walltimeHours,
-                isSingleThreadedTask: extension?.isSingleThreadedTask ?: defaultTaskConstraints.isSingleThreadedTask,
-                scalableParallelism: extension?.scalableParallelism ?: defaultTaskConstraints.scalableParallelism,
-                parallelismOptimization: extension?.parallelismOptimization ?: defaultTaskConstraints.parallelismOptimization,
+                minvCpu: (extension?.minvCpu != null) ? extension.minvCpu as Integer : defaultTaskConstraints.minvCpu,
+                maxvCpu: (extension?.maxvCpu != null) ? extension.maxvCpu as Integer : defaultTaskConstraints.maxvCpu,
+                minvCpuMemGiB: (extension?.minvCpuMemGiB != null) ? extension.minvCpuMemGiB as Integer : defaultTaskConstraints.minvCpuMemGiB,
+                minGpu: (extension?.minGpu != null) ? extension.minGpu as Integer : defaultTaskConstraints.minGpu,
+                maxGpu: (extension?.maxGpu != null) ? extension.maxGpu as Integer : defaultTaskConstraints.maxGpu,
+                minGpuMemGiB: (extension?.minGpuMemGiB != null) ? extension.minGpuMemGiB as Integer : defaultTaskConstraints.minGpuMemGiB,
+                storageGiB: (extension?.storageGiB != null) ? extension.storageGiB as Integer : (nfStorage ?: defaultTaskConstraints.storageGiB),
+                walltimeHours: (extension?.walltimeHours != null) ? extension.walltimeHours as Integer : defaultTaskConstraints.walltimeHours,
+                isSingleThreadedTask: (extension?.isSingleThreadedTask != null) ? extension.isSingleThreadedTask : defaultTaskConstraints.isSingleThreadedTask,
+                scalableParallelism: (extension?.scalableParallelism != null) ? extension.scalableParallelism : defaultTaskConstraints.scalableParallelism,
+                parallelismOptimization: (extension?.parallelismOptimization != null) ? extension.parallelismOptimization : defaultTaskConstraints.parallelismOptimization
         )
     }
 
     private Objective createObjective(FovusJobConfig fovusJobConfig) {
         def extension = task.config.get('ext') as Map<String, Object>
-        return new Objective(timeToCostPriorityRatio: extension?.timeToCostPriorityRatio ?: fovusJobConfig.objective.timeToCostPriorityRatio)
+        return new Objective(
+                timeToCostPriorityRatio: (extension?.timeToCostPriorityRatio != null)
+                        ? extension.timeToCostPriorityRatio
+                        : fovusJobConfig.objective.timeToCostPriorityRatio
+        )
     }
 
     private Workload createWorkload(FovusJobConfig fovusJobConfig) {
@@ -184,7 +207,9 @@ class FovusJobConfig {
                 runCommand: runCommand,
                 remoteInputsForAllTasks: remoteInputsForAllTasks,
                 parallelismConfigFiles: parallelismConfigFiles,
-                outputFileOption: extension.outputFileOption ?: defaultWorkload.outputFileOption,
+                outputFileOption: (extension?.outputFileOption != null)
+                        ? extension.outputFileOption
+                        : defaultWorkload.outputFileOption,
                 outputFileList: outputFileList
         )
     }
