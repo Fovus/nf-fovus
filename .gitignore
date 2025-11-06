@@ -3,6 +3,7 @@
 .idea
 .nextflow*
 *.Identifier
+nextflow.config
 
 # Ignore Gradle build output directory
 build
