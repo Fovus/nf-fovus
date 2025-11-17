@@ -14,7 +14,7 @@ class FovusJuiceFsClient {
     }
 
     void validateOrMountJuiceFs(Path path) {
-        def command = [config.getCliPath(), 'storage', 'juicefs-mount', '--mount-storage-path', Escape.path(path.toAbsolutePath())]
+        def command = [config.getCliPath(), 'storage-cached', 'mount', '--mount-storage-path', Escape.path(path.toAbsolutePath())]
 
         def result = FovusUtil.executeCommand(command)
 
