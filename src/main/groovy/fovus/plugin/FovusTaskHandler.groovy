@@ -201,7 +201,7 @@ class FovusTaskHandler extends TaskHandler {
         status = TaskStatus.COMPLETED
         return true
     }
-    
+
     /**
      * {@inheritDoc}
      */
@@ -209,8 +209,8 @@ class FovusTaskHandler extends TaskHandler {
     protected void killTask() {
         assert jobId
 
-        log.debug "[FOVUS] Terminating job > $task"
-        jobClient.terminateJob(jobId)
+        // Job deletion will be handled by backend
+        log.debug "[FOVUS] Terminated job > $task"
     }
 
     @Override
