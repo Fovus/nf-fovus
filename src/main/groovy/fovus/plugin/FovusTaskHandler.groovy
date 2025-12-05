@@ -201,14 +201,10 @@ class FovusTaskHandler extends TaskHandler {
         status = TaskStatus.COMPLETED
         return true
     }
-
-    @Override
-    void kill() {
-
-    }
-/**
- * {@inheritDoc}
- */
+    
+    /**
+     * {@inheritDoc}
+     */
     @Override
     protected void killTask() {
         assert jobId
