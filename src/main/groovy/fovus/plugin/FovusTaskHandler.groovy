@@ -187,13 +187,19 @@ class FovusTaskHandler extends TaskHandler {
 
             switch (taskStatus) {
                 case FovusJobStatus.FAILED:
+                case FovusTaskStatus.FAILED:
                     task.error = new ProcessException("Job ${jobId} failed")
                     break
                 case FovusJobStatus.WALLTIME_REACHED:
+                case FovusTaskStatus.WALLTIME_REACHED:
                     task.error = new ProcessException("Job ${jobId} walltime reached")
                     break;
                 case FovusJobStatus.TERMINATED:
+                case FovusTaskStatus.TERMINATED:
                     task.error = new ProcessException("Job ${jobId} terminated")
+                    break
+                case FovusTaskStatus.UNCOMPLETE:
+                    task.error = new ProcessException("Job ${jobId} uncomplete")
                     break
             }
         }
