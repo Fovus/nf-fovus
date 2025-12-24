@@ -94,13 +94,49 @@ class FovusJobConfig {
 
     private Environment createEnvironment(FovusJobConfig fovusJobConfig) {
         def extension = task.config.get('ext') as Map<String, Object>;
-        if (extension?.container != null || fovusJobConfig.getEnvironment() instanceof ContainerizedEnvironment) {
-            def existingContainerizedEnv = fovusJobConfig.getEnvironment() as ContainerizedEnvironment
+
+        def isContainerizedWorkload = (extension?.container != null) ||
+                                      (fovusJobConfig.getEnvironment() != null &&
+                                       fovusJobConfig.getEnvironment() instanceof ContainerizedEnvironment) ||
+                                      task.containerConfig.enabled
+        if (isContainerizedWorkload) {
             // Create a new Containerized object, using extension values if not null
+            def existingContainerizedEnv = fovusJobConfig.getEnvironment() as ContainerizedEnvironment
+            def container, version, imagePath
+
+            // Parse and get the container type
+            if (extension?.container != null) {
+                container = extension.container
+            } else if (existingContainerizedEnv != null && existingContainerizedEnv.containerized.container != null) {
+                container = existingContainerizedEnv.containerized.container
+            } else if (task.containerConfig.engine == "apptainer") {
+                container = "Apptainer"
+            } else {
+                container = "Docker"
+            }
+
+            // Parse and get the container version
+            if (extension?.version != null) {
+                version = extension.version
+            } else if (existingContainerizedEnv != null && existingContainerizedEnv.containerized.version != null) {
+                version = existingContainerizedEnv.containerized.version
+            } else {
+                version = "20.10.18"
+            }
+
+            // Parse and get the container image path
+            if (extension?.imagePath != null) {
+                imagePath = extension.imagePath
+            } else if (existingContainerizedEnv != null && existingContainerizedEnv.containerized.imagePath != null) {
+                imagePath = existingContainerizedEnv.containerized.imagePath
+            } else {
+                imagePath = task.container ?: ""
+            }
+
             def containerized = new Containerized(
-                    container: (extension?.container != null) ? extension.container : existingContainerizedEnv.containerized.container,
-                    version: (extension?.version != null) ? extension.version : existingContainerizedEnv.containerized.version,
-                    imagePath: (extension?.imagePath != null) ? extension.imagePath : existingContainerizedEnv.containerized.imagePath
+                    container: container,
+                    version: version,
+                    imagePath: imagePath
             )
             return new ContainerizedEnvironment(containerized: containerized)
         } else {
