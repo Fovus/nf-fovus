@@ -23,6 +23,7 @@ class ResourceConfiguration {
     Boolean isResumableWorkload
     Float walltimeHours
     Float storageGiB
+    Boolean isMemoryAutoRetryEnabled
 
     /**
      * Merges this configuration with another configuration.

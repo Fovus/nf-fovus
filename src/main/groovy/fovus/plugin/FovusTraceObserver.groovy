@@ -194,6 +194,11 @@ class FovusTraceObserver implements TraceObserverV2 {
                         resourceConfig.storageGiB = value
                     }
                     break
+                case "isMemoryAutoRetryEnabled":
+                    if (value instanceof Boolean) {
+                        resourceConfig.isMemoryAutoRetryEnabled = value
+                    }
+                    break;
                 default:
                     break
             }
