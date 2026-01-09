@@ -39,24 +39,40 @@ class FovusTraceObserver implements TraceObserverV2 {
                 return
             }
 
-            ((Map) processConfig).entrySet().findAll { it.value instanceof Map }.each { entry ->
+            // Handle the global configuration
+            processConfig = processConfig as Map
+            ResourceConfiguration globalConfig = processConfig.ext instanceof Map ?
+                                                 parseExtensionObject(processConfig.ext as Map) : null;
+
+            if (globalConfig) {
+                configurations.add(globalConfig)
+            }
+
+            // Look for each benchmark overriding
+            processConfig.entrySet().findAll { it.value instanceof Map }.each { entry ->
                 def key = entry.key
                 def value = entry.value
 
-                ResourceConfiguration config;
+                ResourceConfiguration config = null;
                 if (key == "ext" && (value instanceof Map)) {
-                    config = parseExtensionObject(value)
-                } else {
-                    def ext = (value as Map).get("ext")
-                    if (!ext || !(ext instanceof Map)) return
-
-                    config = parseExtensionObject(ext as Map)
+                    // Skip the global ext config
+                    return
                 }
 
-                if (config !== null) {
+                def ext = (value as Map).get("ext")
+                if (!ext || !(ext instanceof Map)) return
+
+                config = parseExtensionObject(ext as Map)
+
+                if (config && globalConfig) {
+                    config = globalConfig.mergeWith(config)
+                }
+
+                if (config) {
                     configurations.add(config)
                 }
             }
+
             pipelineClient.preConfigResources(fovusConfig, pipelineClient.getPipeline(), configurations.toList())
         } catch (Exception e) {
             log.trace "[FOVUS] Cannot configure pipeline resources: ${e.message}"
