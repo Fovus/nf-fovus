@@ -6,6 +6,7 @@ import groovy.util.logging.Slf4j
 import fovus.plugin.FovusConfig
 import fovus.plugin.FovusUtil
 import fovus.plugin.nio.FovusFileMetadata
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Client for executing Fovus CLI commands
@@ -15,6 +16,8 @@ import fovus.plugin.nio.FovusFileMetadata
 class FovusJobClient {
     private FovusConfig config
     private FovusJobConfig jobConfig
+    private static final Map<String, Map> jobConfigCache = new ConcurrentHashMap<>()
+    private static final long TTL_MS = 10 * 60 * 1000
 
     FovusJobClient(FovusConfig config, FovusJobConfig jobConfig) {
         this.config = config
@@ -130,8 +133,27 @@ class FovusJobClient {
     }
 
     String getDefaultJobConfig(String benchmarkingProfileName) {
-        def command = [config.getCliPath(), 'job', 'get-default-config', '--benchmarking-profile-name', "${benchmarkingProfileName}"]
+        long currentTime = System.currentTimeMillis()
 
+        // 1. Check if the result exists and is still valid (within TTL)
+        if (jobConfigCache.containsKey(benchmarkingProfileName)) {
+            // Explicitly define the map to help the static type checker
+            Map entry = (Map) jobConfigCache.get(benchmarkingProfileName)
+
+            // Cast timestamp to long specifically
+            long entryTime = (long) entry.timestamp
+
+            if ((currentTime - entryTime) < TTL_MS) {
+                log.trace "[FOVUS] Returning cached config for: ${benchmarkingProfileName}"
+                return (String) entry.output
+            } else {
+                log.trace "[FOVUS] Cache expired for: ${benchmarkingProfileName}. Re-fetching..."
+                jobConfigCache.remove(benchmarkingProfileName)
+            }
+        }
+
+        // 2. Execute the actual command if no valid cache exists
+        def command = [config.getCliPath(), 'job', 'get-default-config', '--benchmarking-profile-name', "${benchmarkingProfileName}"]
         def result = FovusUtil.executeCommand(command)
 
         log.trace "[FOVUS] getDefaultJobConfig with exit code: ${result.exitCode}"
@@ -139,6 +161,12 @@ class FovusJobClient {
             log.trace "[FOVUS] Command error: ${result.error}"
             return null
         }
+
+        // 3. Save to cache before returning
+        jobConfigCache.put(benchmarkingProfileName, [
+                output: result.output,
+                timestamp: currentTime
+        ])
 
         return result.output
     }
