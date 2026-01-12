@@ -40,8 +40,6 @@ class FovusJobConfigBuilder {
 
             } else if (envData instanceof Map && envData?.monolithicList) {
                 // TODO: Create monolithic environment object and set in config
-            } else {
-                throw new Error("Invalid fovus job config. environment data is missing!!")
             }
         }
 
