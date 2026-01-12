@@ -53,7 +53,9 @@ class ResourceConfiguration {
                 isResumableWorkload: other.isResumableWorkload != null ? other.isResumableWorkload :
                                      this.isResumableWorkload,
                 walltimeHours: other.walltimeHours ?: this.walltimeHours,
-                storageGiB: other.storageGiB ?: this.storageGiB
+                storageGiB: other.storageGiB ?: this.storageGiB,
+                isMemoryAutoRetryEnabled: other.isMemoryAutoRetryEnabled != null ? other.isMemoryAutoRetryEnabled :
+                                          this.isMemoryAutoRetryEnabled
         )
     }
 }
