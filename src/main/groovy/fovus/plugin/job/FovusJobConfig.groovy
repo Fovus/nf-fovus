@@ -150,19 +150,16 @@ class FovusJobConfig {
         def defaultJobConstraints = fovusJobConfig.getConstraints().jobConstraints;
         def cpuArchitectures = defaultJobConstraints.supportedCpuArchitectures;
 
-        if(extension?.supportedCpuArchitectures != null){
-            switch(extension?.computingDevice){
-                case "x86-64":
-                    cpuArchitectures = ["x86-64"]
-                    break;
-                case "arm64":
-                    cpuArchitectures = ["arm-64"]
-                    break;
-                case "x86-64 + arm-64":
-                    cpuArchitectures = ["x86-64", "arm-64"]
-                    break;
-            }
+        if (extension?.supportedCpuArchitectures != null && extension?.supportedCpuArchitectures instanceof List &&
+            (extension?.supportedCpuArchitectures as List<String>).size() > 0) {
+            cpuArchitectures = extension.supportedCpuArchitectures as List<String>;
         }
+
+        // Validate the supported cpu architectures to only allow x86-64 or arm-64
+        if (!(cpuArchitectures.contains("x86-64") || cpuArchitectures.contains("arm-64"))) {
+            throw new Error("[Fovus] Supported cpu architectures must be either x86-64 or arm-64 or both")
+        }
+
         return new JobConstraints(
                 benchmarkingProfileName: (extension?.benchmarkingProfileName != null)
                         ? extension.benchmarkingProfileName
@@ -229,14 +226,15 @@ class FovusJobConfig {
         def parallelismConfigFiles = defaultWorkload.parallelismConfigFiles
         def outputFileList = defaultWorkload.outputFileList
 
-        if(extension?.remoteInputsForAllTasks){
-            remoteInputsForAllTasks = (extension.remoteInputsForAllTasks as String).split(",").toList();
+        if (extension?.remoteInputsForAllTasks != null && extension.remoteInputsForAllTasks instanceof List) {
+            remoteInputsForAllTasks = extension.remoteInputsForAllTasks as List<String>;
         }
-        if(extension?.parallelismConfigFiles){
-            parallelismConfigFiles = (extension.parallelismConfigFiles as String).split(",").toList();
+        if (extension?.parallelismConfigFiles != null && extension.parallelismConfigFiles instanceof List) {
+            parallelismConfigFiles = extension.parallelismConfigFiles as List<String>;
         }
-        if(extension?.outputFileList){
-            parallelismConfigFiles = (extension.outputFileList as String).split(",").toList();
+        if (extension?.outputFileList != null && extension.outputFileList instanceof List && (extension.
+                outputFileList as List).size() > 0) {
+            outputFileList = extension.outputFileList as List<String>;
         }
 
         // Get the script file and run it
