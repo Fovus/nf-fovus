@@ -186,9 +186,9 @@ class FovusJobConfig {
                 isMemoryAutoRetryEnabled: (extension?.isMemoryAutoRetryEnabled !== null)
                         ? extension.isMemoryAutoRetryEnabled
                         : defaultJobConstraints.isMemoryAutoRetryEnabled,
-                isFovusMemoryCheckpointingEnabled: (extension?.isFovusMemoryCheckpointingEnabled !== null)
-                        ? extension.isFovusMemoryCheckpointingEnabled
-                        : defaultJobConstraints.isFovusMemoryCheckpointingEnabled
+                isMemoryCheckpointingEnabled: (extension?.isMemoryCheckpointingEnabled !== null)
+                        ? extension.isMemoryCheckpointingEnabled
+                        : defaultJobConstraints.isMemoryCheckpointingEnabled
         )
     }
 
@@ -338,7 +338,7 @@ class JobConstraints {
     boolean isResumableWorkload = false
     boolean isSubjectToLicenseAvailability = false
     boolean isMemoryAutoRetryEnabled = false
-    boolean isFovusMemoryCheckpointingEnabled = false
+    boolean isMemoryCheckpointingEnabled = false
 }
 
 @Canonical

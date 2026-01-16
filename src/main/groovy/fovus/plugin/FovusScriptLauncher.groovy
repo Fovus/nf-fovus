@@ -2,19 +2,18 @@ package fovus.plugin
 
 import fovus.plugin.job.FovusJobConfig
 import groovy.util.logging.Slf4j
-import nextflow.container.SingularityBuilder
 import nextflow.executor.BashWrapperBuilder
 import nextflow.processor.TaskBean
 
 
 @Slf4j
 class FovusScriptLauncher extends BashWrapperBuilder {
-    private final boolean isMemoryCheckpointEnabled;
+    private final boolean isMemoryCheckpointingEnabled;
     private FovusJobConfig jobConfig;
 
-    FovusScriptLauncher(TaskBean bean, FovusExecutor executor, FovusJobConfig jobConfig, boolean isMemoryCheckpointEnabled) {
+    FovusScriptLauncher(TaskBean bean, FovusExecutor executor, FovusJobConfig jobConfig, boolean isMemoryCheckpointingEnabled) {
         super(bean, new FovusFileCopyStrategy(bean, executor))
-        this.isMemoryCheckpointEnabled = isMemoryCheckpointEnabled;
+        this.isMemoryCheckpointingEnabled = isMemoryCheckpointingEnabled;
         this.jobConfig = jobConfig;
     }
 
@@ -22,7 +21,7 @@ class FovusScriptLauncher extends BashWrapperBuilder {
     protected String getLaunchCommand(String interpreter, String env) {
         final originalLaunchCommand = super.getLaunchCommand(interpreter, env);
 
-        if (!isMemoryCheckpointEnabled || containerConfig.engine !== 'docker' ||
+        if (!isMemoryCheckpointingEnabled || containerConfig.engine !== 'docker' ||
             !originalLaunchCommand.contains('docker')) {
             return originalLaunchCommand;
         }

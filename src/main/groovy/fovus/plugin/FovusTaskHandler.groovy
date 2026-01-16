@@ -227,10 +227,10 @@ class FovusTaskHandler extends TaskHandler {
     }
 
     protected BashWrapperBuilder createTaskWrapper() {
-        final isMemoryCheckpointEnabled = jobConfig.constraints.jobConstraints.isFovusMemoryCheckpointingEnabled;
+        final isMemoryCheckpointingEnabled = jobConfig.constraints.jobConstraints.isMemoryCheckpointingEnabled;
         final isContainerizedWorkload = jobConfig.environment instanceof ContainerizedEnvironment;
         final isDockerUsed = task.containerConfig.engine === 'docker' && task.containerConfig instanceof DockerConfig;
-        final isMemoryCheckpointCompatible = isMemoryCheckpointEnabled && isContainerizedWorkload && isDockerUsed;
+        final isMemoryCheckpointCompatible = isMemoryCheckpointingEnabled && isContainerizedWorkload && isDockerUsed;
 
         if (isContainerizedWorkload && isDockerUsed) {
             log.debug "[FOVUS] Docker is used for the workload. Adding Fovus Docker options..."
