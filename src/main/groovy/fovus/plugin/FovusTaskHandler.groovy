@@ -250,6 +250,7 @@ class FovusTaskHandler extends TaskHandler {
                         "--pid=host",
                         "--cap-add=SYS_PTRACE",
                         "--security-opt seccomp=unconfined",
+                        "--detach", // Run in background
                 ];
             }
 
@@ -258,7 +259,7 @@ class FovusTaskHandler extends TaskHandler {
             task.config.setProperty("containerOptions", currentDockerOptions + " " + optionsToAdd);
         }
 
-        return new FovusScriptLauncher(task.toTaskBean(), executor)
+        return new FovusScriptLauncher(task.toTaskBean(), executor, jobConfig, isMemoryCheckpointCompatible)
     }
 
     @Override
