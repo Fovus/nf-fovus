@@ -251,6 +251,7 @@ class FovusTaskHandler extends TaskHandler {
                         "--cap-add=SYS_PTRACE",
                         "--security-opt seccomp=unconfined",
                         "--detach", // Run in background
+                        "-v fovus-libs:/opt/fovus-libs"
                 ];
             }
 
