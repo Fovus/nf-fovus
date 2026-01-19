@@ -60,7 +60,7 @@ class FovusScriptLauncher extends BashWrapperBuilder {
 source "/script/\${FOVUS_JOB_ID}/checkpoint_helper.sh"
 
 container_id=\$(${dockerRunCommand} bash -lc "sleep infinity" )
-echo \${container_id} > .container_id
+register_checkpoint_runtime --container-id \${container_id}
 
 if ! try_restore_and_wait "\$container_id"; then
 
@@ -75,7 +75,7 @@ if ! try_restore_and_wait "\$container_id"; then
             )
         " &
         pid=\$!
-        echo \$pid > .app.pid
+        register_checkpoint_runtime --pid \${pid}
     '
     
     PID=\$(cat .app.pid)
