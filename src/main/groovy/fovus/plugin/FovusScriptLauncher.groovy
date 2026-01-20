@@ -71,7 +71,7 @@ if ! try_restore_and_wait "\$container_id"; then
                 set +e
                 ${commandToRun}
                 rc=\$?
-                echo "\$rc" > .app.exit
+                echo \$rc > .app.exit
             ) >> .app.stdout 2>> .app.stderr
         " &
         pid=\$!

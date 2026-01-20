@@ -248,6 +248,7 @@ class FovusTaskHandler extends TaskHandler {
                 fovusDockerOptions += [
                         "--privileged",
                         "--cap-add=SYS_PTRACE",
+                        "--init",
                         "--security-opt seccomp=unconfined",
                         "--detach", // Run in background
                         "-v fovus-libs:/opt/fovus-libs"
