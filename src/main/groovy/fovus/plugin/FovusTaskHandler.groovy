@@ -247,7 +247,6 @@ class FovusTaskHandler extends TaskHandler {
                 log.debug "[FOVUS] Memory checkpointing is enabled. Adding Fovus Memory checkpointing options..."
                 fovusDockerOptions += [
                         "--privileged",
-                        "--pid=host",
                         "--cap-add=SYS_PTRACE",
                         "--security-opt seccomp=unconfined",
                         "--detach", // Run in background

@@ -57,7 +57,7 @@ class FovusScriptLauncher extends BashWrapperBuilder {
         }
 
         def memCheckpointWrapperCommand = """
-source "/script/\${FOVUS_JOB_ID}/checkpoint_helper.sh"
+source "/script/\${FOVUS_JOB_ID}/checkpoint_template_helper.sh"
 
 container_id=\$(${dockerRunCommand} bash -lc "sleep infinity" )
 register_checkpoint_runtime --container-id \${container_id}
@@ -72,13 +72,13 @@ if ! try_restore_and_wait "\$container_id"; then
                 ${commandToRun}
                 rc=\$?
                 echo "\$rc" > .app.exit
-            )
+            ) >> .app.stdout 2>> .app.stderr
         " &
         pid=\$!
-        register_checkpoint_runtime --pid \${pid}
+        echo \$pid > .app.pid
     '
-    
     PID=\$(cat .app.pid)
+    register_checkpoint_runtime --pid \${PID}
     wait_for_pid_exit_in_container \${container_id} \${PID}
 fi
 
@@ -86,6 +86,14 @@ if [[ -s .app.exit ]]; then
     exit_code=\$(cat .app.exit)
     rm -f .app.exit .app.pid
     exit \$exit_code
+fi
+
+if [[ -f .app.stdout ]]; then
+    cat .app.stdout
+fi
+
+if [[ -f .app.stderr ]]; then
+    cat .app.stderr >&2
 fi
         """
 
