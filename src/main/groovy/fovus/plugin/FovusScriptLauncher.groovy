@@ -59,7 +59,7 @@ class FovusScriptLauncher extends BashWrapperBuilder {
         def memCheckpointWrapperCommand = """
 source "/script/\${FOVUS_JOB_ID}/checkpoint_template_helper.sh"
 
-container_id=\$(${dockerRunCommand} bash -lc "sleep infinity" )
+container_id=\$(${dockerRunCommand} bash -lc "sleep 2147483647" )
 register_checkpoint_runtime --container-id \${container_id}
 
 if ! try_restore_and_wait "\$container_id"; then
