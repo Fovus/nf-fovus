@@ -82,18 +82,18 @@ if ! try_restore_and_wait "\$container_id"; then
     wait_for_pid_exit_in_container \${container_id} \${PID}
 fi
 
-if [[ -s .app.exit ]]; then
-    exit_code=\$(cat .app.exit)
-    rm -f .app.exit .app.pid
-    exit \$exit_code
-fi
-
 if [[ -f .app.stdout ]]; then
     cat .app.stdout
 fi
 
 if [[ -f .app.stderr ]]; then
     cat .app.stderr >&2
+fi
+
+if [[ -s .app.exit ]]; then
+    exit_code=\$(cat .app.exit)
+    rm -f .app.exit .app.pid
+    exit \$exit_code
 fi
         """
 
