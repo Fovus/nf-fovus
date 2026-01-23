@@ -64,9 +64,9 @@ register_checkpoint_runtime --container-id \${container_id}
 
 if ! try_restore_and_wait "\$container_id"; then
 
-    docker exec \${container_id} bash -lc '
+    docker exec \${container_id} bash -c '
         '"${containerEnvCommand}"'
-        setsid bash -lc "
+        setsid bash -c "
             (
                 set +e
                 ${commandToRun}
@@ -90,6 +90,7 @@ if [[ -f .app.stderr ]]; then
     cat .app.stderr >&2
 fi
 
+docker kill \${container_id} || true
 if [[ -s .app.exit ]]; then
     exit_code=\$(cat .app.exit)
     rm -f .app.exit .app.pid
