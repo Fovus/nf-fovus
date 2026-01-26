@@ -1,6 +1,8 @@
 package fovus.plugin
 
+import fovus.plugin.job.ContainerizedEnvironment
 import groovy.util.logging.Slf4j
+import nextflow.container.DockerConfig
 import nextflow.exception.ProcessException
 import nextflow.executor.BashWrapperBuilder
 import fovus.plugin.job.FovusJobClient
@@ -225,7 +227,40 @@ class FovusTaskHandler extends TaskHandler {
     }
 
     protected BashWrapperBuilder createTaskWrapper() {
-        return new FovusScriptLauncher(task.toTaskBean(), executor)
+        final isMemoryCheckpointingEnabled = jobConfig.constraints.jobConstraints.isMemoryCheckpointingEnabled;
+        final isContainerizedWorkload = jobConfig.environment instanceof ContainerizedEnvironment;
+        final isDockerUsed = task.containerConfig.engine === 'docker' && task.containerConfig instanceof DockerConfig;
+        final isMemoryCheckpointCompatible = isMemoryCheckpointingEnabled && isContainerizedWorkload && isDockerUsed;
+
+        if (isContainerizedWorkload && isDockerUsed) {
+            log.debug "[FOVUS] Docker is used for the workload. Adding Fovus Docker options..."
+            def fovusDockerOptions = [
+                    "--env-file /compute_workspace/.fovus_env",
+                    "-v /fovus-storage-cached:/fovus-storage-cached",
+                    "-v \$PWD:\$PWD",
+                    "-v /fovus-storage:/fovus-storage",
+                    "-v /fovus/archive:/fovus/archive",
+                    "--memory \${FovusOptVcpuMem}g",
+            ];
+
+            if (isMemoryCheckpointCompatible) {
+                log.debug "[FOVUS] Memory checkpointing is enabled. Adding Fovus Memory checkpointing options..."
+                fovusDockerOptions += [
+                        "--privileged",
+                        "--cap-add=SYS_PTRACE",
+                        "--init",
+                        "--security-opt seccomp=unconfined",
+                        "--detach", // Run in background
+                        "-v fovus-libs:/opt/fovus-libs"
+                ];
+            }
+
+            def currentDockerOptions = task.config.getContainerOptions() ?: "";
+            def optionsToAdd = fovusDockerOptions.findAll { !currentDockerOptions.contains(it) }.join(" ");
+            task.config.setProperty("containerOptions", currentDockerOptions + " " + optionsToAdd);
+        }
+
+        return new FovusScriptLauncher(task.toTaskBean(), executor, jobConfig, isMemoryCheckpointCompatible)
     }
 
     @Override
