@@ -251,7 +251,8 @@ class FovusTaskHandler extends TaskHandler {
                         "--init",
                         "--security-opt seccomp=unconfined",
                         "--detach", // Run in background
-                        "-v fovus-libs:/opt/fovus-libs"
+                        "-v fovus-libs:/opt/fovus-libs",
+                        "-v \$PWD/.fovus-tmp:/tmp"
                 ];
             }
 
