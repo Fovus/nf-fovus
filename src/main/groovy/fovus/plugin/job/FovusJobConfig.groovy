@@ -238,6 +238,9 @@ class FovusJobConfig {
         if (extension?.outputFileList != null && extension.outputFileList instanceof List && (extension.
                 outputFileList as List).size() > 0) {
             outputFileList = extension.outputFileList as List<String>;
+        } else {
+            // Use Nextflow output file names by default
+            outputFileList = task.outputFilesNames
         }
 
         // Get the script file and run it
