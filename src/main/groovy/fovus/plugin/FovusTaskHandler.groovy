@@ -236,7 +236,8 @@ class FovusTaskHandler extends TaskHandler {
             log.debug "[FOVUS] Docker is used for the workload. Adding Fovus Docker options..."
             def fovusDockerOptions = [
                     "--env-file /compute_workspace/.fovus_env",
-                    "-v /fovus-storage-cached:/fovus-storage-cached",
+                    "-v /fovus-fs:/fovus-fs",
+                    "-v /fovus-storage-cached:/fovus-storage-cached", // TODO: Check if this is needed
                     "-v \$PWD:\$PWD",
                     "-v /fovus-storage:/fovus-storage",
                     "-v /fovus/archive:/fovus/archive",
