@@ -1,4 +1,4 @@
-package fovus.plugin.juicefs
+package fovus.plugin.storage
 
 import groovy.transform.Canonical
 import groovy.transform.CompileStatic

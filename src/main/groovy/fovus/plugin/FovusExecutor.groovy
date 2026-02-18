@@ -6,13 +6,12 @@ import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
 import nextflow.executor.TaskArrayExecutor
 import nextflow.extension.FilesEx
-import fovus.plugin.juicefs.FovusJuiceFsClient
+import fovus.plugin.storage.FovusStorageClient
 import fovus.plugin.pipeline.FovusPipelineClient
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskMonitor
 import nextflow.processor.TaskPollingMonitor
 
-//import nextflow.processor.TaskPollingMonitor
 import nextflow.processor.TaskRun
 import nextflow.util.Duration
 import nextflow.util.ServiceName
@@ -28,7 +27,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     protected FovusConfig fovusConfig
 
     protected FovusPipelineClient pipelineClient;
-    protected FovusJuiceFsClient juiceFsClient;
+    protected FovusStorageClient storageClient;
     protected Path localWorkDirMount;
     protected Path remoteBinDir;
 
@@ -57,7 +56,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
 
         FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, fovusConfig, this.fovusConfig.getPipelineName())
 
-        juiceFsClient = new FovusJuiceFsClient(fovusConfig)
+        storageClient = new FovusStorageClient(fovusConfig)
         validateWorkDir()
         uploadBinDir()
     }
@@ -65,7 +64,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     private void validateWorkDir() {
         // Or should we auto map to session.workDir/pipelines?
         assert session.workDir.endsWith("pipelines"), "[FOVUS] Working directory must end with pipelines. Current work directory: ${session.workDir}"
-        juiceFsClient.validateOrMountJuiceFs(session.workDir.parent)
+        storageClient.validateOrMountFovusStorage(session.workDir.parent)
         localWorkDirMount = session.workDir.parent
     }
 
