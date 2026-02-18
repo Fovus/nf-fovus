@@ -227,7 +227,18 @@ class FovusJobConfig {
 
         def remoteInputsForAllTasks = defaultWorkload.remoteInputsForAllTasks
         def parallelismConfigFiles = defaultWorkload.parallelismConfigFiles
-        def outputFileList = defaultWorkload.outputFileList
+
+        def outputFileOption = (extension?.outputFileOption != null)
+                ? extension.outputFileOption
+                : defaultWorkload.outputFileOption
+
+        if (outputFileOption != 'include') {
+            log.warn '[FOVUS] Only "include" is supported for outputFileOption'
+            outputFileOption = "include"
+        }
+
+        // Use Nextflow output file names by default
+        def outputFileList = task.outputFilesNames
 
         if (extension?.remoteInputsForAllTasks != null && extension.remoteInputsForAllTasks instanceof List) {
             remoteInputsForAllTasks = extension.remoteInputsForAllTasks as List<String>;
@@ -237,10 +248,7 @@ class FovusJobConfig {
         }
         if (extension?.outputFileList != null && extension.outputFileList instanceof List && (extension.
                 outputFileList as List).size() > 0) {
-            outputFileList = extension.outputFileList as List<String>;
-        } else {
-            // Use Nextflow output file names by default
-            outputFileList = task.outputFilesNames
+            outputFileList.addAll(extension.outputFileList as List<String>);
         }
 
         // Get the script file and run it
@@ -250,9 +258,7 @@ class FovusJobConfig {
                 runCommand: runCommand,
                 remoteInputsForAllTasks: remoteInputsForAllTasks,
                 parallelismConfigFiles: parallelismConfigFiles,
-                outputFileOption: (extension?.outputFileOption != null)
-                        ? extension.outputFileOption
-                        : defaultWorkload.outputFileOption,
+                outputFileOption: outputFileOption,
                 outputFileList: outputFileList
         )
     }
