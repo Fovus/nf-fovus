@@ -276,7 +276,11 @@ class FovusTaskHandler extends TaskHandler {
         } else {
             final remoteRunScript = executor.getRemotePath(wrapperFile)
             final remoteWorkDir = remoteRunScript.getParent()
-            runCommand = "cd ${remoteWorkDir} && ./${TaskRun.CMD_RUN}"
+            runCommand = """
+ln -s ${remoteWorkDir}/${TaskRun.CMD_RUN} ${TaskRun.CMD_RUN}
+ln -s ${remoteWorkDir}/${TaskRun.CMD_SCRIPT} ${TaskRun.CMD_SCRIPT}
+./${TaskRun.CMD_RUN}
+"""
         }
         jobConfig.setRunCommand(runCommand)
 
@@ -373,7 +377,8 @@ class FovusTaskHandler extends TaskHandler {
             final remoteTaskWorkDir = executor.getRemotePath(handler.getTask().workDir.toAbsolutePath())
             final runScript = """
             #!/bin/bash
-            cd "${remoteTaskWorkDir}"
+            ln -s "${remoteTaskWorkDir}/${TaskRun.CMD_RUN} ${TaskRun.CMD_RUN}"
+            ln -s "${remoteTaskWorkDir}/${TaskRun.CMD_SCRIPT} ${TaskRun.CMD_SCRIPT}"
             ./${TaskRun.CMD_RUN}
             """.stripIndent().leftTrim()
 
