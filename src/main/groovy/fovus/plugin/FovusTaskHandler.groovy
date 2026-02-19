@@ -236,7 +236,7 @@ class FovusTaskHandler extends TaskHandler {
             log.debug "[FOVUS] Docker is used for the workload. Adding Fovus Docker options..."
             def fovusDockerOptions = [
                     "--env-file /compute_workspace/.fovus_env",
-                    "-v /fovus-storage-cached:/fovus-storage-cached",
+                    "-v /fovus-fs:/fovus-fs",
                     "-v \$PWD:\$PWD",
                     "-v /fovus-storage:/fovus-storage",
                     "-v /fovus/archive:/fovus/archive",
@@ -275,7 +275,11 @@ class FovusTaskHandler extends TaskHandler {
         } else {
             final remoteRunScript = executor.getRemotePath(wrapperFile)
             final remoteWorkDir = remoteRunScript.getParent()
-            runCommand = "cd ${remoteWorkDir} && ./${TaskRun.CMD_RUN}"
+            runCommand = """
+ln -s ${remoteWorkDir}/${TaskRun.CMD_RUN} ${TaskRun.CMD_RUN}
+ln -s ${remoteWorkDir}/${TaskRun.CMD_SCRIPT} ${TaskRun.CMD_SCRIPT}
+./${TaskRun.CMD_RUN}
+"""
         }
         jobConfig.setRunCommand(runCommand)
 
@@ -291,13 +295,17 @@ class FovusTaskHandler extends TaskHandler {
         def jobDirectory = task.workDir.getParent().toString();
 
         if (isTaskArrayRun) {
-            jobDirectory = task.workDir.toString();
+            // For array task, the job directory is the pipelines/<pipelineId>
+            jobDirectory = task.workDir.getParent().getParent().toString();
         }
         List<String> includeList = []
         if (isTaskArrayRun) {
             for (TaskHandler taskHandler : (task as TaskArrayRun).getChildren()) {
                 log.debug "[FOVUS] List of directory > ${taskHandler.getTask().workDir.toString()}"
-                includeList.add("${taskHandler.getTask().workDir.toString().tokenize("/")[-1]}/");
+                final pathParts = taskHandler.getTask().workDir.toString().tokenize("/")
+                // Get the last 2 parts and join with "/" (eg, ab/123)
+                final includePath = pathParts[-2..-1].join("/")
+                includeList.add("${includePath}/");
             }
         } else {
             includeList.add("${this.getTask().workDir.toString().tokenize("/")[-1]}/");
@@ -364,20 +372,19 @@ class FovusTaskHandler extends TaskHandler {
     private void prepareArrayTasks(TaskArrayRun task) {
         task.children.eachWithIndex { handler, int i ->
             handler = handler as FovusTaskHandler
-            def subTaskName = handler.task.workDir.getName()
-            def subTaskFolder = task.workDir.resolve(subTaskName)
-            Files.createDirectories(subTaskFolder)
-            log.trace "[FOVUS] Creating subtask ${i} for ${task.name}> ${subTaskFolder}"
+            def taskFolder = handler.task.workDir
+            log.trace "[FOVUS] Preparing run.sh script for ${task.name} at ${taskFolder}"
 
             final remoteTaskWorkDir = executor.getRemotePath(handler.getTask().workDir.toAbsolutePath())
             final runScript = """
             #!/bin/bash
-            cd "${remoteTaskWorkDir}"
+            ln -s "${remoteTaskWorkDir}/${TaskRun.CMD_RUN} ${TaskRun.CMD_RUN}"
+            ln -s "${remoteTaskWorkDir}/${TaskRun.CMD_SCRIPT} ${TaskRun.CMD_SCRIPT}"
             ./${TaskRun.CMD_RUN}
             """.stripIndent().leftTrim()
 
             // Save script as run.sh
-            final runScriptPath = subTaskFolder.resolve("run.sh")
+            final runScriptPath = taskFolder.resolve("run.sh")
             Files.write(
                     runScriptPath,
                     runScript.getBytes(StandardCharsets.UTF_8),

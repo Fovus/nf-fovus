@@ -6,13 +6,12 @@ import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
 import nextflow.executor.TaskArrayExecutor
 import nextflow.extension.FilesEx
-import fovus.plugin.juicefs.FovusJuiceFsClient
+import fovus.plugin.storage.FovusStorageClient
 import fovus.plugin.pipeline.FovusPipelineClient
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskMonitor
 import nextflow.processor.TaskPollingMonitor
 
-//import nextflow.processor.TaskPollingMonitor
 import nextflow.processor.TaskRun
 import nextflow.util.Duration
 import nextflow.util.ServiceName
@@ -24,12 +23,12 @@ import java.nio.file.Path
 @ServiceName('fovus')
 @CompileStatic
 class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecutor {
-    private static final String REMOTE_JUICEFS_MOUNT_POINT = '/fovus-storage-cached'
+    private static final String REMOTE_INPUT_MOUNT_POINT = '/fovus-storage'
     protected FovusConfig fovusConfig
 
     protected FovusPipelineClient pipelineClient;
-    protected FovusJuiceFsClient juiceFsClient;
-    protected Path juiceFsMountDir;
+    protected FovusStorageClient storageClient;
+    protected Path localWorkDirMount;
     protected Path remoteBinDir;
 
     /**
@@ -57,7 +56,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
 
         FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, fovusConfig, this.fovusConfig.getPipelineName())
 
-        juiceFsClient = new FovusJuiceFsClient(fovusConfig)
+        storageClient = new FovusStorageClient(fovusConfig)
         validateWorkDir()
         uploadBinDir()
     }
@@ -65,8 +64,8 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     private void validateWorkDir() {
         // Or should we auto map to session.workDir/pipelines?
         assert session.workDir.endsWith("pipelines"), "[FOVUS] Working directory must end with pipelines. Current work directory: ${session.workDir}"
-        juiceFsClient.validateOrMountJuiceFs(session.workDir.parent)
-        juiceFsMountDir = session.workDir.parent
+        storageClient.validateOrMountFovusStorage(session.workDir.parent)
+        localWorkDirMount = session.workDir.parent
     }
 
     protected void uploadBinDir() {
@@ -146,8 +145,8 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     }
 
     Path getRemotePath(Path file) {
-        // Replace the juicefs mount point part with the REMOTE_JUICEFS_MOUNT_POINT
-        return Path.of(REMOTE_JUICEFS_MOUNT_POINT, file.toString().replace(juiceFsMountDir.toString(), ""))
+        // Replace the juicefs mount point part with the REMOTE_INPUT_MOUNT_POINT
+        return Path.of(REMOTE_INPUT_MOUNT_POINT, file.toString().replace(localWorkDirMount.toString(), ""))
     }
 
 }
