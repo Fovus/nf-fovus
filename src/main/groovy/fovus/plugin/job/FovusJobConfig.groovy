@@ -239,6 +239,8 @@ class FovusJobConfig {
 
         // Use Nextflow output file names by default
         def outputFileList = task.outputFilesNames
+        outputFileList.add(".command.*")
+        outputFileList.add(task.CMD_EXIT)
 
         if (extension?.remoteInputsForAllTasks != null && extension.remoteInputsForAllTasks instanceof List) {
             remoteInputsForAllTasks = extension.remoteInputsForAllTasks as List<String>;
