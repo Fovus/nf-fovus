@@ -84,6 +84,63 @@ class FovusUtil {
         return diffMs <= 1 * 60 * 1000 && diffMs >= 0
     }
 
+    /**
+     * Normalize Nextflow glob patterns into those compatible with aws cli include/exclude pattern.
+     *
+     * <pre>
+     *   "*{a,b}{,_1,_2}.fq.gz" -> ["*a.fq.gz","*a_1.fq.gz","*a_2.fq.gz","*b.fq.gz","*b_1.fq.gz","*b_2.fq.gz"]
+     * </pre>
+     */
+    static List<String> normalizeGlobPath(String pattern) {
+        // aws cli doesn't treat ** specially; usually * is enough
+        pattern = pattern.replace("**", "*")
+
+        int open = -1
+        int depth = 0
+
+        // Find first top-level {...}
+        for (int i = 0; i < pattern.length(); i++) {
+            char c = pattern.charAt(i)
+            if (c == (char) '{') {
+                if (depth == 0) open = i
+                depth++
+            } else if (c == (char) '}') {
+                depth--
+                if (depth == 0 && open >= 0) {
+                    int close = i
+                    String prefix = pattern.substring(0, open)
+                    String body = pattern.substring(open + 1, close)
+                    String suffix = pattern.substring(close + 1)
+
+                    // Split body by commas at depth 0 (supports nested braces)
+                    List<String> parts = []
+                    int partStart = 0
+                    int d2 = 0
+                    for (int j = 0; j < body.length(); j++) {
+                        char cj = body.charAt(j)
+                        if (cj == (char) '{') d2++
+                        else if (cj == (char) '}') d2--
+                        else if (cj == (char) ',' && d2 == 0) {
+                            parts << body.substring(partStart, j)
+                            partStart = j + 1
+                        }
+                    }
+                    parts << body.substring(partStart)
+
+                    // Recurse for each option
+                    List<String> out = []
+                    for (String opt : parts) {
+                        out.addAll(normalizeGlobPath(prefix + opt + suffix))
+                    }
+                    return out
+                }
+            }
+        }
+
+        // No braces left
+        return [pattern]
+    }
+
 }
 
 @MapConstructor

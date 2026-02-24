@@ -24,6 +24,10 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
         this.executor = executor
     }
 
+    String getBeforeStartScript() {
+        return fovusLink()
+    }
+
     @Override
     String getEnvScript(Map environment, boolean container) {
         final result = new StringBuilder()
@@ -58,6 +62,24 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
         return wrapper.toString()
     }
 
+    String getStageInputFilesScript(Map<String, Path> inputFiles) {
+        assert inputFiles != null
+
+        def len = inputFiles.size()
+        def delete = []
+        def links = []
+        for (Map.Entry<String, Path> entry : inputFiles) {
+            final stageName = entry.key
+            final storePath = entry.value
+
+            // link them
+            links << stageInputFile(storePath, stageName)
+        }
+
+        // return a big string containing the command
+        return (delete + links).join(separatorChar)
+    }
+
     /**
      * {@inheritDoc}
      *
@@ -66,10 +88,7 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
     @Override
     String stageInputFile(Path path, String targetName) {
         Path remotePath = executor.getRemotePath(path)
-        def stageCmd = super.stageInputFile(remotePath, targetName)
-
-        // Change file permission to 777 in background so they can be executable on the compute node
-        "chmod 777 ${Escape.path(path.toAbsolutePath().toString())}".execute()
+        def stageCmd = "fovus_link ${remotePath} ${targetName}"
         return stageCmd
     }
 
@@ -117,5 +136,44 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
         " < ${Escape.path(path.getFileName())}"
     }
 
+    protected String fovusLink() {
+        """
+        fovus_link() {
+            local src="\$1"
+            local target="\$2"
+    
+            if [[ -z "\$src" || -z "\$target" ]]; then
+                echo "Usage: fovus_link <src-file-or-dir> <target-file-or-dir>" >&2
+                return 1
+            fi
+    
+            # If src is a file → link to target path in current dir
+            if [[ -f "\$src" ]]; then
+                # Ensure target's parent dir exists (if target contains '/')
+                mkdir -p "\$(dirname "\$target")" 2>/dev/null || true
+    
+                ln -s "\$(realpath "\$src")" "\$PWD/\$target" || true
+                return 0
+            fi
+    
+            # If src is a directory → mirror structure under target dir
+            if [[ -d "\$src" ]]; then
+                mkdir -p "\$PWD/\$target" || true
+    
+                find "\$src" -type f | while IFS= read -r file; do
+                    rel="\${file#\$src/}"                      # path relative to src root
+                    dest="\$PWD/\$target/\$rel"               # full destination path
+    
+                    mkdir -p "\$(dirname "\$dest")"
+                    ln -s "\$(realpath "\$file")" "\$dest" || true
+                done
+                return 0
+            fi
+    
+            echo "Not a file or directory: \$src" >&2
+            return 1
+        }
+    """.stripIndent(true)
+    }
 
 }

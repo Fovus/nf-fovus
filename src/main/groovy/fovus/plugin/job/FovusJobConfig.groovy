@@ -1,6 +1,7 @@
 package fovus.plugin.job
 
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize
+import fovus.plugin.FovusUtil
 import groovy.json.JsonOutput
 import groovy.transform.Canonical
 import groovy.transform.CompileStatic
@@ -237,8 +238,19 @@ class FovusJobConfig {
             outputFileOption = "include"
         }
 
-        // Use Nextflow output file names by default
-        def outputFileList = task.outputFilesNames
+        // Use Nextflow output file names by default.
+        def outputFileList = [] as List<String>
+        task.outputFilesNames.each { fileName ->
+            final normalizedPatterns = FovusUtil.normalizeGlobPath(fileName)
+            normalizedPatterns.each { pattern ->
+                if (!pattern.endsWith("*")) {
+                    outputFileList.add(pattern + "*")
+                } else {
+                    outputFileList.add(pattern)
+                }
+            }
+
+        }
         outputFileList.add(".command.*")
         outputFileList.add(task.CMD_EXIT)
 
@@ -261,7 +273,7 @@ class FovusJobConfig {
                 remoteInputsForAllTasks: remoteInputsForAllTasks,
                 parallelismConfigFiles: parallelismConfigFiles,
                 outputFileOption: outputFileOption,
-                outputFileList: outputFileList
+                outputFileList: outputFileList.unique()
         )
     }
 
