@@ -88,10 +88,7 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
     @Override
     String stageInputFile(Path path, String targetName) {
         Path remotePath = executor.getRemotePath(path)
-        def stageCmd = "fovus_link ${remotePath}"
-
-        // Change file permission to 777 in background so they can be executable on the compute node
-        "chmod 777 ${Escape.path(path.toAbsolutePath().toString())}".execute()
+        def stageCmd = "fovus_link ${remotePath} ${targetName}"
         return stageCmd
     }
 
