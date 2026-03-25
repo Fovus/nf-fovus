@@ -10,19 +10,19 @@ import groovy.transform.MapConstructor
 class ResourceConfiguration {
     String benchmarkingProfileName
     String timeToCostPriorityRatio
-    Float minvCpu
-    Float maxvCpu
-    Float minvCpuMemGiB
-    Float minGpu
-    Float maxGpu
-    Float minGpuMemGiB
+    Number minvCpu
+    Number maxvCpu
+    Number minvCpuMemGiB
+    Number minGpu
+    Number maxGpu
+    Number minGpuMemGiB
     String computingDevice
     Boolean enableHyperthreading
     Boolean allowPreemptible
     String[] supportedCpuArchitectures
     Boolean isResumableWorkload
-    Float walltimeHours
-    Float storageGiB
+    Number walltimeHours
+    Number storageGiB
     Boolean isMemoryAutoRetryEnabled
 
     /**

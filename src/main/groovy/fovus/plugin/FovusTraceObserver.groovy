@@ -131,32 +131,32 @@ class FovusTraceObserver implements TraceObserverV2 {
                     }
                     break
                 case "maxvCpu":
-                    if (value instanceof Float) {
+                    if (value instanceof Number) {
                         resourceConfig.maxvCpu = value
                     }
                     break
                 case "maxGpu":
-                    if (value instanceof Float) {
+                    if (value instanceof Number) {
                         resourceConfig.maxGpu = value
                     }
                     break
                 case "minGpu":
-                    if (value instanceof Float) {
+                    if (value instanceof Number) {
                         resourceConfig.minGpu = value
                     }
                     break
                 case "minGpuMemGiB":
-                    if (value instanceof Float) {
+                    if (value instanceof Number) {
                         resourceConfig.minGpuMemGiB = value
                     }
                     break
                 case "minvCpu":
-                    if (value instanceof Float) {
+                    if (value instanceof Number) {
                         resourceConfig.minvCpu = value
                     }
                     break
                 case "minvCpuMemGiB":
-                    if (value instanceof Float) {
+                    if (value instanceof Number) {
                         resourceConfig.minvCpuMemGiB = value
                     }
                     break
@@ -185,12 +185,12 @@ class FovusTraceObserver implements TraceObserverV2 {
                     }
                     break
                 case "walltimeHours":
-                    if (value instanceof Float) {
+                    if (value instanceof Number) {
                         resourceConfig.walltimeHours = value
                     }
                     break
                 case "storageGiB":
-                    if (value instanceof Float) {
+                    if (value instanceof Number) {
                         resourceConfig.storageGiB = value
                     }
                     break
