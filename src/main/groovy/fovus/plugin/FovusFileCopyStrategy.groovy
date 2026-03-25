@@ -88,6 +88,10 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
     @Override
     String stageInputFile(Path path, String targetName) {
         Path remotePath = executor.getRemotePath(path)
+
+        if (stageinMode == "copy") {
+            return super.stageInputFile(remotePath, targetName)
+        }
         def stageCmd = "fovus_link ${remotePath} ${targetName}"
         return stageCmd
     }
