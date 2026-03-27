@@ -18,7 +18,8 @@ class FovusPipelineClient {
     FovusPipelineClient() {}
 
     String createPipeline(FovusConfig config, String name) {
-        def command = [config.getCliPath(), '--silence', 'pipeline', 'create', '--name', name]
+        def command = [config.getCliPath(), '--silence', 'pipeline', 'create', '--name', name, '--workflow-host',
+                       'local']
         def result = FovusUtil.executeCommand(command)
 
         if (result.exitCode != 0) {
