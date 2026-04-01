@@ -3,7 +3,9 @@ package fovus.plugin
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.core.type.TypeReference
 import fovus.plugin.pipeline.FovusPipelineClient
+import groovy.util.logging.Slf4j
 
+@Slf4j
 class FovusPipelineCache {
     public static final String PIPELINE_CACHE_FILE_PATH = "./work/.nextflow/fovus/pipeline_cache.json"
 
@@ -12,6 +14,23 @@ class FovusPipelineCache {
     static String getOrCreatePipelineId(FovusPipelineClient pipelineClient,
                                         FovusConfig fovusConfig,
                                         String pipelineName) {
+        final workflowHost = System.getenv("WORKFLOW_HOST")
+        final pipelineIdFromEnv = System.getenv("PIPELINE_ID")
+
+        log.info("[FOVUS] WORKFLOW_HOST: ${workflowHost}")
+        log.info("[FOVUS] PIPELINE_ID: ${pipelineIdFromEnv}")
+        // In REMOTE workflow mode, prefer an explicit pipeline ID from env over local cache/creation.
+        if ("REMOTE".equalsIgnoreCase(workflowHost) && pipelineIdFromEnv) {
+            log.info("[FOVUS] Using PIPELINE_ID from environment for REMOTE workflow host: ${pipelineIdFromEnv}")
+            pipelineClient.setPipeline(pipelineName, pipelineIdFromEnv)
+            // Keep cache aligned so later lookups in the same workspace resolve to the same pipeline.
+            updatePipelineCache(pipelineName, pipelineIdFromEnv)
+            return pipelineIdFromEnv
+        }
+        if ("REMOTE".equalsIgnoreCase(workflowHost) && !pipelineIdFromEnv) {
+            log.info("[FOVUS] WORKFLOW_HOST is REMOTE but PIPELINE_ID is not set; falling back to cache/create flow")
+        }
+
         def existingPipelineId = getPipelineId(pipelineName)
         if (existingPipelineId) {
             final existingPipeline = pipelineClient.getPipeline(fovusConfig, existingPipelineId)

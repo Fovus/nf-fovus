@@ -90,7 +90,9 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
 
     @Override
     Path getWorkDir() {
-        return session.workDir.resolve(this.pipelineClient.getPipeline().pipelineId)
+        return session.workDir
+                .resolve(this.pipelineClient.getPipeline().pipelineId)
+                .resolve("fovus-work")
     }
 
     @Override
