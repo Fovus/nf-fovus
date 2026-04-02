@@ -17,18 +17,18 @@ class FovusPipelineCache {
         final workflowHost = System.getenv("WORKFLOW_HOST")
         final pipelineIdFromEnv = System.getenv("PIPELINE_ID")
 
-        log.info("[FOVUS] WORKFLOW_HOST: ${workflowHost}")
-        log.info("[FOVUS] PIPELINE_ID: ${pipelineIdFromEnv}")
+        log.trace("[FOVUS] WORKFLOW_HOST: ${workflowHost}")
+        log.trace("[FOVUS] PIPELINE_ID: ${pipelineIdFromEnv}")
         // In REMOTE workflow mode, prefer an explicit pipeline ID from env over local cache/creation.
         if ("REMOTE".equalsIgnoreCase(workflowHost) && pipelineIdFromEnv) {
-            log.info("[FOVUS] Using PIPELINE_ID from environment for REMOTE workflow host: ${pipelineIdFromEnv}")
+            log.trace("[FOVUS] Using PIPELINE_ID from environment for REMOTE workflow host: ${pipelineIdFromEnv}")
             pipelineClient.setPipeline(pipelineName, pipelineIdFromEnv)
             // Keep cache aligned so later lookups in the same workspace resolve to the same pipeline.
             updatePipelineCache(pipelineName, pipelineIdFromEnv)
             return pipelineIdFromEnv
         }
         if ("REMOTE".equalsIgnoreCase(workflowHost) && !pipelineIdFromEnv) {
-            log.info("[FOVUS] WORKFLOW_HOST is REMOTE but PIPELINE_ID is not set; falling back to cache/create flow")
+            log.trace("[FOVUS] WORKFLOW_HOST is REMOTE but PIPELINE_ID is not set; falling back to cache/create flow")
         }
 
         def existingPipelineId = getPipelineId(pipelineName)
