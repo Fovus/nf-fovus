@@ -2,6 +2,7 @@ package fovus.plugin.job
 
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize
 import fovus.plugin.FovusUtil
+import groovy.json.JsonGenerator
 import groovy.json.JsonOutput
 import groovy.transform.Canonical
 import groovy.transform.CompileStatic
@@ -370,7 +371,8 @@ class FovusJobConfig {
      */
     String toJson(Path jobConfigFile) {
         // Write the job config to a file
-        def jsonString = JsonOutput.prettyPrint(JsonOutput.toJson(this))
+        def jsonGenerator = new JsonGenerator.Options().excludeNulls().build()
+        def jsonString = JsonOutput.prettyPrint(jsonGenerator.toJson(this))
         Files.write(jobConfigFile, jsonString.bytes)
 
         log.debug "[FOVUS] Job config file for ${task.name} saved to ${jobConfigFile.toString()}"
