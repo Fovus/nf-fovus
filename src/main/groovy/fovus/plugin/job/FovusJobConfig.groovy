@@ -29,6 +29,10 @@ class FovusJobConfig {
     Constraints constraints
     Objective objective
     Workload workload
+
+
+    boolean isSearchOutputKeywordsEnabled = false
+    KeywordSearchInput keywordSearchInput
     String jobName
     FovusJobClient jobClient
 
@@ -52,6 +56,14 @@ class FovusJobConfig {
 
     void setJobName(String jobName) {
         this.jobName = jobName
+    }
+
+    void setIsSearchOutputKeywordsEnabled(boolean isSearchOutputKeywordsEnabled) {
+        this.isSearchOutputKeywordsEnabled = isSearchOutputKeywordsEnabled
+    }
+
+    void setKeywordSearchInput(KeywordSearchInput keywordSearchInput) {
+        this.keywordSearchInput = keywordSearchInput
     }
 
     void setRunCommand(String runCmd) {
@@ -89,6 +101,8 @@ class FovusJobConfig {
         this.objective = createObjective(fovusJobConfig)
         this.constraints = new Constraints(jobConstraints: jobConstraints, taskConstraints: taskConstraints)
         this.workload = createWorkload(fovusJobConfig)
+        this.isSearchOutputKeywordsEnabled = createIsSearchOutputKeywordsEnabled(fovusJobConfig)
+        this.keywordSearchInput = this.isSearchOutputKeywordsEnabled ? createKeywordSearchInput(fovusJobConfig) : null
         this.jobName = normalizeJobName(task.name)
 
     }
@@ -277,6 +291,79 @@ class FovusJobConfig {
         )
     }
 
+    private boolean createIsSearchOutputKeywordsEnabled(FovusJobConfig fovusJobConfig) {
+        def extension = task.config.get('ext') as Map<String, Object>
+        if (extension?.isSearchOutputKeywordsEnabled != null) {
+            if (extension.isSearchOutputKeywordsEnabled instanceof Boolean) {
+                return extension.isSearchOutputKeywordsEnabled as boolean
+            }
+            log.warn "[FOVUS] Ignoring ext.isSearchOutputKeywordsEnabled because it is not a boolean"
+        }
+
+        return fovusJobConfig?.isSearchOutputKeywordsEnabled ?: false
+    }
+
+    private KeywordSearchInput createKeywordSearchInput(FovusJobConfig fovusJobConfig) {
+        def extension = task.config.get('ext') as Map<String, Object>
+        def defaultKeywordSearchInput = fovusJobConfig.keywordSearchInput
+        List<String> keywords = defaultKeywordSearchInput?.keywords ?: []
+        List<String> targetOutputFiles = defaultKeywordSearchInput?.targetOutputFiles ?: []
+        boolean isRetryIfMatchedEnabled = defaultKeywordSearchInput?.isRetryIfMatchedEnabled ?: false
+        int maxRetryAttempts = defaultKeywordSearchInput?.maxRetryAttempts ?: 15
+        boolean hasKeywordSearchConfig = defaultKeywordSearchInput != null
+
+        if (extension?.keywordSearchInput != null) {
+            if (!(extension.keywordSearchInput instanceof Map)) {
+                log.warn "[FOVUS] Ignoring ext.keywordSearchInput because it is not a map"
+            } else {
+                hasKeywordSearchConfig = true
+                def keywordSearchInput = extension.keywordSearchInput as Map<String, Object>
+                if (keywordSearchInput.containsKey('keywords')) {
+                    if (keywordSearchInput.keywords instanceof List) {
+                        keywords = keywordSearchInput.keywords as List<String>
+                    } else {
+                        log.warn "[FOVUS] Ignoring ext.keywordSearchInput.keywords because it is not a list"
+                    }
+                }
+
+                if (keywordSearchInput.containsKey('targetOutputFiles')) {
+                    if (keywordSearchInput.targetOutputFiles instanceof List) {
+                        targetOutputFiles = keywordSearchInput.targetOutputFiles as List<String>
+                    } else {
+                        log.warn "[FOVUS] Ignoring ext.keywordSearchInput.targetOutputFiles because it is not a list"
+                    }
+                }
+
+                if (keywordSearchInput.containsKey('isRetryIfMatchedEnabled')) {
+                    if (keywordSearchInput.isRetryIfMatchedEnabled instanceof Boolean) {
+                        isRetryIfMatchedEnabled = keywordSearchInput.isRetryIfMatchedEnabled as boolean
+                    } else {
+                        log.warn "[FOVUS] Ignoring ext.keywordSearchInput.isRetryIfMatchedEnabled because it is not a boolean"
+                    }
+                }
+
+                if (keywordSearchInput.containsKey('maxRetryAttempts')) {
+                    if (keywordSearchInput.maxRetryAttempts instanceof Number) {
+                        maxRetryAttempts = (keywordSearchInput.maxRetryAttempts as Number).intValue()
+                    } else {
+                        log.warn "[FOVUS] Ignoring ext.keywordSearchInput.maxRetryAttempts because it is not a number"
+                    }
+                }
+            }
+        }
+
+        if (!hasKeywordSearchConfig) {
+            return null
+        }
+
+        return new KeywordSearchInput(
+                keywords: keywords,
+                targetOutputFiles: targetOutputFiles,
+                isRetryIfMatchedEnabled: isRetryIfMatchedEnabled,
+                maxRetryAttempts: maxRetryAttempts
+        )
+    }
+
 
     /**
      * Save the job config to a JSON file and return the file path.
@@ -415,5 +502,12 @@ class Workload {
     List<String> outputFileList = ["*"]
 }
 
-
+@Canonical
+@MapConstructor
+class KeywordSearchInput {
+    List<String> keywords = []
+    List<String> targetOutputFiles = []
+    boolean isRetryIfMatchedEnabled = false
+    int maxRetryAttempts = 0
+}
 
