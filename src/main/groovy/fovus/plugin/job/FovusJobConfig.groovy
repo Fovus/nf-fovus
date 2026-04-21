@@ -102,7 +102,7 @@ class FovusJobConfig {
         this.constraints = new Constraints(jobConstraints: jobConstraints, taskConstraints: taskConstraints)
         this.workload = createWorkload(fovusJobConfig)
         this.isSearchOutputKeywordsEnabled = createIsSearchOutputKeywordsEnabled(fovusJobConfig)
-        this.keywordSearchInput = this.isSearchOutputKeywordsEnabled ? createKeywordSearchInput(fovusJobConfig) : null
+        this.keywordSearchInput = createKeywordSearchInput(fovusJobConfig)
         this.jobName = normalizeJobName(task.name)
 
     }
