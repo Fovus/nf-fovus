@@ -252,7 +252,8 @@ class FovusTaskHandler extends TaskHandler {
                         "--security-opt seccomp=unconfined",
                         "--detach", // Run in background
                         "-v fovus-libs:/opt/fovus-libs",
-                        "-v \$PWD/.fovus-tmp:/tmp"
+                        "-v \$PWD/.fovus-tmp:/tmp",
+                        "--cgroupns=private" // Use an isolated cgroup namespace inside the container
                 ];
             }
 

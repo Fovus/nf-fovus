@@ -66,6 +66,9 @@ if ! try_restore_and_wait "\$container_id"; then
 
     docker exec \${container_id} bash -c '
         '"${containerEnvCommand}"'
+        CGROUP=/sys/fs/cgroup/freezer/job_\${FOVUS_JOB_ID}
+        mkdir -p \${CGROUP}
+        echo \$\$ > \${CGROUP}/cgroup.procs
         setsid bash -c "
             (
                 set +e
