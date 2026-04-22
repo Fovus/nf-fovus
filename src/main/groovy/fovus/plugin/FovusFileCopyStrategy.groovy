@@ -90,7 +90,15 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
         Path remotePath = executor.getRemotePath(path)
 
         if (stageinMode == "copy") {
-            return super.stageInputFile(remotePath, targetName)
+            def cmd = ''
+            def p = targetName.lastIndexOf('/')
+            if (p > 0) {
+                cmd += "mkdir -p ${Escape.path(targetName.substring(0, p))} && "
+            }
+
+            // Here, we don't use the -f option so data is not overwritten on requeue
+            cmd += "cp -RL ${Escape.path(remotePath.toAbsolutePath().toString())} ${Escape.path(targetName)}"
+            return cmd
         }
         def stageCmd = "fovus_link ${remotePath} ${targetName}"
         return stageCmd
