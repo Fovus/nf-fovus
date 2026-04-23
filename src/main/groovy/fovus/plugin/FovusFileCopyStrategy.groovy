@@ -97,7 +97,7 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
             def cmd = ''
             def p = targetName.lastIndexOf('/')
             if (p > 0) {
-                cmd += "mkdir -p ${Escape.path(targetName.substring(0, p))}${separatorChar}"
+                cmd += "mkdir -p ${Escape.path(targetName.substring(0, p))} && "
             }
 
             cmd += "cp -fRL ${Escape.path(remotePath.toAbsolutePath().toString())} ${Escape.path(targetName)}"
