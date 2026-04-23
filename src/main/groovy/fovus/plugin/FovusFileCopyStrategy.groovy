@@ -65,8 +65,6 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
     String getStageInputFilesScript(Map<String, Path> inputFiles) {
         assert inputFiles != null
 
-        def len = inputFiles.size()
-        def delete = []
         def links = []
         for (Map.Entry<String, Path> entry : inputFiles) {
             final stageName = entry.key
@@ -76,8 +74,14 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
             links << stageInputFile(storePath, stageName)
         }
 
+        if (stageinMode == "copy") {
+            final marker = Escape.path('.fovus-copy-stage-complete')
+            final stagingCmds = links ? links.join(separatorChar) + separatorChar : ''
+            return "if [[ -f ${marker} ]]; then echo \"Skip input staging: marker found ${marker}\"; else ${stagingCmds}touch ${marker}; fi"
+        }
+
         // return a big string containing the command
-        return (delete + links).join(separatorChar)
+        return links.join(separatorChar)
     }
 
     /**
@@ -93,11 +97,10 @@ class FovusFileCopyStrategy extends SimpleFileCopyStrategy {
             def cmd = ''
             def p = targetName.lastIndexOf('/')
             if (p > 0) {
-                cmd += "mkdir -p ${Escape.path(targetName.substring(0, p))} && "
+                cmd += "mkdir -p ${Escape.path(targetName.substring(0, p))}${separatorChar}"
             }
 
-            // Here, we don't use the -f option so data is not overwritten on requeue
-            cmd += "cp -RL ${Escape.path(remotePath.toAbsolutePath().toString())} ${Escape.path(targetName)}"
+            cmd += "cp -fRL ${Escape.path(remotePath.toAbsolutePath().toString())} ${Escape.path(targetName)}"
             return cmd
         }
         def stageCmd = "fovus_link ${remotePath} ${targetName}"
