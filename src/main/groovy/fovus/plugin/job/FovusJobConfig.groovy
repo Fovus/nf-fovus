@@ -310,8 +310,14 @@ class FovusJobConfig {
         List<String> keywords = defaultKeywordSearchInput?.keywords ?: []
         List<String> targetOutputFiles = defaultKeywordSearchInput?.targetOutputFiles ?: []
         boolean isRetryIfMatchedEnabled = defaultKeywordSearchInput?.isRetryIfMatchedEnabled ?: false
-        int maxRetryAttempts = defaultKeywordSearchInput?.maxRetryAttempts ?: 15
         boolean hasKeywordSearchConfig = defaultKeywordSearchInput != null
+        String retryType = defaultKeywordSearchInput?.retryType ?: "GENERAL"
+        boolean isMaxRetryAttemptsProvided = defaultKeywordSearchInput?.maxRetryAttempts != null
+        Integer maxRetryAttempts = defaultKeywordSearchInput?.maxRetryAttempts ?: 15
+
+        if (!isMaxRetryAttemptsProvided && "OUT_OF_MEMORY".equalsIgnoreCase(retryType)) {
+            maxRetryAttempts = 3 // Default max retry attempts for OUT_OF_MEMORY retry type
+        }
 
         if (extension?.keywordSearchInput != null) {
             if (!(extension.keywordSearchInput instanceof Map)) {
@@ -345,9 +351,18 @@ class FovusJobConfig {
 
                 if (keywordSearchInput.containsKey('maxRetryAttempts')) {
                     if (keywordSearchInput.maxRetryAttempts instanceof Number) {
+                        isMaxRetryAttemptsProvided = true
                         maxRetryAttempts = (keywordSearchInput.maxRetryAttempts as Number).intValue()
                     } else {
                         log.warn "[FOVUS] Ignoring ext.keywordSearchInput.maxRetryAttempts because it is not a number"
+                    }
+                }
+
+                if (keywordSearchInput.containsKey('retryType')) {
+                    if (keywordSearchInput.retryType instanceof String) {
+                        retryType = keywordSearchInput.retryType as String
+                    } else {
+                        log.warn "[FOVUS] Ignoring ext.keywordSearchInput.retryType because it is not a string"
                     }
                 }
             }
@@ -361,7 +376,8 @@ class FovusJobConfig {
                 keywords: keywords,
                 targetOutputFiles: targetOutputFiles,
                 isRetryIfMatchedEnabled: isRetryIfMatchedEnabled,
-                maxRetryAttempts: maxRetryAttempts
+                maxRetryAttempts: maxRetryAttempts,
+                retryType: retryType
         )
     }
 
@@ -511,5 +527,6 @@ class KeywordSearchInput {
     List<String> targetOutputFiles = []
     boolean isRetryIfMatchedEnabled = false
     int maxRetryAttempts = 0
+    String retryType = "GENERAL"
 }
 
