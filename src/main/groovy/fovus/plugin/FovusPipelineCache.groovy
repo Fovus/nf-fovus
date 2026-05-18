@@ -7,8 +7,8 @@ import groovy.util.logging.Slf4j
 
 @Slf4j
 class FovusPipelineCache {
-    public static final String LEGACY_PIPELINE_CACHE_FILE_PATH = "./work/.nextflow/fovus/pipeline_cache.json"
-    public static final String PIPELINE_CACHE_FILE_PATH = ".fovus/pipeline_cache.json"
+    private static final String LEGACY_PIPELINE_CACHE_FILE_PATH = "./work/.nextflow/fovus/pipeline_cache.json"
+    private static final String PIPELINE_CACHE_FILE_PATH = ".fovus/pipeline_cache.json"
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
 
