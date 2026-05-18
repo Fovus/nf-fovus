@@ -7,7 +7,8 @@ import groovy.util.logging.Slf4j
 
 @Slf4j
 class FovusPipelineCache {
-    public static final String PIPELINE_CACHE_FILE_PATH = "./work/.nextflow/fovus/pipeline_cache.json"
+    public static final String LEGACY_PIPELINE_CACHE_FILE_PATH = "./work/.nextflow/fovus/pipeline_cache.json"
+    public static final String PIPELINE_CACHE_FILE_PATH = ".fovus/pipeline_cache.json"
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
 
@@ -74,16 +75,33 @@ class FovusPipelineCache {
 
     static String getPipelineId(String pipelineName) {
         File cacheFile = new File(PIPELINE_CACHE_FILE_PATH)
-        Map<String, String> pipelineCache = [:]
+        def existingPipelineId = null
 
         if (cacheFile.exists()) {
             try {
-                pipelineCache = OBJECT_MAPPER.readValue(cacheFile, new TypeReference<Map<String, String>>() {})
+                Map<String, String> pipelineCache = OBJECT_MAPPER.readValue(cacheFile, new TypeReference<Map<String, String>>() {
+                })
+                existingPipelineId = pipelineCache[pipelineName]
             } catch (IOException e) {
                 e.printStackTrace()
             }
         }
 
-        return pipelineCache[pipelineName]
+        if (!existingPipelineId) {
+            // Attempt to find the pipelineId from legacy path
+            File legacyCacheFile = new File(LEGACY_PIPELINE_CACHE_FILE_PATH)
+
+            if (legacyCacheFile.exists()) {
+                try {
+                    Map<String, String> legacyPipelineCache = OBJECT_MAPPER.readValue(legacyCacheFile, new TypeReference<Map<String, String>>() {
+                    })
+                    existingPipelineId = legacyPipelineCache[pipelineName]
+                } catch (IOException e) {
+                    e.printStackTrace()
+                }
+            }
+        }
+
+        return existingPipelineId
     }
 }
