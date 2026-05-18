@@ -83,6 +83,9 @@ class FovusPipelineCache {
                 Map<String, String> pipelineCache = OBJECT_MAPPER.readValue(cacheFile, new TypeReference<Map<String, String>>() {})
                 String pipelineId = pipelineCache[pipelineName]
                 if (pipelineId) {
+                    if (path == LEGACY_PIPELINE_CACHE_FILE_PATH) {
+                        updatePipelineCache(pipelineName, pipelineId)
+                    }
                     return pipelineId
                 }
             } catch (IOException e) {
