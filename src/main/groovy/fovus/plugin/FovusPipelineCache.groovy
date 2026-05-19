@@ -7,7 +7,8 @@ import groovy.util.logging.Slf4j
 
 @Slf4j
 class FovusPipelineCache {
-    public static final String PIPELINE_CACHE_FILE_PATH = "./work/.nextflow/fovus/pipeline_cache.json"
+    private static final String LEGACY_PIPELINE_CACHE_FILE_PATH = "./work/.nextflow/fovus/pipeline_cache.json"
+    private static final String PIPELINE_CACHE_FILE_PATH = ".fovus/pipeline_cache.json"
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
 
@@ -55,7 +56,7 @@ class FovusPipelineCache {
             try {
                 pipelineCache = OBJECT_MAPPER.readValue(cacheFile, new TypeReference<Map<String, String>>() {})
             } catch (IOException e) {
-                e.printStackTrace()
+                log.error("Failed to read pipeline cache from ${PIPELINE_CACHE_FILE_PATH}", e)
             }
         } else {
             // Ensure parent directories exist
@@ -68,22 +69,29 @@ class FovusPipelineCache {
             OBJECT_MAPPER.writerWithDefaultPrettyPrinter()
                     .writeValue(cacheFile, pipelineCache)
         } catch (IOException e) {
-            e.printStackTrace()
+            log.error("Failed to write pipeline cache to ${PIPELINE_CACHE_FILE_PATH}", e)
         }
     }
 
     static String getPipelineId(String pipelineName) {
-        File cacheFile = new File(PIPELINE_CACHE_FILE_PATH)
-        Map<String, String> pipelineCache = [:]
-
-        if (cacheFile.exists()) {
+        for (path in [PIPELINE_CACHE_FILE_PATH, LEGACY_PIPELINE_CACHE_FILE_PATH]) {
+            File cacheFile = new File(path)
+            if (!cacheFile.exists()) {
+                continue
+            }
             try {
-                pipelineCache = OBJECT_MAPPER.readValue(cacheFile, new TypeReference<Map<String, String>>() {})
+                Map<String, String> pipelineCache = OBJECT_MAPPER.readValue(cacheFile, new TypeReference<Map<String, String>>() {})
+                String pipelineId = pipelineCache[pipelineName]
+                if (pipelineId) {
+                    if (path == LEGACY_PIPELINE_CACHE_FILE_PATH) {
+                        updatePipelineCache(pipelineName, pipelineId)
+                    }
+                    return pipelineId
+                }
             } catch (IOException e) {
-                e.printStackTrace()
+                log.error("Failed to read pipeline cache from ${path}", e)
             }
         }
-
-        return pipelineCache[pipelineName]
+        return null
     }
 }
