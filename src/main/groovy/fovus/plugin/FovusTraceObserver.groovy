@@ -99,8 +99,7 @@ class FovusTraceObserver implements TraceObserverV2 {
 
     @Override
     void onFlowComplete() {
-        log.trace "[FOVUS] onFlowComplete triggered. hasFlowError=${hasFlowError}"
-        log.trace "[FOVUS] FlowComplete Script Meta: ${ScriptMeta.allProcesses()}"
+        log.trace "[FOVUS] Pipeline completed with status ${hasFlowError ? 'FAILED' : 'COMPLETED'}"
 
         final status = hasFlowError ? FovusPipelineStatus.FAILED : FovusPipelineStatus.COMPLETED
         pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), status)
@@ -110,11 +109,7 @@ class FovusTraceObserver implements TraceObserverV2 {
     void onFlowError(TaskEvent event) {
         hasFlowError = true
         lastFlowErrorEvent = event
-        log.trace "[FOVUS] onFlowError triggered for task `${event?.handler?.task?.lazyName() ?: 'unknown'}`. Deferring FAILED status update until onFlowComplete."
-        def processDefinitions = ScriptMeta.allProcesses()
-        processDefinitions.each { processDef ->
-            log.trace "[FOVUS] Process Config for ${processDef.getName()}: ${processDef.getProcessConfig()}"
-        }
+        log.trace "[FOVUS] Failure detected for task `${event?.handler?.task?.lazyName() ?: 'unknown'}`"
     }
 
     @PackageScope
