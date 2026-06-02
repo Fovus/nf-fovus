@@ -2,6 +2,7 @@ package fovus.plugin
 
 
 import groovy.transform.CompileStatic
+import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.Session
 import fovus.plugin.pipeline.FovusPipelineClient
@@ -18,12 +19,22 @@ class FovusTraceObserver implements TraceObserverV2 {
     private final Session session
     private final FovusConfig fovusConfig
     private final FovusPipelineClient pipelineClient
-    volatile boolean isPipelineFailed = false
+    private volatile boolean hasFlowError = false
+    private volatile TaskEvent lastFlowErrorEvent
 
     FovusTraceObserver(Session session) {
+        this(
+                session,
+                new FovusConfig(session.config.navigate('fovus') as Map),
+                new FovusPipelineClient()
+        )
+    }
+
+    @PackageScope
+    FovusTraceObserver(Session session, FovusConfig fovusConfig, FovusPipelineClient pipelineClient) {
         this.session = session
-        this.fovusConfig = new FovusConfig(session.config.navigate('fovus') as Map);
-        this.pipelineClient = new FovusPipelineClient();
+        this.fovusConfig = fovusConfig
+        this.pipelineClient = pipelineClient
     }
 
     @Override
@@ -81,25 +92,39 @@ class FovusTraceObserver implements TraceObserverV2 {
 
     @Override
     void onFlowBegin() {
+        hasFlowError = false
+        lastFlowErrorEvent = null
         pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), FovusPipelineStatus.RUNNING)
     }
 
     @Override
     void onFlowComplete() {
+        log.trace "[FOVUS] onFlowComplete triggered. hasFlowError=${hasFlowError}"
         log.trace "[FOVUS] FlowComplete Script Meta: ${ScriptMeta.allProcesses()}"
-        if (!isPipelineFailed) {
-            pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), FovusPipelineStatus.COMPLETED)
-        }
+
+        final status = hasFlowError ? FovusPipelineStatus.FAILED : FovusPipelineStatus.COMPLETED
+        pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), status)
     }
 
     @Override
     void onFlowError(TaskEvent event) {
-        isPipelineFailed = true
-        pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), FovusPipelineStatus.FAILED)
+        hasFlowError = true
+        lastFlowErrorEvent = event
+        log.trace "[FOVUS] onFlowError triggered for task `${event?.handler?.task?.lazyName() ?: 'unknown'}`. Deferring FAILED status update until onFlowComplete."
         def processDefinitions = ScriptMeta.allProcesses()
         processDefinitions.each { processDef ->
             log.trace "[FOVUS] Process Config for ${processDef.getName()}: ${processDef.getProcessConfig()}"
         }
+    }
+
+    @PackageScope
+    boolean hasFlowErrorState() {
+        return hasFlowError
+    }
+
+    @PackageScope
+    TaskEvent getLastFlowErrorEvent() {
+        return lastFlowErrorEvent
     }
 
     static ResourceConfiguration parseExtensionObject(Map ext) {
