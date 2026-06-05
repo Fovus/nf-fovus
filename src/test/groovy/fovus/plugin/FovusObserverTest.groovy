@@ -1,5 +1,6 @@
 package fovus.plugin
 
+import fovus.plugin.observers.FovusTraceObserver
 import fovus.plugin.pipeline.FovusPipeline
 import fovus.plugin.pipeline.FovusPipelineClient
 import fovus.plugin.pipeline.FovusPipelineStatus

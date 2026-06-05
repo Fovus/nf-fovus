@@ -1,4 +1,4 @@
-package fovus.plugin
+package fovus.plugin.observers
 
 import groovy.transform.CompileStatic
 import nextflow.Session
@@ -10,8 +10,9 @@ class FovusTraceObserverFactory implements TraceObserverFactoryV2 {
 
     @Override
     Collection<TraceObserverV2> create(Session session) {
-        final result = new ArrayList()
-        result.add(new FovusTraceObserver(session))
-        return result
+        return [
+            new FovusTraceObserver(session),
+            new FovusPublishDirObserver(session),
+        ]
     }
 }

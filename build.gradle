@@ -24,7 +24,7 @@ nextflowPlugin {
     provider = 'Fovus corporation'
     className = 'fovus.plugin.FovusPlugin'
     extensionPoints = [
-        'fovus.plugin.FovusTraceObserverFactory',
+        'fovus.plugin.observers.FovusTraceObserverFactory',
         'fovus.plugin.FovusExecutor',
         'fovus.plugin.util.FovusPathFactory',
         'fovus.plugin.util.FovusPathSerializer',

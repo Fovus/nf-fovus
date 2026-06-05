@@ -1,10 +1,11 @@
-package fovus.plugin
-
+package fovus.plugin.observers
 
 import groovy.transform.CompileStatic
 import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.Session
+import fovus.plugin.FovusConfig
+import fovus.plugin.FovusPipelineCache
 import fovus.plugin.pipeline.FovusPipelineClient
 import fovus.plugin.pipeline.FovusPipelineStatus
 import fovus.plugin.pipeline.ResourceConfiguration
