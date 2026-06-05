@@ -2,6 +2,7 @@ package fovus.plugin.util
 
 import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
+import nextflow.exception.AbortRunException
 import nextflow.processor.PublishDir
 import nextflow.processor.TaskConfig
 
@@ -13,34 +14,55 @@ import java.util.concurrent.ConcurrentHashMap
  * Resolves each task's {@code publishDir} entries to local filesystem paths
  * and ensures those paths are backed by mount-s3 before Nextflow writes to them.
  *
- * <p><b>Path normalisation rules (applied in order):</b>
+ * <p><b>Preconditions enforced (AbortRunException thrown if violated):</b>
+ * <ul>
+ *   <li>publishDir {@code mode} must be {@code copy}.</li>
+ *   <li>publishDir path must not be the bare pipeline working directory
+ *       ({@code ~/<pipelineId>}); a subdirectory is required.</li>
+ * </ul>
+ *
+ * <p><b>Path resolution rules (applied in order):</b>
  * <ol>
- *   <li>Paths already under {@code /fovus-storage} are skipped — already S3-backed.</li>
- *   <li>Paths under {@code ~/&lt;pipelineId&gt;/} are truncated to their first segment
- *       below the pipeline dir (e.g. {@code ~/pid/process1/sub} → {@code ~/pid/process1}).
- *       Mounting the first segment covers all sub-paths from that process without creating
- *       multiple mounts for the same logical output directory.</li>
- *   <li>All other absolute paths are used as-is. A prefix dedup check prevents mounting
- *       a child path when a parent is already mounted.</li>
+ *   <li>Paths under {@code /fovus-storage} are skipped — already S3-backed.</li>
+ *   <li>Paths under {@code ~/<pipelineId>/} are truncated to their first segment
+ *       (e.g. {@code ~/pid/process1/sub} → mount at {@code ~/pid/process1}).
+ *       Mounting the first segment covers all sub-paths from that process.</li>
+ *   <li>All other absolute paths: each path segment is tried in order from the
+ *       root down, skipping common Linux root directories. The first segment
+ *       that mount-s3 accepts becomes the mount point. If none succeeds,
+ *       AbortRunException is thrown.</li>
  * </ol>
  *
- * <p><b>Atomicity:</b> A {@link ConcurrentHashMap} keyed by local path holds
- * {@link CompletableFuture} sentinels so that if multiple threads race to mount
- * the same path, exactly one performs the mount and the rest wait on its result.
+ * <p><b>Atomicity:</b> A {@link ConcurrentHashMap} keyed by candidate local path holds
+ * {@link CompletableFuture}{@code <Boolean>} sentinels. The value is {@code true} if
+ * the path is mounted and {@code false} if mount-s3 rejected it. This ensures
+ * exactly one mount attempt per path across concurrent threads, and lets concurrent
+ * threads wait for an in-progress attempt before proceeding.
  */
 @Slf4j
 @CompileStatic
 class PublishDirResolver {
+
+    /**
+     * Single-segment absolute paths that are standard Linux root directories.
+     * These are skipped during absolute-path segment walking because mounting
+     * at a root directory would be too broad and is always rejected by mount-s3.
+     */
+    static final Set<String> COMMON_LINUX_DIRS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+        '/tmp', '/mnt', '/home', '/var', '/usr', '/etc', '/opt',
+        '/srv', '/proc', '/sys', '/dev', '/run', '/media', '/root'
+    )))
 
     private final MountS3Adapter mountS3Adapter
     private final String bucket
     private final String pipelineId
 
     /**
-     * Registry of paths that have been (or are being) mounted.
-     * Key: absolute local path. Value: future that completes when the mount succeeds.
+     * Registry of mount attempts keyed by candidate local path.
+     * {@code true} = mounted; {@code false} = mount-s3 rejected this path.
+     * Entries are never removed so concurrent threads always converge on the same result.
      */
-    private final ConcurrentHashMap<String, CompletableFuture<Void>> mountRegistry = new ConcurrentHashMap<>()
+    private final ConcurrentHashMap<String, CompletableFuture<Boolean>> mountRegistry = new ConcurrentHashMap<>()
 
     PublishDirResolver(MountS3Adapter mountS3Adapter, String bucket, String pipelineId) {
         this.mountS3Adapter = mountS3Adapter
@@ -49,9 +71,11 @@ class PublishDirResolver {
     }
 
     /**
-     * For each {@code publishDir} entry in the task config, computes the normalised
-     * local path and ensures it is mounted. If a parent path is already being mounted
-     * by another thread, waits for that mount to complete before returning.
+     * For each {@code publishDir} entry in the task config, validates the entry
+     * and ensures the target path is backed by mount-s3.
+     *
+     * @throws AbortRunException if mode is not {@code copy}, if the path is the bare
+     *                           pipeline directory, or if no mountable path segment is found
      */
     void resolve(TaskConfig config) {
         if (!bucket || !pipelineId || !config) return
@@ -59,117 +83,141 @@ class PublishDirResolver {
         final List<PublishDir> publishDirs = config.getPublishDir()
         if (!publishDirs) return
 
-        for (PublishDir publishDir : publishDirs) {
-            final String localPath = computeLocalPath(publishDir.path, this.pipelineId)
-            if (!localPath) continue
+        final String home = System.getProperty("user.home")
+        final String pipelineDir = home + '/' + pipelineId
 
-            // If a parent path is already mounted (or being mounted), wait for it to
-            // complete rather than skipping immediately — the mount may still be in
-            // progress on another thread.
-            final CompletableFuture<Void> coveringFuture = getCoveringMountFuture(localPath)
-            if (coveringFuture != null) {
-                log.trace "[FOVUS] publishDir ${publishDir.path} covered by an existing mount — waiting for completion"
-                coveringFuture.get()
-                continue
+        for (PublishDir publishDir : publishDirs) {
+            if (!publishDir.path) continue
+
+            final String pathStr = publishDir.path.toString()
+
+            if (pathStr.startsWith('/fovus-storage')) continue
+
+            if (publishDir.mode != PublishDir.Mode.COPY) {
+                throw new AbortRunException(
+                    "[FOVUS] publishDir '${pathStr}' uses mode '${publishDir.mode ?: 'symlink (default)'}'" +
+                    " — only 'copy' mode is supported for S3-backed publishDir in Fovus hosted mode"
+                )
             }
 
-            final String subpath = computeSubpath(localPath, this.pipelineId)
-            ensureMounted(localPath, this.bucket, subpath)
+            if (pathStr == pipelineDir) {
+                throw new AbortRunException(
+                    "[FOVUS] publishDir '${pathStr}' targets the pipeline working directory directly," +
+                    " which cannot be mounted. Use a subdirectory (e.g. '${pipelineDir}/results')."
+                )
+            }
+
+            if (pathStr.startsWith(pipelineDir + '/')) {
+                final String localPath = computeLocalPath(publishDir.path, pipelineId)
+                if (!localPath) continue
+                final String subpath = computeSubpath(localPath, pipelineId)
+                if (!ensureSegmentMounted(localPath, bucket, subpath)) {
+                    throw new AbortRunException(
+                        "[FOVUS] Failed to mount publishDir at '${localPath}' — mount-s3 rejected the path"
+                    )
+                }
+            } else {
+                resolveAbsolutePath(pathStr)
+            }
         }
     }
 
     /**
-     * Normalises a {@code publishDir} path to the local path that should be mounted.
+     * Walks the segments of an absolute path (skipping common Linux root directories)
+     * and mounts at the first segment that mount-s3 accepts.
      *
-     * @return the absolute local path to mount, or {@code null} if no mount is needed
+     * @throws AbortRunException if no segment is mountable
+     */
+    private void resolveAbsolutePath(String pathStr) {
+        for (String segment : buildPathSegments(pathStr)) {
+            if (COMMON_LINUX_DIRS.contains(segment)) continue
+
+            final String subpath = computeSubpath(segment, pipelineId)
+            if (ensureSegmentMounted(segment, bucket, subpath)) return
+        }
+
+        throw new AbortRunException(
+            "[FOVUS] Could not mount publishDir '${pathStr}' at any path segment" +
+            " — mount-s3 rejected all candidate prefixes"
+        )
+    }
+
+    /**
+     * Returns the ordered list of absolute path prefixes for a given path.
+     * e.g. {@code /tmp/my_results/sub} → {@code ["/tmp", "/tmp/my_results", "/tmp/my_results/sub"]}
+     */
+    static List<String> buildPathSegments(String absolutePath) {
+        final List<String> segments = new ArrayList<>()
+        String current = ''
+        for (String part : absolutePath.split('/')) {
+            if (part.isEmpty()) continue
+            current = current + '/' + part
+            segments.add(current)
+        }
+        return segments
+    }
+
+    /**
+     * Normalises a path under the pipeline working directory to its first segment,
+     * so that all sub-paths from the same process share a single mount point.
+     *
+     * @return the absolute local path to mount, or {@code null} if the segment is empty
      */
     String computeLocalPath(Path publishDirPath, String pipelineId) {
         if (!publishDirPath) return null
 
-        final String pathStr = publishDirPath.toString()
-
-        if (pathStr.startsWith('/fovus-storage')) return null
-
         final String home = System.getProperty("user.home")
         final String pipelinePrefix = home + '/' + pipelineId + '/'
+        final String relative = publishDirPath.toString().substring(pipelinePrefix.length())
+        if (!relative) return null
 
-        if (pathStr.startsWith(pipelinePrefix)) {
-            final String relative = pathStr.substring(pipelinePrefix.length())
-            if (!relative) return null
-            // Take only the first path segment so that all sub-paths under
-            // the same process output dir share a single mount point.
-            final String firstSegment = relative.contains('/') ? relative.split('/')[0] : relative
-            if (!firstSegment) return null
-            return pipelinePrefix + firstSegment
-        }
+        // Take only the first path segment so that all sub-paths under
+        // the same process output dir share a single mount point.
+        final String firstSegment = relative.contains('/') ? relative.split('/')[0] : relative
+        if (!firstSegment) return null
 
-        return pathStr
+        return pipelinePrefix + firstSegment
     }
 
     /**
-     * Derives the S3 key prefix to use as the mount source for a given local path.
-     * The convention is {@code pipelines/<pipelineId>/fovus-output/<suffix>} where
-     * {@code suffix} is the portion of the local path below the pipeline home dir,
-     * or the full absolute path with its leading slash stripped.
+     * Derives the S3 key prefix for a given local path.
+     * Convention: {@code pipelines/<pipelineId>/fovus-output/<suffix>}
+     * where suffix is the path below the pipeline dir, or the full absolute path
+     * with its leading slash stripped.
      */
     String computeSubpath(String localPath, String pipelineId) {
         final String home = System.getProperty("user.home")
         final String pipelinePrefix = home + '/' + pipelineId + '/'
 
-        String suffix
-        if (localPath.startsWith(pipelinePrefix)) {
-            suffix = localPath.substring(pipelinePrefix.length())
-        } else {
-            suffix = localPath.startsWith('/') ? localPath.substring(1) : localPath
-        }
+        final String suffix = localPath.startsWith(pipelinePrefix)
+            ? localPath.substring(pipelinePrefix.length())
+            : (localPath.startsWith('/') ? localPath.substring(1) : localPath)
 
         return "pipelines/${pipelineId}/fovus-output/${suffix}"
     }
 
     /**
-     * Returns the {@link CompletableFuture} of an existing registry entry whose path
-     * covers {@code target} (i.e. is a parent or exact match), or {@code null} if no
-     * such entry exists.
+     * Atomically attempts to mount {@code localPath}, ensuring only one thread
+     * performs the actual mount-s3 call even under concurrent access.
      *
-     * <p>Returning the future rather than a boolean lets the caller wait for an
-     * in-progress parent mount to complete before proceeding, avoiding a race where
-     * a task begins writing before the parent mount is ready.
+     * <p>{@link ConcurrentHashMap#putIfAbsent} is the atomic gate. The winning thread
+     * calls mount-s3 and completes the future with the result. All other threads block
+     * on {@link CompletableFuture#get} and share the winner's result. Entries remain
+     * in the registry on failure so subsequent callers immediately receive {@code false}
+     * without retrying.
      *
-     * <p>The {@code + '/'} guard prevents a false match between sibling paths that share
-     * a common string prefix (e.g. {@code /mnt/foo} must not match {@code /mnt/foobar}).
+     * @return true if the path is now mounted, false if mount-s3 rejected it
      */
-    private CompletableFuture<Void> getCoveringMountFuture(String target) {
-        for (Map.Entry<String, CompletableFuture<Void>> entry : mountRegistry.entrySet()) {
-            final String key = entry.key
-            if (target == key || target.startsWith(key + '/')) return entry.value
-        }
-        return null
-    }
-
-    /**
-     * Ensures exactly one mount-s3 call is made for {@code localPath}, even when
-     * called concurrently from multiple threads.
-     *
-     * <p>{@link ConcurrentHashMap#putIfAbsent} is the atomic gate: the thread that
-     * inserts its future wins and performs the mount; all other threads block on
-     * {@link CompletableFuture#get} until the winner's mount completes. If the
-     * mount fails, the registry entry is removed so the next caller can retry.
-     */
-    private void ensureMounted(String localPath, String bucket, String subpath) {
-        final CompletableFuture<Void> myFuture = new CompletableFuture<>()
-        final CompletableFuture<Void> existing = mountRegistry.putIfAbsent(localPath, myFuture)
+    private boolean ensureSegmentMounted(String localPath, String bucket, String subpath) {
+        final CompletableFuture<Boolean> myFuture = new CompletableFuture<>()
+        final CompletableFuture<Boolean> existing = mountRegistry.putIfAbsent(localPath, myFuture)
 
         if (existing == null) {
-            try {
-                mountS3Adapter.mount(bucket, subpath, localPath)
-                myFuture.complete(null)
-            } catch (Exception e) {
-                mountRegistry.remove(localPath)
-                myFuture.completeExceptionally(e)
-                throw e
-            }
-        } else {
-            existing.get()
+            final boolean success = mountS3Adapter.mount(bucket, subpath, localPath)
+            myFuture.complete(success)
+            return success
         }
+
+        return existing.get()
     }
 }

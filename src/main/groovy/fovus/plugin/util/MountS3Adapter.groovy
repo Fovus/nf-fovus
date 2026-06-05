@@ -22,9 +22,9 @@ class MountS3Adapter {
      * @param bucket    S3 bucket name (value of {@code FovusUserBucket} env var)
      * @param subpath   Key prefix inside the bucket, e.g. {@code pipelines/<id>/fovus-output/outputs}
      * @param localPath Absolute local path where the bucket prefix will be mounted
-     * @throws RuntimeException if mount-s3 exits with a non-zero code
+     * @return true if the mount succeeded, false if mount-s3 rejected the path
      */
-    void mount(String bucket, String subpath, String localPath) {
+    boolean mount(String bucket, String subpath, String localPath) {
         log.trace "[FOVUS] Mounting ${subpath} at ${localPath}"
 
         new File(localPath).mkdirs()
@@ -35,12 +35,12 @@ class MountS3Adapter {
             'mount-s3', bucket, localPath, '--prefix', subpath + '/'
         ])
 
-        if (result.exitCode != 0) {
-            throw new RuntimeException(
-                "mount-s3 failed for ${localPath} (exit ${result.exitCode}): ${result.error}"
-            )
+        if (result.exitCode == 0) {
+            log.trace "[FOVUS] Successfully mounted ${subpath} at ${localPath}"
+            return true
         }
 
-        log.trace "[FOVUS] Successfully mounted ${subpath} at ${localPath}"
+        log.trace "[FOVUS] Could not mount at ${localPath} (exit ${result.exitCode}): ${result.error}"
+        return false
     }
 }

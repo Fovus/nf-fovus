@@ -1,5 +1,6 @@
 package fovus.plugin.util
 
+import nextflow.exception.AbortRunException
 import nextflow.processor.PublishDir
 import nextflow.processor.TaskConfig
 import spock.lang.Specification
@@ -14,49 +15,44 @@ class PublishDirResolverTest extends Specification {
     static final String PIPELINE_ID = 'pipe-123'
     static final String BUCKET = 'test-bucket'
     static final String PIPELINE_PREFIX = HOME + '/' + PIPELINE_ID + '/'
+    static final String PIPELINE_DIR = HOME + '/' + PIPELINE_ID
+
+    private PublishDirResolver resolver(MountS3Adapter adapter = null) {
+        new PublishDirResolver(adapter, BUCKET, PIPELINE_ID)
+    }
 
     // ---------------------------------------------------------------------------
-    // computeLocalPath
+    // buildPathSegments
+    // ---------------------------------------------------------------------------
+
+    def 'buildPathSegments returns ordered path prefixes'() {
+        expect:
+        PublishDirResolver.buildPathSegments('/tmp/my_results/subfolder') ==
+            ['/tmp', '/tmp/my_results', '/tmp/my_results/subfolder']
+    }
+
+    def 'buildPathSegments handles single-segment path'() {
+        expect:
+        PublishDirResolver.buildPathSegments('/tmp') == ['/tmp']
+    }
+
+    // ---------------------------------------------------------------------------
+    // computeLocalPath (pipeline-dir case only)
     // ---------------------------------------------------------------------------
 
     def 'computeLocalPath: null path returns null'() {
-        given:
-        def resolver = new PublishDirResolver(null, BUCKET, PIPELINE_ID)
-
         expect:
-        resolver.computeLocalPath(null, PIPELINE_ID) == null
-    }
-
-    def 'computeLocalPath: path under /fovus-storage is skipped'() {
-        given:
-        def resolver = new PublishDirResolver(null, BUCKET, PIPELINE_ID)
-
-        expect:
-        resolver.computeLocalPath(Paths.get('/fovus-storage/pipelines/x/out'), PIPELINE_ID) == null
+        resolver().computeLocalPath(null, PIPELINE_ID) == null
     }
 
     def 'computeLocalPath: path under pipeline dir is truncated to first segment'() {
-        given:
-        def resolver = new PublishDirResolver(null, BUCKET, PIPELINE_ID)
-
         expect:
-        resolver.computeLocalPath(Paths.get(PIPELINE_PREFIX + 'process1/subdir/file.txt'), PIPELINE_ID) == PIPELINE_PREFIX + 'process1'
+        resolver().computeLocalPath(Paths.get(PIPELINE_PREFIX + 'process1/subdir/file.txt'), PIPELINE_ID) == PIPELINE_PREFIX + 'process1'
     }
 
     def 'computeLocalPath: path directly at first segment under pipeline dir'() {
-        given:
-        def resolver = new PublishDirResolver(null, BUCKET, PIPELINE_ID)
-
         expect:
-        resolver.computeLocalPath(Paths.get(PIPELINE_PREFIX + 'outputs'), PIPELINE_ID) == PIPELINE_PREFIX + 'outputs'
-    }
-
-    def 'computeLocalPath: other absolute path is returned as-is'() {
-        given:
-        def resolver = new PublishDirResolver(null, BUCKET, PIPELINE_ID)
-
-        expect:
-        resolver.computeLocalPath(Paths.get('/mnt/outputs/sample1'), PIPELINE_ID) == '/mnt/outputs/sample1'
+        resolver().computeLocalPath(Paths.get(PIPELINE_PREFIX + 'outputs'), PIPELINE_ID) == PIPELINE_PREFIX + 'outputs'
     }
 
     // ---------------------------------------------------------------------------
@@ -64,61 +60,124 @@ class PublishDirResolverTest extends Specification {
     // ---------------------------------------------------------------------------
 
     def 'computeSubpath: pipeline-dir path uses first segment as suffix'() {
-        given:
-        def resolver = new PublishDirResolver(null, BUCKET, PIPELINE_ID)
-
         expect:
-        resolver.computeSubpath(PIPELINE_PREFIX + 'process1', PIPELINE_ID) == "pipelines/${PIPELINE_ID}/fovus-output/process1"
+        resolver().computeSubpath(PIPELINE_PREFIX + 'process1', PIPELINE_ID) == "pipelines/${PIPELINE_ID}/fovus-output/process1"
     }
 
     def 'computeSubpath: other absolute path strips leading slash'() {
-        given:
-        def resolver = new PublishDirResolver(null, BUCKET, PIPELINE_ID)
-
         expect:
-        resolver.computeSubpath('/mnt/outputs/sample1', PIPELINE_ID) == "pipelines/${PIPELINE_ID}/fovus-output/mnt/outputs/sample1"
+        resolver().computeSubpath('/tmp/my_results', PIPELINE_ID) == "pipelines/${PIPELINE_ID}/fovus-output/tmp/my_results"
     }
 
     // ---------------------------------------------------------------------------
-    // prefix dedup (via resolve)
+    // Mode validation
     // ---------------------------------------------------------------------------
 
-    def 'resolve: child path waits on parent mount and does not mount independently'() {
+    def 'resolve: non-copy mode throws AbortRunException'() {
         given:
-        def adapter = Mock(MountS3Adapter)
-        def resolver = new PublishDirResolver(adapter, BUCKET, PIPELINE_ID)
-
-        def parentPublishDir = Mock(PublishDir)
-        parentPublishDir.path >> Paths.get('/mnt/outputs/sample1')
-
-        def childPublishDir = Mock(PublishDir)
-        childPublishDir.path >> Paths.get('/mnt/outputs/sample1/subfolder')
+        def publishDir = Mock(PublishDir)
+        publishDir.path >> Paths.get(PIPELINE_PREFIX + 'results')
+        publishDir.mode >> PublishDir.Mode.SYMLINK
 
         def config = Mock(TaskConfig)
-        config.getPublishDir() >>> [
-            [parentPublishDir],
-            [childPublishDir],
-        ]
+        config.getPublishDir() >> [publishDir]
 
         when:
-        resolver.resolve(config)
-        resolver.resolve(config)
+        resolver().resolve(config)
 
         then:
-        1 * adapter.mount(_, _, '/mnt/outputs/sample1')
-        0 * adapter.mount(_, _, '/mnt/outputs/sample1/subfolder')
+        thrown(AbortRunException)
     }
 
-    def 'resolve: same normalized path from two publishDir entries triggers one mount'() {
+    def 'resolve: null mode (default symlink) throws AbortRunException'() {
+        given:
+        def publishDir = Mock(PublishDir)
+        publishDir.path >> Paths.get(PIPELINE_PREFIX + 'results')
+        publishDir.mode >> null
+
+        def config = Mock(TaskConfig)
+        config.getPublishDir() >> [publishDir]
+
+        when:
+        resolver().resolve(config)
+
+        then:
+        thrown(AbortRunException)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Pipeline dir guard
+    // ---------------------------------------------------------------------------
+
+    def 'resolve: bare pipeline dir path throws AbortRunException'() {
+        given:
+        def publishDir = Mock(PublishDir)
+        publishDir.path >> Paths.get(PIPELINE_DIR)
+        publishDir.mode >> PublishDir.Mode.COPY
+
+        def config = Mock(TaskConfig)
+        config.getPublishDir() >> [publishDir]
+
+        when:
+        resolver().resolve(config)
+
+        then:
+        thrown(AbortRunException)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Pipeline-dir case: first-segment mount
+    // ---------------------------------------------------------------------------
+
+    def 'resolve: pipeline-dir path mounts at first segment'() {
         given:
         def adapter = Mock(MountS3Adapter)
-        def resolver = new PublishDirResolver(adapter, BUCKET, PIPELINE_ID)
+        adapter.mount(_, _, _) >> true
+        def publishDir = Mock(PublishDir)
+        publishDir.path >> Paths.get(PIPELINE_PREFIX + 'process1/sub')
+        publishDir.mode >> PublishDir.Mode.COPY
+
+        def config = Mock(TaskConfig)
+        config.getPublishDir() >> [publishDir]
+
+        when:
+        resolver(adapter).resolve(config)
+
+        then:
+        1 * adapter.mount(_, _, PIPELINE_PREFIX + 'process1') >> true
+    }
+
+    def 'resolve: pipeline-dir mount failure throws AbortRunException'() {
+        given:
+        def adapter = Mock(MountS3Adapter)
+        adapter.mount(_, _, _) >> false
+        def publishDir = Mock(PublishDir)
+        publishDir.path >> Paths.get(PIPELINE_PREFIX + 'results')
+        publishDir.mode >> PublishDir.Mode.COPY
+
+        def config = Mock(TaskConfig)
+        config.getPublishDir() >> [publishDir]
+
+        when:
+        resolver(adapter).resolve(config)
+
+        then:
+        thrown(AbortRunException)
+    }
+
+    def 'resolve: two pipeline-dir entries with same first segment trigger one mount'() {
+        given:
+        def adapter = Mock(MountS3Adapter)
+        adapter.mount(_, _, _) >> true
+        def resolver = resolver(adapter)
 
         def publishDir1 = Mock(PublishDir)
         publishDir1.path >> Paths.get(PIPELINE_PREFIX + 'process1/sub1')
+        publishDir1.mode >> PublishDir.Mode.COPY
 
         def publishDir2 = Mock(PublishDir)
         publishDir2.path >> Paths.get(PIPELINE_PREFIX + 'process1/sub2')
+        publishDir2.mode >> PublishDir.Mode.COPY
 
         def config = Mock(TaskConfig)
         config.getPublishDir() >> [publishDir1, publishDir2]
@@ -127,7 +186,95 @@ class PublishDirResolverTest extends Specification {
         resolver.resolve(config)
 
         then:
-        1 * adapter.mount(_, _, PIPELINE_PREFIX + 'process1')
+        1 * adapter.mount(_, _, PIPELINE_PREFIX + 'process1') >> true
+    }
+
+    // ---------------------------------------------------------------------------
+    // Absolute path: segment walking
+    // ---------------------------------------------------------------------------
+
+    def 'resolve: absolute path skips common Linux dir and mounts at first valid segment'() {
+        given:
+        def adapter = Mock(MountS3Adapter)
+        // /tmp is skipped; /tmp/my_results succeeds
+        adapter.mount(_, _, '/tmp/my_results') >> true
+
+        def publishDir = Mock(PublishDir)
+        publishDir.path >> Paths.get('/tmp/my_results/subfolder')
+        publishDir.mode >> PublishDir.Mode.COPY
+
+        def config = Mock(TaskConfig)
+        config.getPublishDir() >> [publishDir]
+
+        when:
+        resolver(adapter).resolve(config)
+
+        then:
+        0 * adapter.mount(_, _, '/tmp')
+        1 * adapter.mount(_, _, '/tmp/my_results') >> true
+        0 * adapter.mount(_, _, '/tmp/my_results/subfolder')
+    }
+
+    def 'resolve: absolute path falls through to deeper segment when shallower fails'() {
+        given:
+        def adapter = Mock(MountS3Adapter)
+        adapter.mount(_, _, '/tmp/my_results') >> false
+        adapter.mount(_, _, '/tmp/my_results/subfolder') >> true
+
+        def publishDir = Mock(PublishDir)
+        publishDir.path >> Paths.get('/tmp/my_results/subfolder')
+        publishDir.mode >> PublishDir.Mode.COPY
+
+        def config = Mock(TaskConfig)
+        config.getPublishDir() >> [publishDir]
+
+        when:
+        resolver(adapter).resolve(config)
+
+        then:
+        1 * adapter.mount(_, _, '/tmp/my_results') >> false
+        1 * adapter.mount(_, _, '/tmp/my_results/subfolder') >> true
+    }
+
+    def 'resolve: absolute path with no mountable segment throws AbortRunException'() {
+        given:
+        def adapter = Mock(MountS3Adapter)
+        adapter.mount(_, _, _) >> false
+
+        def publishDir = Mock(PublishDir)
+        publishDir.path >> Paths.get('/tmp/my_results')
+        publishDir.mode >> PublishDir.Mode.COPY
+
+        def config = Mock(TaskConfig)
+        config.getPublishDir() >> [publishDir]
+
+        when:
+        resolver(adapter).resolve(config)
+
+        then:
+        thrown(AbortRunException)
+    }
+
+    def 'resolve: second task reuses cached mount result without re-mounting'() {
+        given:
+        def adapter = Mock(MountS3Adapter)
+        adapter.mount(_, _, '/tmp/my_results') >> true
+        def resolver = resolver(adapter)
+
+        def publishDir = Mock(PublishDir)
+        publishDir.path >> Paths.get('/tmp/my_results/subfolder')
+        publishDir.mode >> PublishDir.Mode.COPY
+
+        def config = Mock(TaskConfig)
+        config.getPublishDir() >> [publishDir]
+
+        when:
+        resolver.resolve(config)
+        resolver.resolve(config)
+
+        then:
+        // mount called once; second call hits registry and returns cached true
+        1 * adapter.mount(_, _, '/tmp/my_results') >> true
     }
 
     // ---------------------------------------------------------------------------
@@ -138,10 +285,9 @@ class PublishDirResolverTest extends Specification {
         given:
         def mountCount = new java.util.concurrent.atomic.AtomicInteger(0)
         def adapter = Mock(MountS3Adapter)
-        adapter.mount(_, _, _) >> { mountCount.incrementAndGet() }
+        adapter.mount(_, _, _) >> { mountCount.incrementAndGet(); true }
 
-        def resolver = new PublishDirResolver(adapter, BUCKET, PIPELINE_ID)
-        def path = Paths.get('/mnt/shared/output')
+        def resolver = resolver(adapter)
 
         def threads = 10
         def latch = new CountDownLatch(1)
@@ -150,7 +296,8 @@ class PublishDirResolverTest extends Specification {
             pool.submit({
                 latch.await()
                 def publishDir = Mock(PublishDir)
-                publishDir.path >> path
+                publishDir.path >> Paths.get('/tmp/shared/output')
+                publishDir.mode >> PublishDir.Mode.COPY
                 def config = Mock(TaskConfig)
                 config.getPublishDir() >> [publishDir]
                 resolver.resolve(config)
