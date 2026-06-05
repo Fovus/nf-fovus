@@ -27,6 +27,6 @@ class FovusEnvironment {
 
     /** S3 bucket provisioned for the Fovus user; set only in hosted mode. */
     static String getFovusUserBucket() {
-        return System.getenv("FovusUserBucket")
+        return System.getenv("FOVUS_USER_BUCKET")
     }
 }
