@@ -38,10 +38,12 @@ class FovusPublishDirObserver implements TraceObserverV2 {
     @Override
     void onTaskPending(TaskEvent event) {
         if (!FovusEnvironment.isHostedMode()) return
+        final task = event?.handler?.task
+        if (!task) return
         try {
-            resolver.resolve(event.handler.task.config)
+            resolver.resolve(task.config)
         } catch (Exception e) {
-            log.error "[FOVUS] Failed to mount publishDir for pending task ${event.handler.task.lazyName()}: ${e.message}", e
+            log.error "[FOVUS] Failed to mount publishDir for pending task ${task.lazyName()}: ${e.message}", e
             throw e
         }
     }
@@ -49,10 +51,12 @@ class FovusPublishDirObserver implements TraceObserverV2 {
     @Override
     void onTaskCached(TaskEvent event) {
         if (!FovusEnvironment.isHostedMode()) return
+        final task = event?.handler?.task
+        if (!task) return
         try {
-            resolver.resolve(event.handler.task.config)
+            resolver.resolve(task.config)
         } catch (Exception e) {
-            log.error "[FOVUS] Failed to mount publishDir for cached task ${event.handler.task.lazyName()}: ${e.message}", e
+            log.error "[FOVUS] Failed to mount publishDir for cached task ${task.lazyName()}: ${e.message}", e
             throw e
         }
     }

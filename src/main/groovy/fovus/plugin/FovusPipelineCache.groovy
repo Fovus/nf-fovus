@@ -18,7 +18,7 @@ class FovusPipelineCache {
                                         String pipelineName) {
         final pipelineIdFromEnv = FovusEnvironment.getPipelineId()
 
-        log.trace("[FOVUS] WORKFLOW_HOST: ${System.getenv("WORKFLOW_HOST")}")
+        log.trace("[FOVUS] WORKFLOW_HOST: ${FovusEnvironment.getWorkflowHost()}")
         log.trace("[FOVUS] PIPELINE_ID: ${pipelineIdFromEnv}")
         // In REMOTE workflow mode, prefer an explicit pipeline ID from env over local cache/creation.
         if (FovusEnvironment.isHostedMode() && pipelineIdFromEnv) {

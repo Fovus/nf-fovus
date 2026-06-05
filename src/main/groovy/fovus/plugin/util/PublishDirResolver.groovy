@@ -50,11 +50,11 @@ class PublishDirResolver {
 
     /**
      * For each {@code publishDir} entry in the task config, computes the normalised
-     * local path and ensures it is mounted. Skips entries already covered by a
-     * previously mounted parent path.
+     * local path and ensures it is mounted. If a parent path is already being mounted
+     * by another thread, waits for that mount to complete before returning.
      */
     void resolve(TaskConfig config) {
-        if (!bucket || !pipelineId) return
+        if (!bucket || !pipelineId || !config) return
 
         final List<PublishDir> publishDirs = config.getPublishDir()
         if (!publishDirs) return
@@ -63,8 +63,13 @@ class PublishDirResolver {
             final String localPath = computeLocalPath(publishDir.path, this.pipelineId)
             if (!localPath) continue
 
-            if (isCoveredByExistingMount(localPath)) {
-                log.trace "[FOVUS] publishDir ${publishDir.path} already covered by an existing mount — skipping"
+            // If a parent path is already mounted (or being mounted), wait for it to
+            // complete rather than skipping immediately — the mount may still be in
+            // progress on another thread.
+            final CompletableFuture<Void> coveringFuture = getCoveringMountFuture(localPath)
+            if (coveringFuture != null) {
+                log.trace "[FOVUS] publishDir ${publishDir.path} covered by an existing mount — waiting for completion"
+                coveringFuture.get()
                 continue
             }
 
@@ -122,17 +127,23 @@ class PublishDirResolver {
     }
 
     /**
-     * Returns true if any path already in the registry is a prefix of {@code target},
-     * meaning the target is nested inside an already-mounted directory.
+     * Returns the {@link CompletableFuture} of an existing registry entry whose path
+     * covers {@code target} (i.e. is a parent or exact match), or {@code null} if no
+     * such entry exists.
+     *
+     * <p>Returning the future rather than a boolean lets the caller wait for an
+     * in-progress parent mount to complete before proceeding, avoiding a race where
+     * a task begins writing before the parent mount is ready.
      *
      * <p>The {@code + '/'} guard prevents a false match between sibling paths that share
      * a common string prefix (e.g. {@code /mnt/foo} must not match {@code /mnt/foobar}).
      */
-    private boolean isCoveredByExistingMount(String target) {
-        for (String key : mountRegistry.keySet()) {
-            if (target == key || target.startsWith(key + '/')) return true
+    private CompletableFuture<Void> getCoveringMountFuture(String target) {
+        for (Map.Entry<String, CompletableFuture<Void>> entry : mountRegistry.entrySet()) {
+            final String key = entry.key
+            if (target == key || target.startsWith(key + '/')) return entry.value
         }
-        return false
+        return null
     }
 
     /**

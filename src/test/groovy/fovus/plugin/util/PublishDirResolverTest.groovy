@@ -83,7 +83,7 @@ class PublishDirResolverTest extends Specification {
     // prefix dedup (via resolve)
     // ---------------------------------------------------------------------------
 
-    def 'resolve: child path is skipped when parent already mounted'() {
+    def 'resolve: child path waits on parent mount and does not mount independently'() {
         given:
         def adapter = Mock(MountS3Adapter)
         def resolver = new PublishDirResolver(adapter, BUCKET, PIPELINE_ID)
