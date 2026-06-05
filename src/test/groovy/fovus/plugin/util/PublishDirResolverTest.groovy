@@ -42,31 +42,31 @@ class PublishDirResolverTest extends Specification {
 
     def 'computeLocalPath: null path returns null'() {
         expect:
-        resolver().computeLocalPath(null, PIPELINE_ID) == null
+        resolver().computeLocalPath(null) == null
     }
 
     def 'computeLocalPath: path under pipeline dir is truncated to first segment'() {
         expect:
-        resolver().computeLocalPath(Paths.get(PIPELINE_PREFIX + 'process1/subdir/file.txt'), PIPELINE_ID) == PIPELINE_PREFIX + 'process1'
+        resolver().computeLocalPath(Paths.get(PIPELINE_PREFIX + 'process1/subdir/file.txt')) == PIPELINE_PREFIX + 'process1'
     }
 
     def 'computeLocalPath: path directly at first segment under pipeline dir'() {
         expect:
-        resolver().computeLocalPath(Paths.get(PIPELINE_PREFIX + 'outputs'), PIPELINE_ID) == PIPELINE_PREFIX + 'outputs'
+        resolver().computeLocalPath(Paths.get(PIPELINE_PREFIX + 'outputs')) == PIPELINE_PREFIX + 'outputs'
     }
 
     // ---------------------------------------------------------------------------
-    // computeSubpath
+    // computeMountPrefix
     // ---------------------------------------------------------------------------
 
-    def 'computeSubpath: pipeline-dir path uses first segment as suffix'() {
+    def 'computeMountPrefix: pipeline-dir path uses first segment as suffix'() {
         expect:
-        resolver().computeSubpath(PIPELINE_PREFIX + 'process1', PIPELINE_ID) == "pipelines/${PIPELINE_ID}/fovus-output/process1"
+        resolver().computeMountPrefix(PIPELINE_PREFIX + 'process1') == "pipelines/${PIPELINE_ID}/fovus-output/process1"
     }
 
-    def 'computeSubpath: other absolute path strips leading slash'() {
+    def 'computeMountPrefix: other absolute path strips leading slash'() {
         expect:
-        resolver().computeSubpath('/tmp/my_results', PIPELINE_ID) == "pipelines/${PIPELINE_ID}/fovus-output/tmp/my_results"
+        resolver().computeMountPrefix('/tmp/my_results') == "pipelines/${PIPELINE_ID}/fovus-output/tmp/my_results"
     }
 
     // ---------------------------------------------------------------------------

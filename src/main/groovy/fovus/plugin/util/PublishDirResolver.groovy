@@ -83,8 +83,7 @@ class PublishDirResolver {
         final List<PublishDir> publishDirs = config.getPublishDir()
         if (!publishDirs) return
 
-        final String home = System.getProperty("user.home")
-        final String pipelineDir = home + '/' + pipelineId
+        final String pipelineDir = pipelineDirectory()
 
         for (PublishDir publishDir : publishDirs) {
             if (!publishDir.path) continue
@@ -96,11 +95,11 @@ class PublishDirResolver {
             if (publishDir.mode != PublishDir.Mode.COPY) {
                 throw new AbortRunException(
                     "[FOVUS] publishDir '${pathStr}' uses mode '${publishDir.mode ?: 'symlink (default)'}'" +
-                    " — only 'copy' mode is supported for S3-backed publishDir in Fovus hosted mode"
+                    " — only 'copy' mode is supported for publishDir in Fovus hosted mode"
                 )
             }
 
-            if (pathStr == pipelineDir) {
+            if (pathStr == pipelineDir || pathStr == pipelineDir + '/') {
                 throw new AbortRunException(
                     "[FOVUS] publishDir '${pathStr}' targets the pipeline working directory directly," +
                     " which cannot be mounted. Use a subdirectory (e.g. '${pipelineDir}/results')."
@@ -108,10 +107,10 @@ class PublishDirResolver {
             }
 
             if (pathStr.startsWith(pipelineDir + '/')) {
-                final String localPath = computeLocalPath(publishDir.path, pipelineId)
+                final String localPath = computeLocalPath(publishDir.path)
                 if (!localPath) continue
-                final String subpath = computeSubpath(localPath, pipelineId)
-                if (!ensureSegmentMounted(localPath, bucket, subpath)) {
+                final String mountPrefix = computeMountPrefix(localPath)
+                if (!ensureSegmentMounted(localPath, bucket, mountPrefix)) {
                     throw new AbortRunException(
                         "[FOVUS] Failed to mount publishDir at '${localPath}' — mount-s3 rejected the path"
                     )
@@ -132,8 +131,8 @@ class PublishDirResolver {
         for (String segment : buildPathSegments(pathStr)) {
             if (COMMON_LINUX_DIRS.contains(segment)) continue
 
-            final String subpath = computeSubpath(segment, pipelineId)
-            if (ensureSegmentMounted(segment, bucket, subpath)) return
+            final String mountPrefix = computeMountPrefix(segment)
+            if (ensureSegmentMounted(segment, bucket, mountPrefix)) return
         }
 
         throw new AbortRunException(
@@ -163,11 +162,10 @@ class PublishDirResolver {
      *
      * @return the absolute local path to mount, or {@code null} if the segment is empty
      */
-    String computeLocalPath(Path publishDirPath, String pipelineId) {
+    String computeLocalPath(Path publishDirPath) {
         if (!publishDirPath) return null
 
-        final String home = System.getProperty("user.home")
-        final String pipelinePrefix = home + '/' + pipelineId + '/'
+        final String pipelinePrefix = pipelineDirectory() + '/'
         final String relative = publishDirPath.toString().substring(pipelinePrefix.length())
         if (!relative) return null
 
@@ -185,9 +183,8 @@ class PublishDirResolver {
      * where suffix is the path below the pipeline dir, or the full absolute path
      * with its leading slash stripped.
      */
-    String computeSubpath(String localPath, String pipelineId) {
-        final String home = System.getProperty("user.home")
-        final String pipelinePrefix = home + '/' + pipelineId + '/'
+    String computeMountPrefix(String localPath) {
+        final String pipelinePrefix = pipelineDirectory() + '/'
 
         final String suffix = localPath.startsWith(pipelinePrefix)
             ? localPath.substring(pipelinePrefix.length())
@@ -208,16 +205,21 @@ class PublishDirResolver {
      *
      * @return true if the path is now mounted, false if mount-s3 rejected it
      */
-    private boolean ensureSegmentMounted(String localPath, String bucket, String subpath) {
-        final CompletableFuture<Boolean> myFuture = new CompletableFuture<>()
-        final CompletableFuture<Boolean> existing = mountRegistry.putIfAbsent(localPath, myFuture)
+    private boolean ensureSegmentMounted(String localPath, String bucket, String mountPrefix) {
+        final CompletableFuture<Boolean> ownFuture = new CompletableFuture<>()
+        final CompletableFuture<Boolean> registeredFuture = mountRegistry.putIfAbsent(localPath, ownFuture)
 
-        if (existing == null) {
-            final boolean success = mountS3Adapter.mount(bucket, subpath, localPath)
-            myFuture.complete(success)
-            return success
+        if (registeredFuture == null) {
+            final boolean isMounted = mountS3Adapter.mount(bucket, mountPrefix, localPath)
+            ownFuture.complete(isMounted)
+            return isMounted
         }
 
-        return existing.get()
+        return registeredFuture.get()
+    }
+
+    /** Returns the pipeline working directory path: {@code ~/<pipelineId>}. */
+    private String pipelineDirectory() {
+        return System.getProperty("user.home") + '/' + pipelineId
     }
 }
