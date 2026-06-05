@@ -20,23 +20,23 @@ class MountS3Adapter {
      * at {@code localPath}, giving effectively unlimited storage at that path.
      *
      * @param bucket    S3 bucket name (value of {@code FovusUserBucket} env var)
-     * @param subpath   Key prefix inside the bucket, e.g. {@code pipelines/<id>/fovus-output/outputs}
-     * @param localPath Absolute local path where the bucket prefix will be mounted
+     * @param mountPrefix Key prefix inside the bucket, e.g. {@code pipelines/<id>/fovus-output/outputs}
+     * @param localPath   Absolute local path where the bucket prefix will be mounted
      * @return true if the mount succeeded, false if mount-s3 rejected the path
      */
-    boolean mount(String bucket, String subpath, String localPath) {
-        log.trace "[FOVUS] Mounting ${subpath} at ${localPath}"
+    boolean mount(String bucket, String mountPrefix, String localPath) {
+        log.trace "[FOVUS] Mounting ${mountPrefix} at ${localPath}"
 
         new File(localPath).mkdirs()
 
         // Trailing slash on the prefix is required by mount-s3 to scope the
         // mount to exactly that prefix and not to adjacent keys at the same level.
         final result = FovusUtil.executeCommand([
-            'mount-s3', bucket, localPath, '--prefix', subpath + '/'
+            'mount-s3', bucket, localPath, '--prefix', mountPrefix + '/'
         ])
 
         if (result.exitCode == 0) {
-            log.trace "[FOVUS] Successfully mounted ${subpath} at ${localPath}"
+            log.trace "[FOVUS] Successfully mounted ${mountPrefix} at ${localPath}"
             return true
         }
 

@@ -83,7 +83,7 @@ class PublishDirResolver {
         final List<PublishDir> publishDirs = config.getPublishDir()
         if (!publishDirs) return
 
-        final String pipelineDir = pipelineDirectory()
+        final String pipelineDir = getPipelineDirectory()
 
         for (PublishDir publishDir : publishDirs) {
             if (!publishDir.path) continue
@@ -165,7 +165,7 @@ class PublishDirResolver {
     String computeLocalPath(Path publishDirPath) {
         if (!publishDirPath) return null
 
-        final String pipelinePrefix = pipelineDirectory() + '/'
+        final String pipelinePrefix = getPipelineDirectory() + '/'
         final String relative = publishDirPath.toString().substring(pipelinePrefix.length())
         if (!relative) return null
 
@@ -184,7 +184,7 @@ class PublishDirResolver {
      * with its leading slash stripped.
      */
     String computeMountPrefix(String localPath) {
-        final String pipelinePrefix = pipelineDirectory() + '/'
+        final String pipelinePrefix = getPipelineDirectory() + '/'
 
         final String suffix = localPath.startsWith(pipelinePrefix)
             ? localPath.substring(pipelinePrefix.length())
@@ -219,7 +219,7 @@ class PublishDirResolver {
     }
 
     /** Returns the pipeline working directory path: {@code ~/<pipelineId>}. */
-    private String pipelineDirectory() {
+    private String getPipelineDirectory() {
         return System.getProperty("user.home") + '/' + pipelineId
     }
 }
