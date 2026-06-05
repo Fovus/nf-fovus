@@ -4,6 +4,7 @@ import fovus.plugin.util.FovusEnvironment
 import fovus.plugin.util.MountS3Adapter
 import fovus.plugin.util.PublishDirResolver
 import groovy.transform.CompileStatic
+import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.Session
 import nextflow.trace.TraceObserverV2
@@ -13,13 +14,17 @@ import nextflow.trace.event.TaskEvent
 @CompileStatic
 class FovusPublishDirObserver implements TraceObserverV2 {
 
+    private final Session session
     private final PublishDirResolver resolver
 
     FovusPublishDirObserver(Session session) {
-        this(buildResolver())
+        this.session = session
+        this.resolver = buildResolver()
     }
 
-    FovusPublishDirObserver(PublishDirResolver resolver) {
+    @PackageScope
+    FovusPublishDirObserver(Session session, PublishDirResolver resolver) {
+        this.session = session
         this.resolver = resolver
     }
 
@@ -44,7 +49,7 @@ class FovusPublishDirObserver implements TraceObserverV2 {
             resolver.resolve(task.config)
         } catch (Exception e) {
             log.error "[FOVUS] Failed to mount publishDir for pending task ${task.lazyName()}: ${e.message}", e
-            throw e
+            session.abort(e)
         }
     }
 

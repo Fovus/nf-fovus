@@ -44,8 +44,10 @@ class FovusObserverTest extends Specification {
 
     def 'onFlowComplete should send COMPLETED when no flow error was recorded'() {
         given:
+        def session = Mock(Session)
+        session.isAborted() >> false
         def pipelineClient = Mock(FovusPipelineClient)
-        def observer = new FovusTraceObserver(Mock(Session), TEST_CONFIG, pipelineClient)
+        def observer = new FovusTraceObserver(session, TEST_CONFIG, pipelineClient)
 
         when:
         observer.onFlowComplete()
@@ -57,9 +59,26 @@ class FovusObserverTest extends Specification {
 
     def 'onFlowComplete should send FAILED when a flow error was recorded'() {
         given:
+        def session = Mock(Session)
+        session.isAborted() >> false
         def pipelineClient = Mock(FovusPipelineClient)
-        def observer = new FovusTraceObserver(Mock(Session), TEST_CONFIG, pipelineClient)
+        def observer = new FovusTraceObserver(session, TEST_CONFIG, pipelineClient)
         observer.onFlowError(new TaskEvent(null, null))
+
+        when:
+        observer.onFlowComplete()
+
+        then:
+        1 * pipelineClient.getPipeline() >> TEST_PIPELINE
+        1 * pipelineClient.updatePipelineStatus(TEST_CONFIG, TEST_PIPELINE, FovusPipelineStatus.FAILED)
+    }
+
+    def 'onFlowComplete should send FAILED when session was aborted'() {
+        given:
+        def session = Mock(Session)
+        session.isAborted() >> true
+        def pipelineClient = Mock(FovusPipelineClient)
+        def observer = new FovusTraceObserver(session, TEST_CONFIG, pipelineClient)
 
         when:
         observer.onFlowComplete()

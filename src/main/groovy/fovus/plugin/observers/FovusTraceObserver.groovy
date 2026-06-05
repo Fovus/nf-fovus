@@ -100,9 +100,10 @@ class FovusTraceObserver implements TraceObserverV2 {
 
     @Override
     void onFlowComplete() {
-        log.trace "[FOVUS] Pipeline completed with status ${hasFlowError ? 'FAILED' : 'COMPLETED'}"
+        final boolean isFailed = hasFlowError || session.isAborted()
+        log.trace "[FOVUS] Pipeline completed with status ${isFailed ? 'FAILED' : 'COMPLETED'}"
 
-        final status = hasFlowError ? FovusPipelineStatus.FAILED : FovusPipelineStatus.COMPLETED
+        final status = isFailed ? FovusPipelineStatus.FAILED : FovusPipelineStatus.COMPLETED
         pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), status)
     }
 
