@@ -87,4 +87,20 @@ class FovusObserverTest extends Specification {
         1 * pipelineClient.getPipeline() >> TEST_PIPELINE
         1 * pipelineClient.updatePipelineStatus(TEST_CONFIG, TEST_PIPELINE, FovusPipelineStatus.FAILED)
     }
+
+    def 'onFlowComplete should update pipeline status exactly once when called multiple times'() {
+        given:
+        def session = Mock(Session)
+        session.isAborted() >> false
+        def pipelineClient = Mock(FovusPipelineClient)
+        def observer = new FovusTraceObserver(session, TEST_CONFIG, pipelineClient)
+
+        when:
+        observer.onFlowComplete()
+        observer.onFlowComplete()
+
+        then:
+        1 * pipelineClient.getPipeline() >> TEST_PIPELINE
+        1 * pipelineClient.updatePipelineStatus(TEST_CONFIG, TEST_PIPELINE, FovusPipelineStatus.COMPLETED)
+    }
 }

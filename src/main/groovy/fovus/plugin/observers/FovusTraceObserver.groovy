@@ -13,6 +13,8 @@ import nextflow.script.ScriptMeta
 import nextflow.trace.TraceObserverV2
 import nextflow.trace.event.TaskEvent
 
+import java.util.concurrent.atomic.AtomicBoolean
+
 @Slf4j
 @CompileStatic
 class FovusTraceObserver implements TraceObserverV2 {
@@ -22,6 +24,9 @@ class FovusTraceObserver implements TraceObserverV2 {
     private final FovusPipelineClient pipelineClient
     private volatile boolean hasFlowError = false
     private volatile TaskEvent lastFlowErrorEvent
+    // session.abort() can cause onFlowComplete to fire from two threads concurrently;
+    // this guard ensures the pipeline status update and headnode cleanup run exactly once.
+    private final AtomicBoolean isCompletionReported = new AtomicBoolean(false)
 
     FovusTraceObserver(Session session) {
         this(
@@ -100,6 +105,8 @@ class FovusTraceObserver implements TraceObserverV2 {
 
     @Override
     void onFlowComplete() {
+        if (!isCompletionReported.compareAndSet(false, true)) return
+
         final boolean isFailed = hasFlowError || session.isAborted()
         log.trace "[FOVUS] Pipeline completed with status ${isFailed ? 'FAILED' : 'COMPLETED'}"
 
