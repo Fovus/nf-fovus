@@ -1,6 +1,7 @@
 package fovus.plugin
 
 import fovus.plugin.job.ContainerizedEnvironment
+import fovus.plugin.util.PublishDirResolver
 import groovy.util.logging.Slf4j
 import nextflow.container.DockerConfig
 import nextflow.exception.ProcessException
@@ -86,6 +87,10 @@ class FovusTaskHandler extends TaskHandler {
 
     FovusJobConfig getJobConfig() {
         return this.jobConfig
+    }
+
+    PublishDirResolver getPublishDirResolver() {
+        return executor.publishDirResolver
     }
 
     FovusTaskHandler(TaskRun task, FovusExecutor executor) {
@@ -267,6 +272,15 @@ class FovusTaskHandler extends TaskHandler {
 
     @Override
     void submit() {
+        final PublishDirResolver resolver = executor.publishDirResolver
+        if (resolver) {
+            try {
+                resolver.resolve(task.config)
+            } catch (Exception e) {
+                throw new ProcessException(e.message)
+            }
+        }
+
         def runCommand
         final isTaskArrayRun = task instanceof TaskArrayRun
 

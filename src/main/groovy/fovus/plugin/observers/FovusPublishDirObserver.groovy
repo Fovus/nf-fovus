@@ -1,10 +1,9 @@
 package fovus.plugin.observers
 
+import fovus.plugin.FovusTaskHandler
 import fovus.plugin.util.FovusEnvironment
-import fovus.plugin.util.MountS3Adapter
 import fovus.plugin.util.PublishDirResolver
 import groovy.transform.CompileStatic
-import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.Session
 import nextflow.trace.TraceObserverV2
@@ -15,54 +14,49 @@ import nextflow.trace.event.TaskEvent
 class FovusPublishDirObserver implements TraceObserverV2 {
 
     private final Session session
-    private final PublishDirResolver resolver
 
     FovusPublishDirObserver(Session session) {
         this.session = session
-        this.resolver = buildResolver()
-    }
-
-    @PackageScope
-    FovusPublishDirObserver(Session session, PublishDirResolver resolver) {
-        this.session = session
-        this.resolver = resolver
-    }
-
-    private static PublishDirResolver buildResolver() {
-        final String bucket = FovusEnvironment.getFovusUserBucket()
-        final String pipelineId = FovusEnvironment.getPipelineId()
-        if (!bucket) {
-            log.warn "[FOVUS] FovusUserBucket is not set — publishDir mounts will be skipped"
-        }
-        if (!pipelineId) {
-            log.warn "[FOVUS] PIPELINE_ID is not set — publishDir mounts will be skipped"
-        }
-        return new PublishDirResolver(new MountS3Adapter(), bucket ?: '', pipelineId ?: '')
     }
 
     @Override
     void onTaskPending(TaskEvent event) {
         if (!FovusEnvironment.isHostedMode()) return
-        final task = event?.handler?.task
-        if (!task) return
+        final resolver = resolverFrom(event)
+        if (!resolver) return
+        final task = event.handler.task
         try {
             resolver.resolve(task.config)
         } catch (Exception e) {
             log.error "[FOVUS] Failed to mount publishDir for pending task ${task.lazyName()}: ${e.message}", e
-            session.abort(e)
+            // Do not abort — FovusTaskHandler.submit() re-validates and throws ProcessException
+            // so Nextflow's configured errorStrategy applies instead of killing all running tasks.
         }
     }
 
     @Override
     void onTaskCached(TaskEvent event) {
         if (!FovusEnvironment.isHostedMode()) return
-        final task = event?.handler?.task
-        if (!task) return
+        final resolver = resolverFrom(event)
+        if (!resolver) return
+        final task = event.handler.task
         try {
             resolver.resolve(task.config)
         } catch (Exception e) {
             log.error "[FOVUS] Failed to mount publishDir for cached task ${task.lazyName()}: ${e.message}", e
-            throw e
+            // Cached tasks bypass submit(), so there is no TaskHandler path to re-validate.
+            // Abort the session directly.
+            session.abort(e)
         }
+    }
+
+    /**
+     * Returns the {@link PublishDirResolver} owned by the {@link FovusExecutor} for this event,
+     * or {@code null} if the handler is not a {@link FovusTaskHandler} (e.g. a different executor).
+     */
+    private static PublishDirResolver resolverFrom(TaskEvent event) {
+        final handler = event?.handler
+        if (!(handler instanceof FovusTaskHandler)) return null
+        return (handler as FovusTaskHandler).getPublishDirResolver()
     }
 }
