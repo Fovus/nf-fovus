@@ -3,7 +3,6 @@ package fovus.plugin
 import fovus.plugin.pipeline.FovusPipelineClient
 import fovus.plugin.storage.FovusStorageClient
 import fovus.plugin.util.FovusEnvironment
-import fovus.plugin.util.MountS3Adapter
 import fovus.plugin.util.PublishDirResolver
 import groovy.transform.CompileStatic
 import groovy.transform.PackageScope
@@ -32,8 +31,6 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     protected FovusStorageClient storageClient;
     protected Path localWorkDirMount;
     protected Path remoteBinDir;
-
-    @PackageScope PublishDirResolver publishDirResolver
 
     /**
      * Map the local work directory with Fovus job id
@@ -65,8 +62,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         uploadBinDir()
 
         if (FovusEnvironment.isHostedMode()) {
-            publishDirResolver = new PublishDirResolver(
-                new MountS3Adapter(),
+            PublishDirResolver.initialize(
                 FovusEnvironment.getFovusUserBucket() ?: '',
                 FovusEnvironment.getPipelineId() ?: ''
             )

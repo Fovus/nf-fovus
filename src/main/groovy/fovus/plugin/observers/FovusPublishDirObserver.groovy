@@ -1,6 +1,5 @@
 package fovus.plugin.observers
 
-import fovus.plugin.FovusTaskHandler
 import fovus.plugin.util.FovusEnvironment
 import fovus.plugin.util.PublishDirResolver
 import groovy.transform.CompileStatic
@@ -22,9 +21,10 @@ class FovusPublishDirObserver implements TraceObserverV2 {
     @Override
     void onTaskPending(TaskEvent event) {
         if (!FovusEnvironment.isHostedMode()) return
-        final resolver = resolverFrom(event)
+        final resolver = PublishDirResolver.getInstance()
         if (!resolver) return
-        final task = event.handler.task
+        final task = event?.handler?.task
+        if (!task) return
         try {
             resolver.resolve(task.config)
         } catch (Exception e) {
@@ -37,9 +37,10 @@ class FovusPublishDirObserver implements TraceObserverV2 {
     @Override
     void onTaskCached(TaskEvent event) {
         if (!FovusEnvironment.isHostedMode()) return
-        final resolver = resolverFrom(event)
+        final resolver = PublishDirResolver.getInstance()
         if (!resolver) return
-        final task = event.handler.task
+        final task = event?.handler?.task
+        if (!task) return
         try {
             resolver.resolve(task.config)
         } catch (Exception e) {
@@ -48,15 +49,5 @@ class FovusPublishDirObserver implements TraceObserverV2 {
             // Abort the session directly.
             session.abort(e)
         }
-    }
-
-    /**
-     * Returns the {@link PublishDirResolver} owned by the {@link FovusExecutor} for this event,
-     * or {@code null} if the handler is not a {@link FovusTaskHandler} (e.g. a different executor).
-     */
-    private static PublishDirResolver resolverFrom(TaskEvent event) {
-        final handler = event?.handler
-        if (!(handler instanceof FovusTaskHandler)) return null
-        return (handler as FovusTaskHandler).getPublishDirResolver()
     }
 }

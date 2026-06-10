@@ -1,6 +1,7 @@
 package fovus.plugin.util
 
 import groovy.transform.CompileStatic
+import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.exception.AbortRunException
 import nextflow.processor.PublishDir
@@ -42,6 +43,28 @@ import java.util.concurrent.ConcurrentHashMap
 @Slf4j
 @CompileStatic
 class PublishDirResolver {
+
+    private static volatile PublishDirResolver INSTANCE
+
+    /**
+     * Initialises the singleton resolver for the current pipeline run.
+     * Called by {@link fovus.plugin.FovusExecutor} during {@code register()} in hosted mode.
+     */
+    static void initialize(String bucket, String pipelineId) {
+        INSTANCE = new PublishDirResolver(new MountS3Adapter(), bucket, pipelineId)
+    }
+
+    /** Returns the singleton resolver, or {@code null} if not in hosted mode. */
+    static PublishDirResolver getInstance() {
+        return INSTANCE
+    }
+
+    /** Clears the singleton — for use in tests only. */
+    @PackageScope
+    static void reset() {
+        INSTANCE = null
+    }
+
 
     /**
      * Single-segment absolute paths that are standard Linux root directories.
@@ -210,12 +233,18 @@ class PublishDirResolver {
         final CompletableFuture<Boolean> registeredFuture = mountRegistry.putIfAbsent(localPath, ownFuture)
 
         if (registeredFuture == null) {
-            final boolean isMounted = mountS3Adapter.mount(bucket, mountPrefix, localPath)
-            ownFuture.complete(isMounted)
-            return isMounted
+            try {
+                final boolean isMounted = mountS3Adapter.mount(bucket, mountPrefix, localPath)
+                ownFuture.complete(isMounted)
+                return isMounted
+            } catch (Throwable t) {
+                // Ensure waiting threads are unblocked before re-throwing.
+                ownFuture.completeExceptionally(t)
+                throw t
+            }
         }
 
-        return registeredFuture.get()
+        return registeredFuture.join()
     }
 
     /** Returns the pipeline working directory path: {@code ~/<pipelineId>}. */

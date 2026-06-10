@@ -89,10 +89,6 @@ class FovusTaskHandler extends TaskHandler {
         return this.jobConfig
     }
 
-    PublishDirResolver getPublishDirResolver() {
-        return executor.publishDirResolver
-    }
-
     FovusTaskHandler(TaskRun task, FovusExecutor executor) {
         super(task)
         this.executor = executor
@@ -272,12 +268,12 @@ class FovusTaskHandler extends TaskHandler {
 
     @Override
     void submit() {
-        final PublishDirResolver resolver = executor.publishDirResolver
+        final PublishDirResolver resolver = PublishDirResolver.getInstance()
         if (resolver) {
             try {
                 resolver.resolve(task.config)
             } catch (Exception e) {
-                throw new ProcessException(e.message)
+                throw new ProcessException("Failed to resolve publishDir: " + e.message, e)
             }
         }
 
