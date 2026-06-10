@@ -31,8 +31,10 @@ class MountS3Adapter {
 
         // Trailing slash on the prefix is required by mount-s3 to scope the
         // mount to exactly that prefix and not to adjacent keys at the same level.
+        // --part-size sets the multipart upload part size in bytes (67108864 = 64 MiB),
+        // which allows files up to 625 GiB (64 MiB * 10000 parts).
         final result = FovusUtil.executeCommand([
-            'mount-s3', bucket, localPath, '--prefix', mountPrefix + '/'
+            'mount-s3', bucket, localPath, '--prefix', mountPrefix + '/', '--part-size', '67108864'
         ])
 
         if (result.exitCode == 0) {
