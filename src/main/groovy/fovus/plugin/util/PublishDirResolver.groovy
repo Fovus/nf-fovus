@@ -106,14 +106,15 @@ class PublishDirResolver {
         final List<PublishDir> publishDirs = config.getPublishDir()
         if (!publishDirs) return
 
-        final String pipelineDir = getPipelineDirectory()
+        final Path pipelineDirPath = Path.of(getPipelineDirectory())
 
         for (PublishDir publishDir : publishDirs) {
             if (!publishDir.path) continue
 
-            final String pathStr = publishDir.path.toString()
+            final Path publishDirPath = publishDir.path.normalize()
+            final String pathStr = publishDirPath.toString()
 
-            if (pathStr.startsWith('/fovus-storage')) continue
+            if (publishDirPath.startsWith(Path.of('/fovus-storage'))) continue
 
             if (publishDir.mode != PublishDir.Mode.COPY) {
                 throw new AbortRunException(
@@ -122,15 +123,15 @@ class PublishDirResolver {
                 )
             }
 
-            if (pathStr == pipelineDir || pathStr == pipelineDir + '/') {
+            if (publishDirPath == pipelineDirPath) {
                 throw new AbortRunException(
                     "[FOVUS] publishDir '${pathStr}' targets the pipeline working directory directly," +
-                    " which cannot be mounted. Use a subdirectory (e.g. '${pipelineDir}/results')."
+                    " which cannot be mounted. Use a subdirectory (e.g. '${pipelineDirPath}/results')."
                 )
             }
 
-            if (pathStr.startsWith(pipelineDir + '/')) {
-                final String localPath = computeLocalPath(publishDir.path)
+            if (publishDirPath.startsWith(pipelineDirPath)) {
+                final String localPath = computeLocalPath(publishDirPath)
                 if (!localPath) continue
                 final String mountPrefix = computeMountPrefix(localPath)
                 if (!ensureSegmentMounted(localPath, bucket, mountPrefix)) {
@@ -170,11 +171,10 @@ class PublishDirResolver {
      */
     static List<String> buildPathSegments(String absolutePath) {
         final List<String> segments = new ArrayList<>()
-        String current = ''
-        for (String part : absolutePath.split('/')) {
-            if (part.isEmpty()) continue
-            current = current + '/' + part
-            segments.add(current)
+        Path path = Path.of(absolutePath).normalize()
+        while (path.parent != null) {
+            segments.add(0, path.toString())
+            path = path.parent
         }
         return segments
     }
@@ -188,16 +188,17 @@ class PublishDirResolver {
     String computeLocalPath(Path publishDirPath) {
         if (!publishDirPath) return null
 
-        final String pipelinePrefix = getPipelineDirectory() + '/'
-        final String relative = publishDirPath.toString().substring(pipelinePrefix.length())
-        if (!relative) return null
+        final Path pipelinePath = Path.of(getPipelineDirectory())
+        final Path normalized = publishDirPath.normalize()
 
+        if (!normalized.startsWith(pipelinePath)) return null
+
+        final Path relative = pipelinePath.relativize(normalized)
         // Take only the first path segment so that all sub-paths under
         // the same process output dir share a single mount point.
-        final String firstSegment = relative.contains('/') ? relative.split('/')[0] : relative
-        if (!firstSegment) return null
+        if (relative.nameCount == 0) return null
 
-        return pipelinePrefix + firstSegment
+        return pipelinePath.resolve(relative.getName(0)).toString()
     }
 
     /**
@@ -207,11 +208,12 @@ class PublishDirResolver {
      * with its leading slash stripped.
      */
     String computeMountPrefix(String localPath) {
-        final String pipelinePrefix = getPipelineDirectory() + '/'
+        final Path localPathObj = Path.of(localPath).normalize()
+        final Path pipelinePath = Path.of(getPipelineDirectory())
 
-        final String suffix = localPath.startsWith(pipelinePrefix)
-            ? localPath.substring(pipelinePrefix.length())
-            : (localPath.startsWith('/') ? localPath.substring(1) : localPath)
+        final String suffix = localPathObj.startsWith(pipelinePath)
+            ? pipelinePath.relativize(localPathObj).toString()
+            : localPathObj.root.relativize(localPathObj).toString()
 
         return "pipelines/${pipelineId}/fovus-output/${suffix}"
     }
