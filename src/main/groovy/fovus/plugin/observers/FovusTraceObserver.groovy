@@ -1,16 +1,19 @@
-package fovus.plugin
-
+package fovus.plugin.observers
 
 import groovy.transform.CompileStatic
 import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.Session
+import fovus.plugin.FovusConfig
+import fovus.plugin.FovusPipelineCache
 import fovus.plugin.pipeline.FovusPipelineClient
 import fovus.plugin.pipeline.FovusPipelineStatus
 import fovus.plugin.pipeline.ResourceConfiguration
 import nextflow.script.ScriptMeta
 import nextflow.trace.TraceObserverV2
 import nextflow.trace.event.TaskEvent
+
+import java.util.concurrent.atomic.AtomicBoolean
 
 @Slf4j
 @CompileStatic
@@ -21,6 +24,9 @@ class FovusTraceObserver implements TraceObserverV2 {
     private final FovusPipelineClient pipelineClient
     private volatile boolean hasFlowError = false
     private volatile TaskEvent lastFlowErrorEvent
+    // session.abort() can cause onFlowComplete to fire from two threads concurrently;
+    // this guard ensures the pipeline status update and headnode cleanup run exactly once.
+    private final AtomicBoolean isCompletionReported = new AtomicBoolean(false)
 
     FovusTraceObserver(Session session) {
         this(
@@ -99,9 +105,12 @@ class FovusTraceObserver implements TraceObserverV2 {
 
     @Override
     void onFlowComplete() {
-        log.trace "[FOVUS] Pipeline completed with status ${hasFlowError ? 'FAILED' : 'COMPLETED'}"
+        if (!isCompletionReported.compareAndSet(false, true)) return
 
-        final status = hasFlowError ? FovusPipelineStatus.FAILED : FovusPipelineStatus.COMPLETED
+        final boolean isFailed = hasFlowError || session.isAborted()
+        log.trace "[FOVUS] Pipeline completed with status ${isFailed ? 'FAILED' : 'COMPLETED'}"
+
+        final status = isFailed ? FovusPipelineStatus.FAILED : FovusPipelineStatus.COMPLETED
         pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), status)
     }
 

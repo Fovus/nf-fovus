@@ -1,6 +1,7 @@
 package fovus.plugin
 
 import fovus.plugin.job.ContainerizedEnvironment
+import fovus.plugin.util.PublishDirResolver
 import groovy.util.logging.Slf4j
 import nextflow.container.DockerConfig
 import nextflow.exception.ProcessException
@@ -267,6 +268,15 @@ class FovusTaskHandler extends TaskHandler {
 
     @Override
     void submit() {
+        final PublishDirResolver resolver = PublishDirResolver.getInstance()
+        if (resolver) {
+            try {
+                resolver.resolve(task.config)
+            } catch (Exception e) {
+                throw new ProcessException("Failed to resolve publishDir: " + e.message, e)
+            }
+        }
+
         def runCommand
         final isTaskArrayRun = task instanceof TaskArrayRun
 

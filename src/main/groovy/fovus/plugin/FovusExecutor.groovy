@@ -1,17 +1,18 @@
 package fovus.plugin
 
+import fovus.plugin.pipeline.FovusPipelineClient
+import fovus.plugin.storage.FovusStorageClient
+import fovus.plugin.util.FovusEnvironment
+import fovus.plugin.util.PublishDirResolver
 import groovy.transform.CompileStatic
 import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.executor.Executor
 import nextflow.executor.TaskArrayExecutor
 import nextflow.extension.FilesEx
-import fovus.plugin.storage.FovusStorageClient
-import fovus.plugin.pipeline.FovusPipelineClient
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskMonitor
 import nextflow.processor.TaskPollingMonitor
-
 import nextflow.processor.TaskRun
 import nextflow.util.Duration
 import nextflow.util.ServiceName
@@ -59,6 +60,13 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         storageClient = new FovusStorageClient(fovusConfig)
         validateWorkDir()
         uploadBinDir()
+
+        if (FovusEnvironment.isHostedMode()) {
+            PublishDirResolver.initialize(
+                FovusEnvironment.getFovusUserBucket() ?: '',
+                FovusEnvironment.getPipelineId() ?: ''
+            )
+        }
     }
 
     private void validateWorkDir() {

@@ -1,5 +1,6 @@
 package fovus.plugin
 
+import fovus.plugin.observers.FovusTraceObserver
 import fovus.plugin.pipeline.FovusPipeline
 import fovus.plugin.pipeline.FovusPipelineClient
 import fovus.plugin.pipeline.FovusPipelineStatus
@@ -43,8 +44,10 @@ class FovusObserverTest extends Specification {
 
     def 'onFlowComplete should send COMPLETED when no flow error was recorded'() {
         given:
+        def session = Mock(Session)
+        session.isAborted() >> false
         def pipelineClient = Mock(FovusPipelineClient)
-        def observer = new FovusTraceObserver(Mock(Session), TEST_CONFIG, pipelineClient)
+        def observer = new FovusTraceObserver(session, TEST_CONFIG, pipelineClient)
 
         when:
         observer.onFlowComplete()
@@ -56,8 +59,10 @@ class FovusObserverTest extends Specification {
 
     def 'onFlowComplete should send FAILED when a flow error was recorded'() {
         given:
+        def session = Mock(Session)
+        session.isAborted() >> false
         def pipelineClient = Mock(FovusPipelineClient)
-        def observer = new FovusTraceObserver(Mock(Session), TEST_CONFIG, pipelineClient)
+        def observer = new FovusTraceObserver(session, TEST_CONFIG, pipelineClient)
         observer.onFlowError(new TaskEvent(null, null))
 
         when:
@@ -66,5 +71,36 @@ class FovusObserverTest extends Specification {
         then:
         1 * pipelineClient.getPipeline() >> TEST_PIPELINE
         1 * pipelineClient.updatePipelineStatus(TEST_CONFIG, TEST_PIPELINE, FovusPipelineStatus.FAILED)
+    }
+
+    def 'onFlowComplete should send FAILED when session was aborted'() {
+        given:
+        def session = Mock(Session)
+        session.isAborted() >> true
+        def pipelineClient = Mock(FovusPipelineClient)
+        def observer = new FovusTraceObserver(session, TEST_CONFIG, pipelineClient)
+
+        when:
+        observer.onFlowComplete()
+
+        then:
+        1 * pipelineClient.getPipeline() >> TEST_PIPELINE
+        1 * pipelineClient.updatePipelineStatus(TEST_CONFIG, TEST_PIPELINE, FovusPipelineStatus.FAILED)
+    }
+
+    def 'onFlowComplete should update pipeline status exactly once when called multiple times'() {
+        given:
+        def session = Mock(Session)
+        session.isAborted() >> false
+        def pipelineClient = Mock(FovusPipelineClient)
+        def observer = new FovusTraceObserver(session, TEST_CONFIG, pipelineClient)
+
+        when:
+        observer.onFlowComplete()
+        observer.onFlowComplete()
+
+        then:
+        1 * pipelineClient.getPipeline() >> TEST_PIPELINE
+        1 * pipelineClient.updatePipelineStatus(TEST_CONFIG, TEST_PIPELINE, FovusPipelineStatus.COMPLETED)
     }
 }
