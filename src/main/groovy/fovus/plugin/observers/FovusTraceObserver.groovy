@@ -46,7 +46,8 @@ class FovusTraceObserver implements TraceObserverV2 {
     @Override
     void onFlowCreate(Session session) {
         log.info "Pipeline is starting! 🚀"
-        FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, fovusConfig, fovusConfig.getPipelineName())
+        FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, fovusConfig, fovusConfig.getPipelineName(),
+                                                 session?.getCommandLine())
 
 
         try {
@@ -114,7 +115,8 @@ class FovusTraceObserver implements TraceObserverV2 {
     void onFlowBegin() {
         hasFlowError = false
         lastFlowErrorEvent = null
-        pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), FovusPipelineStatus.RUNNING)
+        pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), FovusPipelineStatus.RUNNING,
+                                            session?.getCommandLine())
     }
 
     @Override
@@ -125,7 +127,8 @@ class FovusTraceObserver implements TraceObserverV2 {
         log.trace "[FOVUS] Pipeline completed with status ${isFailed ? 'FAILED' : 'COMPLETED'}"
 
         final status = isFailed ? FovusPipelineStatus.FAILED : FovusPipelineStatus.COMPLETED
-        pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), status)
+        pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), status,
+                                            session?.getCommandLine())
     }
 
     @Override

@@ -16,6 +16,13 @@ class FovusPipelineCache {
     static String getOrCreatePipelineId(FovusPipelineClient pipelineClient,
                                         FovusConfig fovusConfig,
                                         String pipelineName) {
+        return getOrCreatePipelineId(pipelineClient, fovusConfig, pipelineName, null)
+    }
+
+    static String getOrCreatePipelineId(FovusPipelineClient pipelineClient,
+                                        FovusConfig fovusConfig,
+                                        String pipelineName,
+                                        String runCommand) {
         final pipelineIdFromEnv = FovusEnvironment.getPipelineId()
 
         log.trace("[FOVUS] WORKFLOW_HOST: ${FovusEnvironment.getWorkflowHost()}")
@@ -43,7 +50,7 @@ class FovusPipelineCache {
             }
         }
 
-        def newPipelineId = pipelineClient.createPipeline(fovusConfig, pipelineName)
+        def newPipelineId = pipelineClient.createPipeline(fovusConfig, pipelineName, runCommand)
         updatePipelineCache(pipelineName, newPipelineId)
         return newPipelineId
     }
