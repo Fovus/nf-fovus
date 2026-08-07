@@ -55,7 +55,8 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         log.debug "[FOVUS] Creating fovus pipeline."
         this.pipelineClient = new FovusPipelineClient();
 
-        FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, fovusConfig, this.fovusConfig.getPipelineName())
+        FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, fovusConfig, this.fovusConfig.getPipelineName(),
+                                                 session?.getCommandLine())
 
         storageClient = new FovusStorageClient(fovusConfig)
         validateWorkDir()

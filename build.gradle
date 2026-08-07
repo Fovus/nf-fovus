@@ -19,6 +19,13 @@ dependencies {
     }
 }
 
+// Run tests from a scratch directory. The pipeline cache resolves `.fovus/pipeline_cache.json`
+// against the working directory, so specs covering it would otherwise write into the source tree.
+test {
+    workingDir = layout.buildDirectory.dir('test-workdir').get().asFile
+    doFirst { workingDir.mkdirs() }
+}
+
 nextflowPlugin {
     nextflowVersion = '25.10.0'
     provider = 'Fovus corporation'
