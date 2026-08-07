@@ -6,10 +6,10 @@ import groovy.util.logging.Slf4j
 import nextflow.Session
 import fovus.plugin.FovusConfig
 import fovus.plugin.FovusPipelineCache
+import fovus.plugin.FovusUtil
 import fovus.plugin.pipeline.FovusPipelineClient
 import fovus.plugin.pipeline.FovusPipelineStatus
 import fovus.plugin.pipeline.ResourceConfiguration
-import nextflow.script.ScriptMeta
 import nextflow.trace.TraceObserverV2
 import nextflow.trace.event.TaskEvent
 
@@ -46,61 +46,77 @@ class FovusTraceObserver implements TraceObserverV2 {
     @Override
     void onFlowCreate(Session session) {
         log.info "Pipeline is starting! 🚀"
-        FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, fovusConfig, fovusConfig.getPipelineName())
+        FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, fovusConfig, fovusConfig.getPipelineName(),
+                                                 session?.getCommandLine())
 
 
         try {
-            def configurations = new LinkedHashSet<ResourceConfiguration>()
-            def processConfig = session.config.navigate('process')
-            if (!processConfig || !(processConfig instanceof Map)) {
-                return
-            }
+            final configurations = collectResourceConfigurations(session)
+            final nextflowConfig = FovusUtil.readNextflowConfig(session?.getConfigFiles())
 
-            // Handle the global configuration
-            processConfig = processConfig as Map
-            ResourceConfiguration globalConfig = processConfig.ext instanceof Map ?
-                                                 parseExtensionObject(processConfig.ext as Map) : null;
-
-            if (globalConfig) {
-                configurations.add(globalConfig)
-            }
-
-            // Look for each benchmark overriding
-            processConfig.entrySet().findAll { it.value instanceof Map }.each { entry ->
-                def key = entry.key
-                def value = entry.value
-
-                ResourceConfiguration config = null;
-                if (key == "ext" && (value instanceof Map)) {
-                    // Skip the global ext config
-                    return
-                }
-
-                def ext = (value as Map).get("ext")
-                if (!ext || !(ext instanceof Map)) return
-
-                config = parseExtensionObject(ext as Map)
-
-                if (config && globalConfig) {
-                    config = globalConfig.mergeWith(config)
-                }
-
-                if (config) {
-                    configurations.add(config)
-                }
-            }
-
-            pipelineClient.preConfigResources(fovusConfig, pipelineClient.getPipeline(), configurations.toList())
+            pipelineClient.preConfigResources(fovusConfig, pipelineClient.getPipeline(), configurations, nextflowConfig)
         } catch (Exception e) {
             log.trace "[FOVUS] Cannot configure pipeline resources: ${e.message}"
         }
+    }
+
+    /**
+     * Collect the resource configurations declared through `process.ext`, both the global
+     * one and each per-process override merged over it.
+     *
+     * @return The resource configurations, empty when the config declares none
+     */
+    @PackageScope
+    static List<ResourceConfiguration> collectResourceConfigurations(Session session) {
+        def configurations = new LinkedHashSet<ResourceConfiguration>()
+        def processConfig = session.config.navigate('process')
+        if (!processConfig || !(processConfig instanceof Map)) {
+            return []
+        }
+
+        // Handle the global configuration
+        processConfig = processConfig as Map
+        ResourceConfiguration globalConfig = processConfig.ext instanceof Map ?
+                                             parseExtensionObject(processConfig.ext as Map) : null;
+
+        if (globalConfig) {
+            configurations.add(globalConfig)
+        }
+
+        // Look for each benchmark overriding
+        processConfig.entrySet().findAll { it.value instanceof Map }.each { entry ->
+            def key = entry.key
+            def value = entry.value
+
+            ResourceConfiguration config = null;
+            if (key == "ext" && (value instanceof Map)) {
+                // Skip the global ext config
+                return
+            }
+
+            def ext = (value as Map).get("ext")
+            if (!ext || !(ext instanceof Map)) return
+
+            config = parseExtensionObject(ext as Map)
+
+            if (config && globalConfig) {
+                config = globalConfig.mergeWith(config)
+            }
+
+            if (config) {
+                configurations.add(config)
+            }
+        }
+
+        return configurations.toList()
     }
 
     @Override
     void onFlowBegin() {
         hasFlowError = false
         lastFlowErrorEvent = null
-        pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), FovusPipelineStatus.RUNNING)
+        pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), FovusPipelineStatus.RUNNING,
+                                            session?.getCommandLine())
     }
 
     @Override
@@ -111,7 +127,8 @@ class FovusTraceObserver implements TraceObserverV2 {
         log.trace "[FOVUS] Pipeline completed with status ${isFailed ? 'FAILED' : 'COMPLETED'}"
 
         final status = isFailed ? FovusPipelineStatus.FAILED : FovusPipelineStatus.COMPLETED
-        pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), status)
+        pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), status,
+                                            session?.getCommandLine())
     }
 
     @Override

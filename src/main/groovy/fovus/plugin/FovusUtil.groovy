@@ -3,6 +3,8 @@ package fovus.plugin
 import groovy.transform.CompileStatic
 import groovy.transform.MapConstructor
 import groovy.util.logging.Slf4j
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.nio.file.Path
 
 /**
@@ -70,6 +72,37 @@ class FovusUtil {
         }
 
         return result
+    }
+
+    /**
+     * Read the verbatim content of the Nextflow config file(s) backing this run.
+     *
+     * A single config file is returned byte-for-byte. When Nextflow resolved several
+     * files (eg, ~/.nextflow/config plus ./nextflow.config plus -c custom.config) their
+     * contents are concatenated behind a comment header naming each source.
+     *
+     * @param configFiles The config files resolved by Nextflow, ie {@code session.configFiles}
+     * @return The config content, or null when there is no readable config file
+     */
+    static String readNextflowConfig(List<Path> configFiles) {
+        if (!configFiles) return null
+
+        final includeHeaders = configFiles.size() > 1
+        final content = new StringBuilder()
+
+        for (Path file : configFiles) {
+            try {
+                if (!file || !Files.exists(file)) continue
+
+                if (content.length() > 0) content.append('\n')
+                if (includeHeaders) content.append("// ==== ${file.toAbsolutePath()} ====\n")
+                content.append(new String(Files.readAllBytes(file), StandardCharsets.UTF_8))
+            } catch (Exception e) {
+                log.warn "[FOVUS] Unable to read Nextflow config file `${file}`: ${e.message}"
+            }
+        }
+
+        return content.length() > 0 ? content.toString() : null
     }
 
     static boolean isRecentlySubmitted(String jobId) {
