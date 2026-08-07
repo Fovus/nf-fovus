@@ -5,9 +5,23 @@ import groovy.util.logging.Slf4j
 import nextflow.executor.BashWrapperBuilder
 import nextflow.processor.TaskBean
 
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+
 
 @Slf4j
 class FovusScriptLauncher extends BashWrapperBuilder {
+    /**
+     * Name of the file holding the task *input* environment variables.
+     *
+     * Note this is deliberately not {@code TaskRun.CMD_ENV} ({@code .command.env}): that name is
+     * reserved by Nextflow for capturing {@code env}/{@code eval} process *outputs* and is
+     * truncated by the task itself at runtime.
+     */
+    static final String CMD_FOVUS_ENV = '.command.fovus.env'
+
     private final boolean isMemoryCheckpointingEnabled;
     private FovusJobConfig jobConfig;
 
@@ -15,6 +29,42 @@ class FovusScriptLauncher extends BashWrapperBuilder {
         super(bean, new FovusFileCopyStrategy(bean, executor))
         this.isMemoryCheckpointingEnabled = isMemoryCheckpointingEnabled;
         this.jobConfig = jobConfig;
+    }
+
+    @Override
+    Path build() {
+        final result = super.build()
+        writeTaskEnvFile()
+        return result
+    }
+
+    /**
+     * Save the task input environment as a standalone, sourceable file in the task work dir.
+     *
+     * This does not change how the task runs: {@code .command.run} still inlines the very same
+     * environment. The file exists so the environment can be inspected on its own, both locally and
+     * on the Fovus compute node.
+     */
+    protected void writeTaskEnvFile() {
+        try {
+            // Always render the non-container form, ie plain `export NAME="value"` lines. The
+            // container form instead returns an `nxf_container_env() { cat << EOF ... }` function
+            // definition, which is not directly sourceable. For containerized tasks this file will
+            // therefore not match the env block inlined in `.command.run` byte for byte.
+            final envScript = getEnvScript(environment, false) ?: ''
+
+            Files.write(
+                    workDir.resolve(CMD_FOVUS_ENV),
+                    envScript.getBytes(StandardCharsets.UTF_8),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE
+            )
+        }
+        catch (Exception e) {
+            // This file is informational only, never fail the task because of it
+            log.warn "[FOVUS] Cannot write ${CMD_FOVUS_ENV} in ${workDir} | ${e.message}"
+        }
     }
 
     @Override
