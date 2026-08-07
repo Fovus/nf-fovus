@@ -4,14 +4,22 @@ import groovy.transform.CompileStatic
 import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.Session
+import nextflow.file.FileHelper
 import nextflow.trace.TraceFileObserver
 import nextflow.trace.TraceObserverFactoryV2
 import nextflow.trace.TraceObserverV2
 import nextflow.trace.config.TraceConfig
 
+import java.nio.file.Files
+import java.nio.file.Path
+
 @Slf4j
 @CompileStatic
 class FovusTraceObserverFactory implements TraceObserverFactoryV2 {
+
+    private static final String TRACE_FILE_PREFIX = 'trace_'
+    private static final String TRACE_FILE_SUFFIX = '.txt'
+    private static final int MAX_TRACE_FILE_VERSION = 1000
 
     @Override
     Collection<TraceObserverV2> create(Session session) {
@@ -41,14 +49,43 @@ class FovusTraceObserverFactory implements TraceObserverFactoryV2 {
      */
     @PackageScope
     TraceObserverV2 createTraceFileObserver(Session session) {
+        final config = createTraceConfig(session)
+        return config ? new TraceFileObserver(config) : null
+    }
+
+    @PackageScope
+    TraceConfig createTraceConfig(Session session) {
         final opts = new LinkedHashMap<String, Object>(session.config.navigate('trace') as Map ?: [:])
         if (opts.enabled) {
             return null
         }
 
         opts.enabled = true
+        // Tracing was not requested by the user, so no existing file may be clobbered: pick a name
+        // that is not taken yet instead of the default one, which would abort the run whenever the
+        // launch directory already holds a trace file from a previous execution.
+        if (!opts.file) {
+            opts.file = nextTraceFileName()
+        }
+
         final config = new TraceConfig(opts)
         log.debug "[FOVUS] `-with-trace` not specified - enabling the execution trace file: ${config.file}"
-        return new TraceFileObserver(config)
+        return config
+    }
+
+    /**
+     * Returns the first `trace_<version>.txt` name that is not used yet in the launch directory,
+     * so repeated (or resumed) runs each get their own trace file.
+     */
+    @PackageScope
+    String nextTraceFileName(Path launchDir = FileHelper.asPath('.')) {
+        for (int version = 1; version <= MAX_TRACE_FILE_VERSION; version++) {
+            final name = "${TRACE_FILE_PREFIX}${version}${TRACE_FILE_SUFFIX}".toString()
+            if (!Files.exists(launchDir.resolve(name))) {
+                return name
+            }
+        }
+        // Too many trace files in the launch directory - fall back to Nextflow's own timestamped name
+        return TraceConfig.defaultFileName()
     }
 }
