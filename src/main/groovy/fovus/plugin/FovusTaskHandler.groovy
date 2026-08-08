@@ -289,6 +289,7 @@ class FovusTaskHandler extends TaskHandler {
             runCommand = """
 ln -s ${remoteWorkDir}/${TaskRun.CMD_RUN} ${TaskRun.CMD_RUN}
 ln -s ${remoteWorkDir}/${TaskRun.CMD_SCRIPT} ${TaskRun.CMD_SCRIPT}
+ln -s ${remoteWorkDir}/${FovusScriptLauncher.CMD_FOVUS_ENV} ${FovusScriptLauncher.CMD_FOVUS_ENV}
 ./${TaskRun.CMD_RUN}
 """
         }
@@ -389,8 +390,9 @@ ln -s ${remoteWorkDir}/${TaskRun.CMD_SCRIPT} ${TaskRun.CMD_SCRIPT}
             final remoteTaskWorkDir = executor.getRemotePath(handler.getTask().workDir.toAbsolutePath())
             final runScript = """
             #!/bin/bash
-            ln -s "${remoteTaskWorkDir}/${TaskRun.CMD_RUN} ${TaskRun.CMD_RUN}"
-            ln -s "${remoteTaskWorkDir}/${TaskRun.CMD_SCRIPT} ${TaskRun.CMD_SCRIPT}"
+            ln -s "${remoteTaskWorkDir}/${TaskRun.CMD_RUN}" "${TaskRun.CMD_RUN}"
+            ln -s "${remoteTaskWorkDir}/${TaskRun.CMD_SCRIPT}" "${TaskRun.CMD_SCRIPT}"
+            ln -s "${remoteTaskWorkDir}/${FovusScriptLauncher.CMD_FOVUS_ENV}" "${FovusScriptLauncher.CMD_FOVUS_ENV}"
             ./${TaskRun.CMD_RUN}
             """.stripIndent().leftTrim()
 
