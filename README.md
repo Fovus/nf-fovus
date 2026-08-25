@@ -59,7 +59,7 @@ work is pipeline-shaped, so the union behaviour is the one that applies to nf-fo
 | --- | --- |
 | **Pipeline job** (every nf-fovus process) | **Union** - connectors declared on **any** job in a pipeline are reachable from **every** job in that pipeline |
 | Standalone batch job | **Enforcing** - the job gets access to exactly the connectors it lists |
-| pcluster / Slurm job | **Declarative** - entitlement is static and granted ahead of submission |
+| Standalone pcluster / Slurm job | **Enforcing** - the job gets access to exactly the connectors it lists |
 
 Because an nf-fovus run is a pipeline, declaring a connector on one process makes it reachable from
 all of them. Restricting a bucket to a single process is not something `storageConnectors` can
