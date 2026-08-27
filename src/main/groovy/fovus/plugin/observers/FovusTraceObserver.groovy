@@ -230,6 +230,16 @@ class FovusTraceObserver implements TraceObserverV2 {
                         resourceConfig.isResumableWorkload = value
                     }
                     break
+                case "isHybridStrategyAllowed":
+                    if (value instanceof Boolean) {
+                        resourceConfig.isHybridStrategyAllowed = value
+                    }
+                    break
+                case "isMultiRegionScalingAllowed":
+                    if (value instanceof Boolean) {
+                        resourceConfig.isMultiRegionScalingAllowed = value
+                    }
+                    break
                 case "walltimeHours":
                     if (value instanceof Number) {
                         resourceConfig.walltimeHours = value

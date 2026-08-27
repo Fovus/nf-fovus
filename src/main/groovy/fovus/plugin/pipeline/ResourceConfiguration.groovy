@@ -21,6 +21,8 @@ class ResourceConfiguration {
     Boolean allowPreemptible
     String[] supportedCpuArchitectures
     Boolean isResumableWorkload
+    Boolean isHybridStrategyAllowed
+    Boolean isMultiRegionScalingAllowed
     Number walltimeHours
     Number storageGiB
     Boolean isMemoryAutoRetryEnabled
@@ -52,6 +54,10 @@ class ResourceConfiguration {
                 supportedCpuArchitectures: other.supportedCpuArchitectures ?: this.supportedCpuArchitectures,
                 isResumableWorkload: other.isResumableWorkload != null ? other.isResumableWorkload :
                                      this.isResumableWorkload,
+                isHybridStrategyAllowed: other.isHybridStrategyAllowed != null ? other.isHybridStrategyAllowed :
+                                         this.isHybridStrategyAllowed,
+                isMultiRegionScalingAllowed: other.isMultiRegionScalingAllowed != null ?
+                                             other.isMultiRegionScalingAllowed : this.isMultiRegionScalingAllowed,
                 walltimeHours: other.walltimeHours ?: this.walltimeHours,
                 storageGiB: other.storageGiB ?: this.storageGiB,
                 isMemoryAutoRetryEnabled: other.isMemoryAutoRetryEnabled != null ? other.isMemoryAutoRetryEnabled :
