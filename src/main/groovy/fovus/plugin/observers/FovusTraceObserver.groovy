@@ -7,6 +7,7 @@ import nextflow.Session
 import fovus.plugin.FovusConfig
 import fovus.plugin.FovusPipelineCache
 import fovus.plugin.FovusUtil
+import fovus.plugin.job.FovusJobConfig
 import fovus.plugin.pipeline.FovusPipelineClient
 import fovus.plugin.pipeline.FovusPipelineStatus
 import fovus.plugin.pipeline.ResourceConfiguration
@@ -245,6 +246,14 @@ class FovusTraceObserver implements TraceObserverV2 {
                         resourceConfig.isMemoryAutoRetryEnabled = value
                     }
                     break;
+                case "storageConnectors":
+                    // Connectors are resolved and validated exactly as they are for a job, so the
+                    // pre-config-resources payload carries the same names the jobs will be created with.
+                    final connectors = FovusJobConfig.resolveStorageConnectors(value, null)
+                    if (connectors) {
+                        resourceConfig.storageConnectors = connectors
+                    }
+                    break
                 default:
                     break
             }

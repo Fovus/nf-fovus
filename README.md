@@ -50,6 +50,18 @@ It can also come from a JSON job config file (`ext.jobConfigFile`) or a benchmar
 `ext.storageConnectors` on the process wins over either of those, matching the precedence used by
 every other Fovus job attribute.
 
+### Pre-configured resources
+
+At the start of a run the plugin sends the resource configurations declared in `process.ext` to
+`fovus pipeline pre-config-resources`, so Fovus can provision the pipeline's resources ahead of the
+first job. `storageConnectors` travels with those configurations, which is what lets an on-demand
+pcluster be created with the IAM roles its jobs will need.
+
+A configuration is only sent when its `ext` block also declares a `benchmarkingProfileName`. A
+process that declares `storageConnectors` without one still gets the connectors on its job, but it
+contributes nothing to the pre-configuration step. Per-process connectors override the pipeline-wide
+ones in the payload, and a process that declares none inherits the pipeline-wide list.
+
 ### What a connector grants, per execution path
 
 `storageConnectors` means three different things depending on how the work is executed. **Nextflow

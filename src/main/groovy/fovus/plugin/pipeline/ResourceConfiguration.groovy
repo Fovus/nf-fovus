@@ -24,6 +24,7 @@ class ResourceConfiguration {
     Number walltimeHours
     Number storageGiB
     Boolean isMemoryAutoRetryEnabled
+    List<String> storageConnectors
 
     /**
      * Merges this configuration with another configuration.
@@ -55,7 +56,8 @@ class ResourceConfiguration {
                 walltimeHours: other.walltimeHours ?: this.walltimeHours,
                 storageGiB: other.storageGiB ?: this.storageGiB,
                 isMemoryAutoRetryEnabled: other.isMemoryAutoRetryEnabled != null ? other.isMemoryAutoRetryEnabled :
-                                          this.isMemoryAutoRetryEnabled
+                                          this.isMemoryAutoRetryEnabled,
+                storageConnectors: other.storageConnectors ?: this.storageConnectors
         )
     }
 }

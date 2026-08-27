@@ -84,4 +84,70 @@ class FovusTraceObserverTest extends Specification {
         configurations.size() == 1
         configurations[0].benchmarkingProfileName == 'call-profile'
     }
+
+    def 'collectResourceConfigurations should carry the storage connectors of the global config'() {
+        given:
+        def session = Mock(Session) {
+            getConfig() >> [process: [ext: [benchmarkingProfileName: 'global-profile',
+                                            storageConnectors      : ['reference-genomes', 'reference-genomes']]]]
+        }
+
+        when:
+        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
+
+        then: 'duplicates are dropped, exactly as they are for a job'
+        configurations.size() == 1
+        configurations[0].storageConnectors == ['reference-genomes']
+    }
+
+    def 'collectResourceConfigurations should let a per-process override replace the global connectors'() {
+        given:
+        def session = Mock(Session) {
+            getConfig() >> [process: [
+                    ext                    : [benchmarkingProfileName: 'global-profile',
+                                              storageConnectors      : ['reference-genomes']],
+                    'withName:publishResults': [ext: [benchmarkingProfileName: 'publish-profile',
+                                                      storageConnectors      : ['results-archive']]],
+                    'withName:alignReads'    : [ext: [benchmarkingProfileName: 'align-profile']]
+            ]]
+        }
+
+        when:
+        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
+
+        then:
+        configurations.size() == 3
+        configurations[0].storageConnectors == ['reference-genomes']
+
+        and: 'the override wins'
+        configurations[1].storageConnectors == ['results-archive']
+
+        and: 'a process that declares none inherits the global connectors'
+        configurations[2].storageConnectors == ['reference-genomes']
+    }
+
+    def 'collectResourceConfigurations should leave the connectors unset when none are declared'() {
+        given:
+        def session = Mock(Session) {
+            getConfig() >> [process: [ext: [benchmarkingProfileName: 'global-profile']]]
+        }
+
+        expect:
+        FovusTraceObserver.collectResourceConfigurations(session)[0].storageConnectors == null
+    }
+
+    def 'collectResourceConfigurations should reject a malformed storage connector name'() {
+        given:
+        def session = Mock(Session) {
+            getConfig() >> [process: [ext: [benchmarkingProfileName: 'global-profile',
+                                            storageConnectors      : ['team_shared']]]]
+        }
+
+        when:
+        FovusTraceObserver.collectResourceConfigurations(session)
+
+        then:
+        def error = thrown(Error)
+        error.message.contains('team_shared')
+    }
 }

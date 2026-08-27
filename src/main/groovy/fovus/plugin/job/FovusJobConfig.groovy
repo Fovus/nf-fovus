@@ -416,7 +416,7 @@ class FovusJobConfig {
      * @param defaultConnectors the connectors from the job config file or the benchmarking profile
      * @return the connector names, never null
      */
-    protected static List<String> resolveStorageConnectors(Object extensionValue, List<String> defaultConnectors) {
+    static List<String> resolveStorageConnectors(Object extensionValue, List<String> defaultConnectors) {
         List connectors = defaultConnectors
 
         if (extensionValue != null) {
