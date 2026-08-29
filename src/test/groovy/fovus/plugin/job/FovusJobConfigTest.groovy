@@ -101,6 +101,18 @@ class FovusJobConfigTest extends Specification {
         FovusJobConfigBuilder.fromJsonString('{"storageConnectors": null}').storageConnectors == []
     }
 
+    def 'a job config JSON entry that is not a string should be rejected rather than coerced'() {
+        when: 'Jackson would otherwise bind the scalar into a List<String> as its string form'
+        FovusJobConfigBuilder.fromJsonString("""{"storageConnectors": ["fine-one", ${offending}]}""")
+
+        then:
+        def error = thrown(Error)
+        error.message.contains('Invalid storage connector name')
+
+        where:
+        offending << ['42', 'true', '12.5']
+    }
+
     def 'a job config JSON with storageConnectors should parse them'() {
         expect:
         FovusJobConfigBuilder.fromJsonString('{"storageConnectors": ["team-shared", "archive-2024"]}')

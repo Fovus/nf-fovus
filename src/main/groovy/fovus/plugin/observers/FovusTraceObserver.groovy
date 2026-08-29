@@ -8,6 +8,7 @@ import fovus.plugin.FovusConfig
 import fovus.plugin.FovusPipelineCache
 import fovus.plugin.FovusUtil
 import fovus.plugin.job.FovusJobConfig
+import fovus.plugin.job.FovusJobConfigBuilder
 import fovus.plugin.pipeline.FovusPipelineClient
 import fovus.plugin.pipeline.FovusPipelineStatus
 import fovus.plugin.pipeline.ResourceConfiguration
@@ -156,6 +157,10 @@ class FovusTraceObserver implements TraceObserverV2 {
         if (!benchmarkingProfileName) return
 
         def resourceConfig = new ResourceConfiguration(benchmarkingProfileName: benchmarkingProfileName)
+        // A JSON job config file is one of the sources a job takes its connectors from, so the
+        // payload has to carry those as well; an `ext.storageConnectors` entry below still
+        // overrides them, exactly as it does for the job itself.
+        resourceConfig.storageConnectors = readJobConfigStorageConnectors(ext.get("jobConfigFile"))
 
         ext.forEach { key, value ->
             switch (key) {
@@ -248,9 +253,13 @@ class FovusTraceObserver implements TraceObserverV2 {
                     break;
                 case "storageConnectors":
                     // Connectors are resolved and validated exactly as they are for a job, so the
-                    // pre-config-resources payload carries the same names the jobs will be created with.
+                    // pre-config-resources payload carries the same names the jobs will be created
+                    // with. The resolver warns about a value that is not a list and that value is
+                    // then left alone, so the job config file connectors above stay in place.
                     final connectors = FovusJobConfig.resolveStorageConnectors(value, null)
-                    if (connectors) {
+                    if (value instanceof List) {
+                        // An empty list is assigned too: `ext.storageConnectors = []` clears the
+                        // pipeline-wide connectors for this process and has to survive the merge.
                         resourceConfig.storageConnectors = connectors
                     }
                     break
@@ -260,5 +269,29 @@ class FovusTraceObserver implements TraceObserverV2 {
         }
 
         return resourceConfig
+    }
+
+    /**
+     * Read the storage connectors declared in the JSON job config a process points at.
+     *
+     * The connectors are validated and de-duplicated exactly as they are for a job, so a malformed
+     * name fails the run here rather than at submission time. A file that cannot be read or parsed
+     * is ignored: the job path reports that failure with far better context.
+     *
+     * @return the connectors, or null when the process names no job config file or none are declared
+     */
+    private static List<String> readJobConfigStorageConnectors(Object jobConfigFilePath) {
+        if (!jobConfigFilePath) return null
+
+        FovusJobConfig jobConfig
+        try {
+            jobConfig = FovusJobConfigBuilder.fromJsonFile(jobConfigFilePath as String)
+        } catch (Exception e) {
+            log.trace "[FOVUS] Cannot read storage connectors from job config file " +
+                      "${jobConfigFilePath}: ${e.message}"
+            return null
+        }
+
+        return FovusJobConfig.resolveStorageConnectors(null, jobConfig.storageConnectors) ?: null
     }
 }

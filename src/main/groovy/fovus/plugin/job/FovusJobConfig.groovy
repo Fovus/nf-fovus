@@ -40,6 +40,7 @@ class FovusJobConfig {
      * Only the name shape is checked locally; the connector is resolved and the entitlement is
      * checked server side at submission time.
      */
+    @JsonDeserialize(using = StorageConnectorsDeserializer)
     List<String> storageConnectors = []
     String jobName
     FovusJobClient jobClient

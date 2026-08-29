@@ -57,7 +57,10 @@ class ResourceConfiguration {
                 storageGiB: other.storageGiB ?: this.storageGiB,
                 isMemoryAutoRetryEnabled: other.isMemoryAutoRetryEnabled != null ? other.isMemoryAutoRetryEnabled :
                                           this.isMemoryAutoRetryEnabled,
-                storageConnectors: other.storageConnectors ?: this.storageConnectors
+                // An explicit empty list is an override, not an absent value: a process that
+                // clears the pipeline-wide connectors must not have them merged back in.
+                storageConnectors: other.storageConnectors != null ? other.storageConnectors :
+                                   this.storageConnectors
         )
     }
 }
