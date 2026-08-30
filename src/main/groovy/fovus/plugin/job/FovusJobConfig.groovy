@@ -208,6 +208,9 @@ class FovusJobConfig {
                 isHybridStrategyAllowed: (extension?.isHybridStrategyAllowed != null)
                         ? extension.isHybridStrategyAllowed
                         : defaultJobConstraints.isHybridStrategyAllowed,
+                isMultiRegionScalingAllowed: (extension?.isMultiRegionScalingAllowed != null)
+                        ? extension.isMultiRegionScalingAllowed
+                        : defaultJobConstraints.isMultiRegionScalingAllowed,
                 supportedCpuArchitectures: cpuArchitectures,
                 isResumableWorkload: (extension?.isResumableWorkload != null)
                         ? extension.isResumableWorkload
@@ -531,6 +534,7 @@ class JobConstraints {
     String benchmarkingProfileName = "Default CPU"
     List<String> supportedCpuArchitectures = ["x86-64", "arm-64"]
     boolean isHybridStrategyAllowed = false
+    boolean isMultiRegionScalingAllowed = false
     boolean enableHyperthreading = false
     boolean allowPreemptible = false
     boolean isResumableWorkload = false

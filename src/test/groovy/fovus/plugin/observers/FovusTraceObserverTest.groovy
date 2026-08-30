@@ -82,6 +82,46 @@ class FovusTraceObserverTest extends Specification {
         configurations[0].benchmarkingProfileName == 'align-profile'
     }
 
+    def 'collectResourceConfigurations should read the scaling strategy flags'() {
+        given:
+        def session = Mock(Session) {
+            getConfig() >> [process: [
+                    ext                  : [benchmarkingProfileName    : 'global-profile',
+                                            isHybridStrategyAllowed    : true,
+                                            isMultiRegionScalingAllowed: true],
+                    'withName:alignReads': [ext: [benchmarkingProfileName    : 'align-profile',
+                                                  isMultiRegionScalingAllowed: false]]
+            ]]
+        }
+
+        when:
+        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
+
+        then:
+        configurations[0].isHybridStrategyAllowed
+        configurations[0].isMultiRegionScalingAllowed
+
+        and: 'the override wins on isMultiRegionScalingAllowed but inherits isHybridStrategyAllowed'
+        configurations[1].isHybridStrategyAllowed
+        !configurations[1].isMultiRegionScalingAllowed
+    }
+
+    def 'collectResourceConfigurations should ignore non-boolean scaling strategy flags'() {
+        given:
+        def session = Mock(Session) {
+            getConfig() >> [process: [ext: [benchmarkingProfileName    : 'global-profile',
+                                            isHybridStrategyAllowed    : 'yes',
+                                            isMultiRegionScalingAllowed: 1]]]
+        }
+
+        when:
+        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
+
+        then:
+        configurations[0].isHybridStrategyAllowed == null
+        configurations[0].isMultiRegionScalingAllowed == null
+    }
+
     def 'collectResourceConfigurations should ignore a process entry without a benchmarking profile'() {
         given:
         def session = Mock(Session) {
