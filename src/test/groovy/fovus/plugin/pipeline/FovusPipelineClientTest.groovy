@@ -128,6 +128,20 @@ class FovusPipelineClientTest extends Specification {
         flagValue(client.captured, '--configurations') == '[{"benchmarkingProfileName":"profile","maxvCpu":8}]'
     }
 
+    def 'preConfigResources should serialise the storage connectors'() {
+        given:
+        def client = new CapturingClient()
+        def configuration = new ResourceConfiguration(benchmarkingProfileName: 'profile',
+                                                      storageConnectors: ['reference-genomes'])
+
+        when:
+        client.preConfigResources(TEST_CONFIG, TEST_PIPELINE, [configuration])
+
+        then:
+        flagValue(client.captured, '--configurations') ==
+                '[{"benchmarkingProfileName":"profile","storageConnectors":["reference-genomes"]}]'
+    }
+
     def 'a failing CLI call should raise an error'() {
         given:
         def client = new CapturingClient() {

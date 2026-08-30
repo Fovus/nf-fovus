@@ -26,6 +26,7 @@ class ResourceConfiguration {
     Number walltimeHours
     Number storageGiB
     Boolean isMemoryAutoRetryEnabled
+    List<String> storageConnectors
 
     /**
      * Merges this configuration with another configuration.
@@ -61,7 +62,11 @@ class ResourceConfiguration {
                 walltimeHours: other.walltimeHours ?: this.walltimeHours,
                 storageGiB: other.storageGiB ?: this.storageGiB,
                 isMemoryAutoRetryEnabled: other.isMemoryAutoRetryEnabled != null ? other.isMemoryAutoRetryEnabled :
-                                          this.isMemoryAutoRetryEnabled
+                                          this.isMemoryAutoRetryEnabled,
+                // An explicit empty list is an override, not an absent value: a process that
+                // clears the pipeline-wide connectors must not have them merged back in.
+                storageConnectors: other.storageConnectors != null ? other.storageConnectors :
+                                   this.storageConnectors
         )
     }
 }

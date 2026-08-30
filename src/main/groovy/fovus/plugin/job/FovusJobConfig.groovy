@@ -12,6 +12,7 @@ import nextflow.processor.TaskRun
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.regex.Pattern
 
 /**
  * Configurations for Fovus job.
@@ -34,8 +35,18 @@ class FovusJobConfig {
 
     boolean isSearchOutputKeywordsEnabled = false
     KeywordSearchInput keywordSearchInput
+    /**
+     * Storage connectors the job may use. Optional: defaults to an empty list when absent or null.
+     * Only the name shape is checked locally; the connector is resolved and the entitlement is
+     * checked server side at submission time.
+     */
+    @JsonDeserialize(using = StorageConnectorsDeserializer)
+    List<String> storageConnectors = []
     String jobName
     FovusJobClient jobClient
+
+    /** A storage connector name: letters, digits and hyphens only. */
+    private static final Pattern STORAGE_CONNECTOR_NAME = Pattern.compile('^[a-zA-Z0-9-]+$')
 
     private final TaskRun task
 
@@ -65,6 +76,10 @@ class FovusJobConfig {
 
     void setKeywordSearchInput(KeywordSearchInput keywordSearchInput) {
         this.keywordSearchInput = keywordSearchInput
+    }
+
+    void setStorageConnectors(List<String> storageConnectors) {
+        this.storageConnectors = storageConnectors ?: [] as List<String>
     }
 
     void setRunCommand(String runCmd) {
@@ -104,6 +119,7 @@ class FovusJobConfig {
         this.workload = createWorkload(fovusJobConfig)
         this.isSearchOutputKeywordsEnabled = createIsSearchOutputKeywordsEnabled(fovusJobConfig)
         this.keywordSearchInput = createKeywordSearchInput(fovusJobConfig)
+        this.storageConnectors = createStorageConnectors(fovusJobConfig)
         this.jobName = normalizeJobName(task.name)
 
     }
@@ -384,6 +400,60 @@ class FovusJobConfig {
         )
     }
 
+
+    private List<String> createStorageConnectors(FovusJobConfig fovusJobConfig) {
+        def extension = task.config.get('ext') as Map<String, Object>
+        return resolveStorageConnectors(extension?.storageConnectors, fovusJobConfig?.storageConnectors)
+    }
+
+    /**
+     * Resolve the storage connectors of a job.
+     *
+     * The attribute is optional at every level: when it is absent or null everywhere the job is
+     * created with an empty list, exactly as it was before the attribute existed.
+     *
+     * Only the shape of each name is checked here. Whether a connector exists, and whether the
+     * caller is entitled to it, is decided server side at submission time - entitlement can change
+     * between a local check and the submission, so it is deliberately never cached or pre-resolved.
+     *
+     * @param extensionValue the value of {@code ext.storageConnectors} on the process, if any
+     * @param defaultConnectors the connectors from the job config file or the benchmarking profile
+     * @return the connector names, never null
+     */
+    static List<String> resolveStorageConnectors(Object extensionValue, List<String> defaultConnectors) {
+        List connectors = defaultConnectors
+
+        if (extensionValue != null) {
+            if (extensionValue instanceof List) {
+                connectors = extensionValue as List
+            } else {
+                log.warn "[FOVUS] Ignoring ext.storageConnectors because it is not a list"
+            }
+        }
+
+        if (connectors == null) {
+            return [] as List<String>
+        }
+
+        return validateStorageConnectors(connectors).unique()
+    }
+
+    /**
+     * Check the name shape of every storage connector and fail fast on the first offending entry.
+     */
+    protected static List<String> validateStorageConnectors(List connectors) {
+        def validated = [] as List<String>
+
+        for (def connector : connectors) {
+            if (!(connector instanceof CharSequence) || !STORAGE_CONNECTOR_NAME.matcher(connector as CharSequence).matches()) {
+                throw new Error("[Fovus] Invalid storage connector name: '${connector}'. " +
+                        "A storage connector name may only contain letters, digits and hyphens (^[a-zA-Z0-9-]+\$).")
+            }
+            validated.add(connector.toString())
+        }
+
+        return validated
+    }
 
     /**
      * Save the job config to a JSON file and return the file path.

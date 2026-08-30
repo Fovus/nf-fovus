@@ -69,3 +69,18 @@ class EnvironmentDeserializer extends JsonDeserializer<Environment> {
     }
 }
 
+/**
+ * Read `storageConnectors` entries with their JSON types intact.
+ *
+ * Binding straight to a {@code List<String>} lets Jackson coerce a non-string scalar - `42` becomes
+ * `"42"` - and the coerced name then passes the name-shape check and reaches the server. Reading
+ * the entries untyped keeps their original type, so a malformed entry fails locally with the same
+ * error the process-level attribute produces.
+ */
+class StorageConnectorsDeserializer extends JsonDeserializer<List<String>> {
+    @Override
+    List<String> deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+        final entries = p.codec.readValue(p, List) as List
+        return FovusJobConfig.validateStorageConnectors(entries)
+    }
+}
