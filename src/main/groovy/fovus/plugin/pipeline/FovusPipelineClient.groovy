@@ -20,11 +20,11 @@ class FovusPipelineClient {
     FovusPipelineClient() {}
 
     /**
-     * Run a Fovus CLI command. Overridable so tests can assert on the arguments this client
-     * builds without spawning the CLI.
+     * Run a Fovus CLI command. Overridable so tests can assert on the arguments (and the
+     * environment) this client builds without spawning the CLI.
      */
-    protected CliExecutionResult runCli(List<String> command) {
-        return FovusUtil.executeCommand(command)
+    protected CliExecutionResult runCli(List<String> command, Map<String, String> env) {
+        return FovusUtil.executeCommand(command, env)
     }
 
     /**
@@ -33,8 +33,10 @@ class FovusPipelineClient {
      *
      * @param command The CLI command being built
      * @param runCommand The Nextflow command line, ie {@code session.commandLine}
+     * @param config Used to redact the configured personal access token out of {@code runCommand}
+     *  before it is sent to the Fovus backend as run metadata
      */
-    private static void appendRunMetadata(List<String> command, String runCommand) {
+    private static void appendRunMetadata(List<String> command, String runCommand, FovusConfig config) {
         // Report the Nextflow release actually running the pipeline, not the one compiled against
         final workflowManagerVersion = BuildInfo.version
         if (workflowManagerVersion) {
@@ -42,7 +44,7 @@ class FovusPipelineClient {
         }
 
         if (runCommand) {
-            command << '--run-command' << runCommand
+            command << '--run-command' << config.redactSecret(runCommand)
         }
     }
 
@@ -53,16 +55,16 @@ class FovusPipelineClient {
     String createPipeline(FovusConfig config, String name, String runCommand) {
         def command = [config.getCliPath(), '--silence', 'pipeline', 'create', '--name', name, '--workflow-host',
                        'local']
-        appendRunMetadata(command, runCommand)
+        appendRunMetadata(command, runCommand, config)
 
-        def result = runCli(command)
+        def result = runCli(command, config.cliEnv())
 
         if (result.exitCode != 0) {
-            throw new RuntimeException("Failed to create Fovus pipeline: ${result.error}")
+            throw new RuntimeException("Failed to create Fovus pipeline: ${config.redactSecret(result.error)}")
         }
         def slurper = new JsonSlurper()
         // Parse the string. JsonSlurper is often lenient with single quotes.
-        log.debug "[FOVUS] Output: ${result.output.trim().split('\n')[-1]}"
+        log.debug "[FOVUS] Output: ${config.redactSecret(result.output.trim().split('\n')[-1])}"
 
         def dataObject = slurper.parseText((result.output.trim().split('\n')[-1]).replaceAll("'", '"')) as Map
         def pipelineId = dataObject.get("pipelineId") as String
@@ -86,19 +88,19 @@ class FovusPipelineClient {
                               String runCommand) {
         log.trace "[FOVUS] Updating pipeline status to ${status.name()}"
         def command = [config.getCliPath(), '--silence', 'pipeline', 'update', '--pipeline-id', pipeline.getPipelineId(), '--status', status.name()]
-        appendRunMetadata(command, runCommand)
+        appendRunMetadata(command, runCommand, config)
 
-        def result = runCli(command)
+        def result = runCli(command, config.cliEnv())
         if (result.exitCode != 0) {
-            throw new RuntimeException("Failed to update Fovus pipeline status: ${result.error}")
+            throw new RuntimeException("Failed to update Fovus pipeline status: ${config.redactSecret(result.error)}")
         }
     }
 
     FovusPipeline getPipeline(FovusConfig config, String pipelineId) {
         def command = [config.getCliPath(), '--silence', 'pipeline', 'get', '--pipeline-id', pipelineId]
-        def result = runCli(command)
+        def result = runCli(command, config.cliEnv())
         if (result.exitCode != 0) {
-            throw new RuntimeException("Failed to get Fovus pipeline: ${result.error}")
+            throw new RuntimeException("Failed to get Fovus pipeline: ${config.redactSecret(result.error)}")
         }
 
         final jsonData = new JsonSlurper().parseText(result.output)
@@ -137,10 +139,10 @@ class FovusPipelineClient {
             command << '--pipeline-config' << nextflowConfig
         }
 
-        def result = runCli(command)
+        def result = runCli(command, config.cliEnv())
 
         if (result.exitCode != 0) {
-            throw new RuntimeException("Failed to configure Fovus pipeline resources: ${result.error}")
+            throw new RuntimeException("Failed to configure Fovus pipeline resources: ${config.redactSecret(result.error)}")
         }
     }
 }

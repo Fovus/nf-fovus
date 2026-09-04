@@ -33,7 +33,7 @@ class FovusTraceObserver implements TraceObserverV2 {
     FovusTraceObserver(Session session) {
         this(
                 session,
-                new FovusConfig(session.config.navigate('fovus') as Map),
+                FovusConfig.fromSession(session),
                 new FovusPipelineClient()
         )
     }
