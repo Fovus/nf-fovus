@@ -16,7 +16,7 @@ class FovusStorageClient {
     void validateOrMountJuiceFs(Path path) {
         def command = [config.getCliPath(), 'storage-cached', 'mount', '--mount-storage-path', Escape.path(path.toAbsolutePath())]
 
-        def result = FovusUtil.executeCommand(command)
+        def result = FovusUtil.executeCommand(command, config.cliEnv())
 
         if (result.exitCode != 0) {
             throw new RuntimeException("[FOVUS] Fail to mount working directory at ${path}")
@@ -26,7 +26,7 @@ class FovusStorageClient {
     void validateOrMountFovusStorage(Path path) {
         def command = [config.getCliPath(), 'storage', 'mount', '--mount-storage-path', Escape.path(path.toAbsolutePath())]
 
-        def result = FovusUtil.executeCommand(command)
+        def result = FovusUtil.executeCommand(command, config.cliEnv())
 
         if (result.exitCode != 0) {
             throw new RuntimeException("[FOVUS] Fail to mount working directory at ${path}")

@@ -55,11 +55,12 @@ class FovusJobClient {
             command << config.projectName
         }
 
-        def result = FovusUtil.executeCommand(command)
+        def result = FovusUtil.executeCommand(command, config.cliEnv())
 
 
         if (result.exitCode != 0) {
-            throw new RuntimeException("Failed to create Fovus job: ${result.error}")
+            throw new RuntimeException("Failed to create Fovus job: " +
+                    "${config.redactSecret(result.error)}")
         }
 
         // Get the Job ID (the last line of the output)
@@ -71,7 +72,7 @@ class FovusJobClient {
 
     FovusJobStatus getJobStatus(String jobId) {
         def command = [config.getCliPath(), 'job', 'status', '--job-id', jobId]
-        def result = FovusUtil.executeCommand(command)
+        def result = FovusUtil.executeCommand(command, config.cliEnv())
 
         def jobStatus = result.output.trim().split('\n')[-1]
         log.trace"[FOVUS] Job Id: ${jobId}, status: ${jobStatus}"
@@ -111,19 +112,21 @@ class FovusJobClient {
         def downloadJobCommand = [config.getCliPath(), 'job', 'download', jobDirectoryPath, '--job-id', jobId]
 
         log.trace"[FOVUS] Download job outputs"
-        def result = FovusUtil.executeCommand(downloadJobCommand)
+        def result = FovusUtil.executeCommand(downloadJobCommand, config.cliEnv())
 
         if (result.exitCode != 0) {
-            throw new RuntimeException("Failed to download Fovus job outputs: ${result.error}")
+            throw new RuntimeException("Failed to download Fovus job outputs: " +
+                    "${config.redactSecret(result.error)}")
         }
     }
 
     public void terminateJob(String jobId) {
         def command = [config.getCliPath(), 'job', 'terminate', '--job-id', jobId]
-        def result = FovusUtil.executeCommand(command)
+        def result = FovusUtil.executeCommand(command, config.cliEnv())
 
         if (result.exitCode != 0) {
-            throw new RuntimeException("Failed to terminate Fovus job: ${result.error}")
+            throw new RuntimeException("Failed to terminate Fovus job: " +
+                    "${config.redactSecret(result.error)}")
         }
     }
 
@@ -149,11 +152,11 @@ class FovusJobClient {
 
         // 2. Execute the actual command if no valid cache exists
         def command = [config.getCliPath(), 'job', 'get-default-config', '--benchmarking-profile-name', "${benchmarkingProfileName}"]
-        def result = FovusUtil.executeCommand(command)
+        def result = FovusUtil.executeCommand(command, config.cliEnv())
 
         log.trace "[FOVUS] getDefaultJobConfig with exit code: ${result.exitCode}"
         if (result.exitCode != 0) {
-            log.trace "[FOVUS] Command error: ${result.error}"
+            log.trace "[FOVUS] Command error: ${config.redactSecret(result.error)}"
             return null
         }
 
@@ -185,10 +188,11 @@ class FovusJobClient {
         } else {
             command = getStorageFileDownloadCommand(fovusPath, localPath)
         }
-        def result = FovusUtil.executeCommand(command)
+        def result = FovusUtil.executeCommand(command, config.cliEnv())
 
         if (result.exitCode != 0) {
-            throw new RuntimeException("Failed to upload file: ${result.error}")
+            throw new RuntimeException("Failed to upload file: " +
+                    "${config.redactSecret(result.error)}")
         }
     }
 
@@ -247,10 +251,11 @@ class FovusJobClient {
             command << path
         }
 
-        def result = FovusUtil.executeCommand(command)
+        def result = FovusUtil.executeCommand(command, config.cliEnv())
 
         if (result.exitCode != 0) {
-            throw new RuntimeException("Failed to upload file: ${result.error}")
+            throw new RuntimeException("Failed to upload file: " +
+                    "${config.redactSecret(result.error)}")
         }
 
 

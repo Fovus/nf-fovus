@@ -2,7 +2,10 @@ package fovus.plugin
 
 import groovy.transform.CompileStatic
 import groovy.transform.MapConstructor
+import groovy.util.ConfigObject
 import groovy.util.logging.Slf4j
+import nextflow.config.ConfigParser
+import nextflow.config.ConfigParserFactory
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -30,13 +33,18 @@ class FovusUtil {
 
     /**
      * Helper method to execute Fovus CLI commands with retry logic
-     * @param command
+     *
+     * @param command The command and its arguments
+     * @param extraEnv Environment variables to add to the subprocess environment, on top of the
+     *  parent process's own environment (eg PATH). {@code null} or empty leaves the environment
+     *  untouched.
      * @return
      */
-    static public CliExecutionResult executeCommand(final List command) {
+    static public CliExecutionResult executeCommand(final List command, final Map<String, String> extraEnv = null) {
         int maxRetries = 3
         int attempt = 0
         CliExecutionResult result = null
+        final secret = extraEnv?.get('FOVUS_PAT')
 
         while (attempt < maxRetries) {
             attempt++
@@ -45,9 +53,15 @@ class FovusUtil {
             def stdout = new StringBuilder()
             def stderr = new StringBuilder()
 
-            def process = command.execute()
-            process.consumeProcessOutput(stdout, stderr)
-            process.waitFor()
+            final pb = new ProcessBuilder(command.collect { it.toString() })
+            if (extraEnv) {
+                pb.environment().putAll(extraEnv)
+            }
+            def process = pb.start()
+            // waitForProcessOutput() joins the stream-consumer threads before returning;
+            // consumeProcessOutput() + waitFor() races them against process exit and can
+            // return a result whose output/error are still empty.
+            process.waitForProcessOutput(stdout, stderr)
 
             result = new CliExecutionResult(
                     exitCode: process.exitValue(),
@@ -56,8 +70,8 @@ class FovusUtil {
             )
 
             log.debug "[FOVUS] Command executed with exit code: ${result.exitCode}"
-            log.debug "[FOVUS] Command output: ${result.output}"
-            log.debug "[FOVUS] Command error: ${result.error}"
+            log.debug "[FOVUS] Command output: ${redact(result.output, secret)}"
+            log.debug "[FOVUS] Command error: ${redact(result.error, secret)}"
 
             if (result.exitCode == 0) {
                 // Success, break out of retry loop
@@ -69,6 +83,56 @@ class FovusUtil {
                     sleep(2000)  // small backoff before retry
                 }
             }
+        }
+
+        return result
+    }
+
+    /**
+     * Scrub every occurrence of {@code secret} out of {@code text}, eg before logging CLI output or
+     * embedding it in an exception message. A no-op when either argument is empty.
+     */
+    static String redact(String text, String secret) {
+        if (!text || !secret) return text
+        return text.replace(secret, '[REDACTED]')
+    }
+
+    /**
+     * Re-parse the given Nextflow config files in Nextflow's secret-stripping mode (which rewrites
+     * any {@code secrets.X} property reference to the literal string {@code "secrets.X"} while
+     * leaving literals and method calls, including {@code System.getenv()}, untouched) and read back
+     * the value at each of the given dotted config paths.
+     *
+     * Used to structurally verify that a config field is set via {@code secrets.X}: a literal value
+     * and a resolved secret are indistinguishable once Nextflow has interpolated {@code secrets.X}
+     * to its real string, so this has to be checked against a separately-stripped parse rather than
+     * the normally-resolved config.
+     *
+     * @param configFiles The config files resolved by Nextflow, ie {@code session.configFiles}
+     * @param dottedPaths The dotted config paths to read back, eg {@code fovus.auth.personalAccessToken}
+     * @return A map from each requested path to the stripped value found there, or {@code null} when
+     *  the path resolves to anything other than a plain string (eg it is absent, or a literal that
+     *  the parser reduced to a non-string value)
+     */
+    static Map<String, String> stripSecretsRefs(List<Path> configFiles, List<String> dottedPaths) {
+        final result = new LinkedHashMap<String, String>()
+        ConfigObject merged = new ConfigObject()
+
+        if (configFiles) {
+            final ConfigParser parser = ConfigParserFactory.create().setStripSecrets(true)
+            for (Path file : configFiles) {
+                try {
+                    if (!file || !Files.exists(file)) continue
+                    merged = merged.merge(parser.parse(file)) as ConfigObject
+                } catch (Exception e) {
+                    log.warn "[FOVUS] Unable to parse config file `${file}` while checking secrets usage: ${e.message}"
+                }
+            }
+        }
+
+        for (String path : dottedPaths) {
+            final value = merged.navigate(path)
+            result[path] = value instanceof String ? (String) value : null
         }
 
         return result

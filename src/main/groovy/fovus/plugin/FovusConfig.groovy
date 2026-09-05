@@ -1,7 +1,9 @@
 package fovus.plugin
 
+import fovus.plugin.util.FovusEnvironment
 import groovy.transform.CompileStatic
 import jdk.jfr.Description
+import nextflow.Session
 import nextflow.config.spec.ConfigOption
 import nextflow.config.spec.ConfigScope
 import nextflow.config.spec.ScopeName
@@ -46,10 +48,19 @@ class FovusConfig implements ConfigScope {
     @Description('(Optional) The project name to group jobs and pipelines for budget management.')
     final public String projectName
 
+    @Description('(Optional) Non-interactive Fovus CLI authentication for automated runs. See `fovus.auth`.')
+    final public FovusAuthConfig auth
+
     /** Required by extension point - DO NOT REMOVE */
-    FovusConfig() {}
+    FovusConfig() {
+        this.auth = new FovusAuthConfig()
+    }
 
     FovusConfig(Map config) {
+        this(config, new FovusAuthConfig())
+    }
+
+    FovusConfig(Map config, FovusAuthConfig auth) {
         this.cliPath = config.cliPath ?: "fovus"
         this.pipelineName = config.pipelineName
 
@@ -58,9 +69,39 @@ class FovusConfig implements ConfigScope {
         }
 
         this.projectName = config.projectName ?: null
+        this.auth = auth ?: new FovusAuthConfig()
     }
 
     String getCliPath() {cliPath}
 
     String getPipelineName() { pipelineName }
+
+    FovusAuthConfig getAuth() { auth }
+
+    /**
+     * @return The environment every `fovus` CLI subprocess spawned with this config should carry,
+     *  ie {@code FOVUS_EMAIL}/{@code FOVUS_PAT} when {@link #auth} is configured, unchanged otherwise.
+     */
+    Map<String, String> cliEnv() {
+        return FovusAuthConfig.buildEnvironment(auth, [:])
+    }
+
+    /**
+     * Scrub the configured personal access token out of {@code text}, eg before logging CLI output
+     * or embedding it in an exception message. A no-op when {@link #auth} is not configured.
+     */
+    String redactSecret(String text) {
+        return FovusUtil.redact(text, auth?.personalAccessToken)
+    }
+
+    /**
+     * Build the `fovus` config for a run, resolving `fovus.auth` with the `LOCAL`-vs-`REMOTE`
+     * workflow-host scoping applied (see {@link FovusAuthConfig#resolve}).
+     */
+    static FovusConfig fromSession(Session session) {
+        final fovusConfigMap = session.config.navigate('fovus') as Map
+        final authConfig = FovusAuthConfig.resolve(fovusConfigMap?.get('auth') as Map, session?.getConfigFiles(),
+                                                    FovusEnvironment.isHostedMode())
+        return new FovusConfig(fovusConfigMap, authConfig)
+    }
 }
