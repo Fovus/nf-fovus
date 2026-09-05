@@ -48,7 +48,6 @@ class FovusConfig implements ConfigScope {
     @Description('(Optional) The project name to group jobs and pipelines for budget management.')
     final public String projectName
 
-    @ConfigOption
     @Description('(Optional) Non-interactive Fovus CLI authentication for automated runs. See `fovus.auth`.')
     final public FovusAuthConfig auth
 
