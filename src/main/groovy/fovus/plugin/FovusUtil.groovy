@@ -58,8 +58,10 @@ class FovusUtil {
                 pb.environment().putAll(extraEnv)
             }
             def process = pb.start()
-            process.consumeProcessOutput(stdout, stderr)
-            process.waitFor()
+            // waitForProcessOutput() joins the stream-consumer threads before returning;
+            // consumeProcessOutput() + waitFor() races them against process exit and can
+            // return a result whose output/error are still empty.
+            process.waitForProcessOutput(stdout, stderr)
 
             result = new CliExecutionResult(
                     exitCode: process.exitValue(),
