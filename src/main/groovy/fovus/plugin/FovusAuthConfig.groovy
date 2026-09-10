@@ -122,13 +122,14 @@ class FovusAuthConfig implements ConfigScope {
      * @param authConfigMap The resolved `fovus.auth` config map, eg {@code session.config.navigate('fovus.auth')}
      * @param configFiles The config files resolved by Nextflow, eg {@code session.configFiles}
      * @param isHostedMode Whether the pipeline is running in Fovus's own managed (`REMOTE`) execution context
+     * @param profile The active `-profile` name(s), eg {@code session.profile}
      */
-    static FovusAuthConfig resolve(Map authConfigMap, List<Path> configFiles, boolean isHostedMode) {
+    static FovusAuthConfig resolve(Map authConfigMap, List<Path> configFiles, boolean isHostedMode, String profile) {
         if (isHostedMode) {
             return new FovusAuthConfig()
         }
 
-        final stripped = FovusUtil.stripSecretsRefs(configFiles, [EMAIL_PATH, PERSONAL_ACCESS_TOKEN_PATH])
+        final stripped = FovusUtil.stripSecretsRefs(configFiles, [EMAIL_PATH, PERSONAL_ACCESS_TOKEN_PATH], profile)
         return new FovusAuthConfig(authConfigMap, stripped[EMAIL_PATH], stripped[PERSONAL_ACCESS_TOKEN_PATH])
     }
 }

@@ -101,7 +101,7 @@ class FovusConfig implements ConfigScope {
     static FovusConfig fromSession(Session session) {
         final fovusConfigMap = session.config.navigate('fovus') as Map
         final authConfig = FovusAuthConfig.resolve(fovusConfigMap?.get('auth') as Map, session?.getConfigFiles(),
-                                                    FovusEnvironment.isHostedMode())
+                                                    FovusEnvironment.isHostedMode(), session?.profile)
         return new FovusConfig(fovusConfigMap, authConfig)
     }
 }

@@ -156,7 +156,7 @@ class FovusAuthConfigTest extends Specification {
 
     def 'resolve should skip validation entirely in hosted mode, even for an invalid config'() {
         when:
-        def config = FovusAuthConfig.resolve([email: 'automation@corp.com'], null, true)
+        def config = FovusAuthConfig.resolve([email: 'automation@corp.com'], null, true, null)
 
         then:
         !config.isConfigured()
@@ -175,7 +175,32 @@ class FovusAuthConfigTest extends Specification {
             """.stripIndent().bytes)
 
         when:
-        def config = FovusAuthConfig.resolve(VALID_CONFIG, [configFile], false)
+        def config = FovusAuthConfig.resolve(VALID_CONFIG, [configFile], false, null)
+
+        then:
+        config.isConfigured()
+        config.email == 'automation@corp.com'
+        config.personalAccessToken == 'pat-value'
+    }
+
+    def 'resolve should apply real secrets.X enforcement when fovus.auth is nested under profiles { <name> { ... } }'() {
+        given:
+        def configFile = Files.write(tempDir.resolve('nextflow.config'), """\
+            profiles {
+                fovus {
+                    fovus {
+                        pipelineName = 'test-pipeline'
+                        auth {
+                            email               = secrets.FOVUS_EMAIL
+                            personalAccessToken = secrets.FOVUS_PAT
+                        }
+                    }
+                }
+            }
+            """.stripIndent().bytes)
+
+        when:
+        def config = FovusAuthConfig.resolve(VALID_CONFIG, [configFile], false, 'fovus')
 
         then:
         config.isConfigured()
@@ -197,7 +222,7 @@ class FovusAuthConfigTest extends Specification {
 
         when:
         FovusAuthConfig.resolve([email: 'automation@corp.com', personalAccessToken: 'literal-and-not-allowed'],
-                                 [configFile], false)
+                                 [configFile], false, null)
 
         then:
         def e = thrown(IllegalArgumentException)
@@ -213,7 +238,7 @@ class FovusAuthConfigTest extends Specification {
             """.stripIndent().bytes)
 
         when:
-        def config = FovusAuthConfig.resolve([:], [configFile], false)
+        def config = FovusAuthConfig.resolve([:], [configFile], false, null)
 
         then:
         !config.isConfigured()
