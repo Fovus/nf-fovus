@@ -24,7 +24,7 @@ class FovusStorageClient {
     }
 
     void validateOrMountFovusStorage(Path path) {
-        def command = [config.getCliPath(), 'storage', 'mount', '--mount-storage-path', Escape.path(path.toAbsolutePath())]
+        def command = [config.getCliPath(), 'storage', 'mount', '--mount-storage-path', Escape.path(path.toAbsolutePath()), '--no-auto-remount']
 
         def result = FovusUtil.executeCommand(command, config.cliEnv())
 
