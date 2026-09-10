@@ -104,6 +104,16 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
                 .resolve("fovus-work")
     }
 
+    /**
+     * Not literally true -- fovus has no native secrets provider -- but it stops Nextflow
+     * from invoking the global {@code SecretsProvider} when building the task wrapper, which
+     * can otherwise fail task submission depending on what other plugins are loaded.
+     */
+    @Override
+    boolean isSecretNative() {
+        return true
+    }
+
     @Override
     boolean isForeignFile(Path path) {
         if (path.scheme != getStageDir().scheme) {
