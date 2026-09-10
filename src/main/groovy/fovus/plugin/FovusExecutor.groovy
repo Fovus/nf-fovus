@@ -105,10 +105,9 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     }
 
     /**
-     * Not actually true -- fovus has no native secrets provider -- but it stops Nextflow from
-     * calling the globally-registered {@code SecretsProvider} when building the task wrapper.
-     * Some co-loaded plugins (e.g. AWS's) unconditionally reject any executor but their own,
-     * which crashes every fovus task regardless of whether it declares a {@code secret}.
+     * Not literally true -- fovus has no native secrets provider -- but it stops Nextflow
+     * from invoking the global {@code SecretsProvider} when building the task wrapper, which
+     * can otherwise fail task submission depending on what other plugins are loaded.
      */
     @Override
     boolean isSecretNative() {
