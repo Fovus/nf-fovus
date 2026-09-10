@@ -110,16 +110,23 @@ class FovusUtil {
      *
      * @param configFiles The config files resolved by Nextflow, ie {@code session.configFiles}
      * @param dottedPaths The dotted config paths to read back, eg {@code fovus.auth.personalAccessToken}
+     * @param profile The active {@code -profile} name(s), ie {@code session.profile}. A field set
+     *  inside {@code profiles { <name> { ... } } } only appears at its dotted path once the parser is
+     *  told which profile is selected, same as Nextflow's own {@code ConfigBuilder} does for the real
+     *  (non-stripped) config resolution.
      * @return A map from each requested path to the stripped value found there, or {@code null} when
      *  the path resolves to anything other than a plain string (eg it is absent, or a literal that
      *  the parser reduced to a non-string value)
      */
-    static Map<String, String> stripSecretsRefs(List<Path> configFiles, List<String> dottedPaths) {
+    static Map<String, String> stripSecretsRefs(List<Path> configFiles, List<String> dottedPaths, String profile) {
         final result = new LinkedHashMap<String, String>()
         ConfigObject merged = new ConfigObject()
 
         if (configFiles) {
             final ConfigParser parser = ConfigParserFactory.create().setStripSecrets(true)
+            if (profile) {
+                parser.setProfiles(profile.tokenize(','))
+            }
             for (Path file : configFiles) {
                 try {
                     if (!file || !Files.exists(file)) continue

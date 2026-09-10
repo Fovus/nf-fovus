@@ -162,7 +162,7 @@ class FovusUtilTest extends Specification {
             """.stripIndent().bytes)
 
         expect:
-        FovusUtil.stripSecretsRefs([configFile], ['fovus.auth.personalAccessToken']) ==
+        FovusUtil.stripSecretsRefs([configFile], ['fovus.auth.personalAccessToken'], null) ==
                 [(('fovus.auth.personalAccessToken')): 'secrets.FOVUS_PAT']
     }
 
@@ -177,7 +177,7 @@ class FovusUtilTest extends Specification {
             """.stripIndent().bytes)
 
         expect:
-        FovusUtil.stripSecretsRefs([configFile], ['fovus.auth.personalAccessToken']) ==
+        FovusUtil.stripSecretsRefs([configFile], ['fovus.auth.personalAccessToken'], null) ==
                 [(('fovus.auth.personalAccessToken')): 'a-literal-value']
     }
 
@@ -186,13 +186,51 @@ class FovusUtilTest extends Specification {
         def configFile = Files.write(tempDir.resolve('nextflow.config'), "fovus.pipelineName = 'test'\n".bytes)
 
         expect:
-        FovusUtil.stripSecretsRefs([configFile], ['fovus.auth.personalAccessToken']) ==
+        FovusUtil.stripSecretsRefs([configFile], ['fovus.auth.personalAccessToken'], null) ==
                 [(('fovus.auth.personalAccessToken')): null]
     }
 
     def 'stripSecretsRefs should tolerate no config files'() {
         expect:
-        FovusUtil.stripSecretsRefs(null, ['fovus.auth.personalAccessToken']) ==
+        FovusUtil.stripSecretsRefs(null, ['fovus.auth.personalAccessToken'], null) ==
+                [(('fovus.auth.personalAccessToken')): null]
+    }
+
+    def 'stripSecretsRefs should read a value nested under profiles { <name> { ... } } when that profile is passed'() {
+        given:
+        def configFile = Files.write(tempDir.resolve('nextflow.config'), """\
+            profiles {
+                fovus {
+                    fovus {
+                        auth {
+                            personalAccessToken = secrets.FOVUS_PAT
+                        }
+                    }
+                }
+            }
+            """.stripIndent().bytes)
+
+        expect:
+        FovusUtil.stripSecretsRefs([configFile], ['fovus.auth.personalAccessToken'], 'fovus') ==
+                [(('fovus.auth.personalAccessToken')): 'secrets.FOVUS_PAT']
+    }
+
+    def 'stripSecretsRefs should not see a profiles { <name> { ... } } value when that profile is not passed'() {
+        given:
+        def configFile = Files.write(tempDir.resolve('nextflow.config'), """\
+            profiles {
+                fovus {
+                    fovus {
+                        auth {
+                            personalAccessToken = secrets.FOVUS_PAT
+                        }
+                    }
+                }
+            }
+            """.stripIndent().bytes)
+
+        expect:
+        FovusUtil.stripSecretsRefs([configFile], ['fovus.auth.personalAccessToken'], null) ==
                 [(('fovus.auth.personalAccessToken')): null]
     }
 }
