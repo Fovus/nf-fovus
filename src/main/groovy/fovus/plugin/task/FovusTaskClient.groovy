@@ -41,7 +41,7 @@ class FovusTaskClient {
     FovusTaskStatus getTaskStatus(String jobId, String taskName) {
         def command = [config.getCliPath(), 'task', 'list', '--job-id', jobId, '--task-names', taskName]
         try {
-            def result = FovusUtil.executeCommand(command)
+            def result = FovusUtil.executeCommand(command, config.cliEnv())
             def taskStatus = getStatusFromJsonOutput(result.output)
 
             // If status not found immediately after submission then consider as CREATED

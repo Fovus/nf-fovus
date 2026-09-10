@@ -1,6 +1,7 @@
 package fovus.plugin.pipeline
 
 import fovus.plugin.CliExecutionResult
+import fovus.plugin.FovusAuthConfig
 import fovus.plugin.FovusConfig
 import nextflow.BuildInfo
 import spock.lang.Specification
@@ -8,17 +9,23 @@ import spock.lang.Specification
 class FovusPipelineClientTest extends Specification {
 
     private static final FovusConfig TEST_CONFIG = new FovusConfig([pipelineName: 'test-pipeline', cliPath: 'fovus'])
+    private static final FovusConfig AUTH_CONFIG = new FovusConfig(
+            [pipelineName: 'test-pipeline', cliPath: 'fovus'],
+            new FovusAuthConfig([email: 'automation@corp.com', personalAccessToken: 'pat-secret-value'],
+                                 'secrets.FOVUS_EMAIL', 'secrets.FOVUS_PAT'))
     private static final FovusPipeline TEST_PIPELINE = new FovusPipeline('test-pipeline', 'p-123')
     private static final String RUN_COMMAND = 'nextflow run hello -plugins nf-fovus'
 
-    /** Captures the argv the client builds instead of spawning the CLI. */
+    /** Captures the argv and env the client builds instead of spawning the CLI. */
     private static class CapturingClient extends FovusPipelineClient {
         List<String> captured
+        Map<String, String> capturedEnv
         String output = "{'pipelineId': 'p-123'}"
 
         @Override
-        protected CliExecutionResult runCli(List<String> command) {
+        protected CliExecutionResult runCli(List<String> command, Map<String, String> env) {
             captured = command
+            capturedEnv = env
             return new CliExecutionResult(exitCode: 0, output: output, error: '')
         }
     }
@@ -146,7 +153,7 @@ class FovusPipelineClientTest extends Specification {
         given:
         def client = new CapturingClient() {
             @Override
-            protected CliExecutionResult runCli(List<String> command) {
+            protected CliExecutionResult runCli(List<String> command, Map<String, String> env) {
                 return new CliExecutionResult(exitCode: 1, output: '', error: 'boom')
             }
         }
@@ -157,5 +164,60 @@ class FovusPipelineClientTest extends Specification {
         then:
         def e = thrown(RuntimeException)
         e.message.contains('boom')
+    }
+
+    def 'a failing CLI call should redact the configured token from the error message'() {
+        given:
+        def client = new CapturingClient() {
+            @Override
+            protected CliExecutionResult runCli(List<String> command, Map<String, String> env) {
+                return new CliExecutionResult(exitCode: 1, output: '', error: 'boom: pat-secret-value leaked')
+            }
+        }
+
+        when:
+        client.updatePipelineStatus(AUTH_CONFIG, TEST_PIPELINE, FovusPipelineStatus.RUNNING, RUN_COMMAND)
+
+        then:
+        def e = thrown(RuntimeException)
+        !e.message.contains('pat-secret-value')
+        e.message.contains('[REDACTED]')
+    }
+
+    def 'createPipeline should carry no credentials when fovus.auth is not configured'() {
+        given:
+        def client = new CapturingClient()
+
+        when:
+        client.createPipeline(TEST_CONFIG, 'test-pipeline')
+
+        then:
+        client.capturedEnv.isEmpty()
+    }
+
+    def 'createPipeline should carry the configured credentials as environment variables'() {
+        given:
+        def client = new CapturingClient()
+
+        when:
+        client.createPipeline(AUTH_CONFIG, 'test-pipeline')
+
+        then:
+        client.capturedEnv == [FOVUS_EMAIL: 'automation@corp.com', FOVUS_PAT: 'pat-secret-value']
+
+        and: 'the token never appears on the command line'
+        !client.captured.contains('pat-secret-value')
+    }
+
+    def 'createPipeline should redact the configured token from the run command before sending it'() {
+        given:
+        def client = new CapturingClient()
+
+        when:
+        client.createPipeline(AUTH_CONFIG, 'test-pipeline', 'nextflow run hello --token pat-secret-value')
+
+        then:
+        !flagValue(client.captured, '--run-command').contains('pat-secret-value')
+        flagValue(client.captured, '--run-command').contains('[REDACTED]')
     }
 }

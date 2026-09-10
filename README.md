@@ -1,5 +1,65 @@
 # nf-fovus plugin
 
+## Configuration
+
+```groovy
+plugins { id 'nf-fovus' }
+
+fovus {
+    cliPath      = '/opt/miniconda3/bin/fovus'  // optional, defaults to 'fovus'
+    pipelineName = 'my-pipeline'                // required
+    projectName  = 'my-project'                 // optional
+}
+```
+
+## Automated authentication (`fovus.auth`)
+
+By default the plugin assumes `fovus` is already authenticated on the host, ie a human has already
+run `fovus auth login`. That works for interactive local runs, but an internal tool that triggers
+Nextflow pipelines automatically (a headless/CI/service context) has no interactive session and no
+way to establish one.
+
+Set `fovus.auth` to let such a run authenticate without any interactive login step:
+
+```groovy
+fovus {
+    pipelineName = 'my-pipeline'
+
+    auth {
+        email               = secrets.FOVUS_EMAIL
+        personalAccessToken = secrets.FOVUS_PAT
+    }
+}
+```
+
+Store the values first with Nextflow's local secrets store:
+
+```bash
+nextflow secrets set FOVUS_EMAIL 'automation@corp.com'
+nextflow secrets set FOVUS_PAT   'your-personal-access-token'
+```
+
+Notes:
+
+- **Both fields are required together**, and **both must be set via `secrets.X`** — a literal string
+  or a `System.getenv(...)`-sourced value fails at startup with a clear error. This is enforced
+  structurally (not by inspecting the resolved value), so there is exactly one supported pattern.
+- Neither set → the feature is inactive and the plugin behaves exactly as it does today: any existing
+  interactive session, or an ambient `FOVUS_EMAIL`/`FOVUS_PAT` already exported by the launching
+  process, continues to work unchanged.
+- The plugin never calls `fovus auth login` and never touches `~/.fovus/.credentials` — it only
+  injects `FOVUS_EMAIL`/`FOVUS_PAT` into the environment of every `fovus` CLI subprocess it spawns,
+  and relies on the Fovus CLI's own environment-variable login to authenticate, cache, and refresh the
+  session. This keeps an automated run fully isolated from any interactive session on the same host,
+  and never puts the token on a process's command-line arguments.
+- This only applies when Nextflow is running in `LOCAL` workflow-host mode; it has no effect on a
+  pipeline already running inside Fovus's own managed `REMOTE` execution context.
+- On a **shared host**, run each automated pipeline under its own OS user or container — environment
+  variables are readable by other processes running as the same OS user via `/proc/<pid>/environ`.
+- **Requires a Fovus CLI release that supports `FOVUS_EMAIL`/`FOVUS_PAT` environment-variable login.**
+  There is no fallback for older CLI versions. The minimum CLI version will be documented here once
+  that release is tagged.
+
 ## Storage connectors
 
 A storage connector grants a Fovus job IAM access to an S3 bucket. Declare the connectors a process

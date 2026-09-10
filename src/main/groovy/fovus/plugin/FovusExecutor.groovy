@@ -51,7 +51,13 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
     protected void register() {
         super.register()
 
-        fovusConfig = new FovusConfig(session.config.navigate('fovus') as Map);
+        final isHostedMode = FovusEnvironment.isHostedMode()
+        fovusConfig = FovusConfig.fromSession(session);
+
+        if (!isHostedMode && fovusConfig.auth.isConfigured()) {
+            warmUpAuth(fovusConfig)
+        }
+
         log.debug "[FOVUS] Creating fovus pipeline."
         this.pipelineClient = new FovusPipelineClient();
 
@@ -62,11 +68,26 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         validateWorkDir()
         uploadBinDir()
 
-        if (FovusEnvironment.isHostedMode()) {
+        if (isHostedMode) {
             PublishDirResolver.initialize(
                 FovusEnvironment.getFovusUserBucket() ?: '',
                 FovusEnvironment.getPipelineId() ?: ''
             )
+        }
+    }
+
+    /**
+     * One `fovus auth user` call, single-threaded, before any Nextflow task runs, so the Fovus CLI's
+     * per-PAT cache is warm before task fan-out, and a bad configured credential fails clearly here
+     * rather than on whichever task happens to run first.
+     */
+    private void warmUpAuth(FovusConfig config) {
+        log.debug "[FOVUS] Warming up Fovus CLI authentication"
+        final result = FovusUtil.executeCommand([config.getCliPath(), 'auth', 'user'], config.cliEnv())
+
+        if (result.exitCode != 0) {
+            throw new RuntimeException("[FOVUS] Failed to authenticate with Fovus using the configured " +
+                    "fovus.auth credentials: ${config.redactSecret(result.error)}")
         }
     }
 
