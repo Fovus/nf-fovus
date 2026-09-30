@@ -53,8 +53,15 @@ The existing mount mode is unchanged: a local `workDir` keeps working exactly as
 - Temporary S3 credentials come from two existing API endpoints, both 1-hour STS credentials:
   - `get-file-upload-token` (`storageType = FOVUS_STORAGE`, `jobId = ""`): writes. The CLI uses
     it for uploads to both `files/` and `pipelines/`, so its policy is wider than one pipeline.
+    The upload role grants only `s3:PutObject` on the bucket, so `DeleteObject`,
+    `AbortMultipartUpload` and `CopyObject` are denied. `CreateMultipartUpload`, `UploadPart`
+    and `CompleteMultipartUpload` work under `PutObject`.
   - `get-file-download-token` (`storageType = PIPELINE_STORAGE`, `pipelineId`): reads and
-    listings for one pipeline.
+    listings. The request names the pipeline, but the download role grants `s3:GetObject` on
+    the whole bucket and `s3:ListBucket`, so the token can read the user's whole bucket.
+
+  These permissions come from reading fovus-infra (`create-s3-rw-roles.ts`,
+  `get-file-download-token.ts`) and are to be confirmed by the spike (§12).
 
   The API returns no expiration; the CLI assumes 3600 s and re-fetches after 55 minutes.
 - No CLI command prints S3 credentials today.
@@ -254,7 +261,9 @@ fovus --silence storage credentials --pipeline-id <pid>
 
 - **Hidden:** registered with `hidden=True`, so it is absent from `fovus --help`,
   `fovus storage --help` and the `sphinx_click` docs. No page under `docs/commands/storage/`,
-  no README mention. Docstring: internal to nf-fovus, not a supported interface.
+  no README mention. Docstring: internal to nf-fovus, not a supported interface. The command's
+  help text says the credentials are for nf-fovus to use with the pipeline's work directory and
+  are not limited to it.
 - **Steps:**
   1. If `sys.stdout.isatty()`, exit 2 with a message on stderr. No override flag.
   2. Validate the pipeline ID:
@@ -341,9 +350,11 @@ The plugin never enables AWS SDK request logging.
 - The hidden command and the pipeline ID checks run in the CLI on the user's machine. A
   determined user can get the same credentials by calling the API with their own sign-in token.
   This is acceptable because the credentials only reach that user's own bucket.
-- The download token is scoped to the pipeline by the backend. The upload token is not: it can
-  write to all of `files/` and `pipelines/`. The plugin's prefix guard keeps the plugin itself
-  inside `pipelines/<pid>/`. A pipeline-scoped backend endpoint (§13) would remove the gap.
+- Neither token is scoped to the pipeline. The read token can read, and the write token can
+  write, anywhere in the user's bucket for up to an hour. The plugin's prefix guard is the only
+  thing keeping the plugin inside `pipelines/<pid>/`, and a leaked credentials document grants
+  that bucket-wide access. A pipeline-scoped backend endpoint (§13) would remove the gap, and it
+  is now the main open hardening item.
 
 ## 9. Lifecycle in direct mode
 
@@ -557,9 +568,11 @@ Run against a beta account first; record answers here before planning.
 
 1. Can the upload token delete objects (`s3:DeleteObject` on `pipelines/<pid>/*`)? Only
    `publishDir` with `mode: 'move'` needs it, since Nextflow skips `cleanup` for remote work
-   directories.
+   directories. Expected from fovus-infra's code: denied (the upload role has only
+   `s3:PutObject`); the plugin's fallbacks cover it. Confirm with the spike.
 2. Can the upload token abort a multipart upload? Does the bucket have a lifecycle rule for
-   incomplete multipart uploads?
+   incomplete multipart uploads? Expected from fovus-infra's code: denied (the upload role has
+   only `s3:PutObject`); the plugin's fallbacks cover it. Confirm with the spike.
 3. ~~Does the `get_pipeline` response include `workflowHost`?~~ Answered: yes, always. The server's
    `PipelineSchema` defaults `workflowHost` to `LOCAL`.
 4. ~~Does `fovus job create --pipeline-id` accept a job directory that does not exist locally?~~
@@ -568,7 +581,10 @@ Run against a beta account first; record answers here before planning.
    again by the end-to-end run.
 5. Can the upload token `CopyObject` within `pipelines/<pid>/` (it needs read access to the
    source)? If not, `copy` uses `GetObject` with the read client and `PutObject` with the write
-   client.
+   client. Expected from fovus-infra's code: denied (the upload role has only `s3:PutObject`);
+   the plugin's fallbacks cover it. Confirm with the spike.
+6. Confirm the read token can `GetObject` outside `pipelines/<pid>/` (fovus-infra's code says
+   yes: the download role reads the whole bucket).
 
 Also confirm while there: the download token (`PIPELINE_STORAGE`) allows `ListObjectsV2` and
 `GetObject` under `pipelines/<pid>/`, and the upload token allows `PutObject` and multipart there.
@@ -576,8 +592,8 @@ Also confirm while there: the download token (`PIPELINE_STORAGE`) allows `ListOb
 ## 13. Out of scope and follow-ups
 
 - **Pipeline-scoped backend endpoint:** one read/write credential limited to
-  `pipelines/<pid>/`. Removes the wide upload-token scope; the plugin would only need
-  `FovusStorageCredentialsSource` to change.
+  `pipelines/<pid>/`. This is the main hardening follow-up, because both current tokens are
+  bucket-wide. The plugin would only need `FovusStorageCredentialsSource` to change.
 - **Publishing into Fovus `files/` in direct mode:** needs a copy that stays in S3 and a check of
   what the tokens allow.
 - **Resume across a mode switch:** map mount-mode cache paths to `fovus://` paths.

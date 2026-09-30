@@ -164,12 +164,49 @@ between a local check and the submission. The server's rejection is surfaced ver
 distinguishes an unknown connector from one you are not entitled to.
 
 
+## Direct mode: run without mounting Fovus storage
+
+By default the plugin mounts Fovus storage on the machine running Nextflow (`fovus storage mount`),
+which needs FUSE. If you cannot mount FUSE there, point `workDir` at Fovus storage instead:
+
+```groovy
+workDir = 'fovus:///fovus-storage/pipelines'
+
+fovus {
+    pipelineName = 'my-pipeline'
+}
+```
+
+or on the command line: `nextflow run main.nf -w fovus:///fovus-storage/pipelines`.
+
+In direct mode the plugin reads and writes the pipeline's work directory with the AWS S3 SDK, using
+short-lived credentials it gets from the Fovus CLI. Nothing is mounted, and compute nodes see the same
+files at `/fovus-storage/pipelines/...` as in mount mode.
+
+- It needs a Fovus CLI that provides storage credentials. If yours is too old, the run stops and asks
+  you to run `pip install --upgrade fovus`.
+- It is only for pipelines launched on your own machine; Fovus-hosted runs always use the mount.
+- `workDir` must be exactly `fovus:///fovus-storage/pipelines`.
+- Local and remote (`http`, `s3://`) inputs are uploaded into the pipeline's work directory. Inputs
+  already in Fovus storage (`fovus:///fovus-storage/files/...`) are used in place.
+- `publishDir` to a local folder downloads the results; `symlink` and `link` modes become `copy`.
+  Publishing into Fovus storage `files/` is not supported in direct mode yet.
+- `cleanup = true` has no effect, as for any remote work directory in Nextflow.
+- Switching a pipeline between mount and direct mode re-runs its tasks on `-resume`.
+- Your own AWS credentials are neither used nor changed: `s3://` inputs from your buckets keep using them.
+
 ## Building
 
 To build the plugin:
 ```bash
 make assemble
 ```
+
+## Tests
+
+`./gradlew test` runs the unit tests. `./gradlew integrationTest` runs the direct-mode S3 tests against a
+MinIO container, so it needs Docker. Set `FOVUS_MINIO_IMAGE` to a MinIO image to use; the default tag is
+no longer published on Docker Hub.
 
 ## Testing with Nextflow
 
