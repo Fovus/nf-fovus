@@ -64,7 +64,7 @@ class PipelinesStorageIT extends Specification {
 
         then:
         file.text == '#!/bin/bash\necho hi\n'
-        Files.size(file) == 21
+        Files.size(file) == 20
         Files.isRegularFile(file)
     }
 

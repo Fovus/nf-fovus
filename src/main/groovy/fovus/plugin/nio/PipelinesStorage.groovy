@@ -13,6 +13,7 @@ import java.nio.file.AccessDeniedException
 import java.nio.file.CopyOption
 import java.nio.file.DirectoryStream
 import java.nio.file.FileAlreadyExistsException
+import java.nio.file.FileVisitOption
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
@@ -83,6 +84,8 @@ class PipelinesStorage {
             // skip the folder's own marker object
             if (entry.key == dirKey) continue
             final name = entry.key.substring(dirKey.length()).replaceFirst('/$', '')
+            // a key such as <dir>//x has an empty name; resolving it would return the folder itself
+            if (name.isEmpty()) continue
             final child = (FovusPath) dir.resolve(name)
             // cache the listing's size and time so walking a folder needs no HeadObject per entry
             child.setFileMetadata(new FovusFileMetadata(
@@ -166,7 +169,8 @@ class PipelinesStorage {
             return
         }
         final FovusS3Client client = s3
-        Files.walkFileTree(local, new SimpleFileVisitor<Path>() {
+        // Follow links, like Files.isDirectory above: a symlinked folder, or a symlinked sub-folder, is uploaded as a folder
+        Files.walkFileTree(local, EnumSet.of(FileVisitOption.FOLLOW_LINKS), Integer.MAX_VALUE, new SimpleFileVisitor<Path>() {
             @Override
             FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
                 client.putDirectoryMarker(keyOf(within(target, local, dir)))
@@ -193,11 +197,22 @@ class PipelinesStorage {
             return
         }
         final dirKey = keyOf(source) + '/'
+        final root = local.toAbsolutePath().normalize()
         Files.createDirectories(local)
         for (S3Entry entry : s3.listAll(dirKey)) {
             final relative = entry.key.substring(dirKey.length())
+            // the folder's own marker
             if (relative.isEmpty()) continue
+            // S3 keys are arbitrary strings: one such as <dir>//tmp/x or <dir>/../x must not reach outside the local folder
+            if (!isPlainRelativePath(relative)) {
+                log.debug "[FOVUS] Not downloading ${entry.key}: it is not a plain path below ${dirKey}"
+                continue
+            }
             final target = local.resolve(relative)
+            if (!target.toAbsolutePath().normalize().startsWith(root)) {
+                log.debug "[FOVUS] Not downloading ${entry.key}: it would be written outside ${local}"
+                continue
+            }
             if (entry.key.endsWith('/')) {
                 Files.createDirectories(target)
                 continue
@@ -205,6 +220,16 @@ class PipelinesStorage {
             Files.createDirectories(target.parent)
             s3.downloadFile(entry.key, target)
         }
+    }
+
+    /** A folder marker's trailing {@code /} aside, every segment must be a real name: not empty, {@code .} or {@code ..}. */
+    private static boolean isPlainRelativePath(String relative) {
+        final name = relative.endsWith('/') ? relative.substring(0, relative.length() - 1) : relative
+        if (name.isEmpty()) return false
+        for (String segment : name.split('/', -1)) {
+            if (segment.isEmpty() || segment == '.' || segment == '..') return false
+        }
+        return true
     }
 
     private static FovusPath within(FovusPath target, Path localRoot, Path local) {

@@ -1,0 +1,113 @@
+package fovus.plugin.nio
+
+import fovus.plugin.s3.FovusS3Client
+import fovus.plugin.s3.S3Entry
+import spock.lang.Specification
+import spock.lang.TempDir
+
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.stream.Collectors
+
+/** Uploads, downloads and listings of the pipelines/ area against a stubbed S3 client. */
+class PipelinesStorageTest extends Specification {
+
+    private static final String DIR = 'pipelines/p-1-user/dl'
+
+    @TempDir
+    Path tempDir
+
+    private static List<String> names(Path folder) {
+        return Files.list(folder).withCloseable { stream ->
+            stream.map { Path p -> p.fileName.toString() }.sorted().collect(Collectors.toList())
+        }
+    }
+
+    private static S3Entry object(String key) {
+        return new S3Entry(key, 1L, null, false)
+    }
+
+    private static S3Entry folder(String key) {
+        return new S3Entry(key, 0L, null, true)
+    }
+
+    def 'a local folder reached through a symlink should upload every real file'() {
+        given: 'a folder behind a symlink, holding a symlinked sub-folder'
+        def real = Files.createDirectories(tempDir.resolve('real'))
+        Files.writeString(real.resolve('a.txt'), 'a')
+        Files.writeString(Files.createDirectories(real.resolve('deeper')).resolve('c.txt'), 'c')
+        def other = Files.createDirectories(tempDir.resolve('other'))
+        Files.writeString(other.resolve('b.txt'), 'b')
+        Files.createSymbolicLink(real.resolve('link-to-other'), other)
+        def link = Files.createSymbolicLink(tempDir.resolve('link'), real)
+
+        def uploaded = [:]
+        def markers = []
+        def client = Stub(FovusS3Client) {
+            head(_) >> null
+            hasChildren(_) >> false
+            uploadFile(_, _) >> { Path file, String key -> uploaded[key] = file }
+            putDirectoryMarker(_) >> { String key -> markers << key }
+        }
+        def fs = PipelinesTestSupport.fileSystem(client)
+        def target = fs.getPath('/fovus-storage/pipelines/p-1-user/stage/in')
+
+        when:
+        fs.provider().upload(link, target)
+
+        then:
+        uploaded.keySet() as Set == ['pipelines/p-1-user/stage/in/a.txt',
+                                     'pipelines/p-1-user/stage/in/deeper/c.txt',
+                                     'pipelines/p-1-user/stage/in/link-to-other/b.txt'] as Set
+        uploaded.values().every { Path file -> Files.isRegularFile(file) }
+        markers as Set == ['pipelines/p-1-user/stage/in',
+                           'pipelines/p-1-user/stage/in/deeper',
+                           'pipelines/p-1-user/stage/in/link-to-other'] as Set
+    }
+
+    def 'a folder download should skip keys that would leave the target folder'() {
+        given:
+        def out = tempDir.resolve('out')
+        def entries = [
+                folder("${DIR}/"),
+                // an absolute local path, and two folders outside the target, if they were honored
+                object("${DIR}/" + tempDir.resolve('outside') + '/x.txt'),
+                object("${DIR}/../outside2/y.txt"),
+                object("${DIR}/a/./b"),
+                object("${DIR}//"),
+                folder("${DIR}/sub/"),
+                object("${DIR}/ok.txt"),
+        ]
+        def downloaded = []
+        def client = Stub(FovusS3Client) {
+            head(_) >> null
+            hasChildren("${DIR}/".toString()) >> true
+            listAll("${DIR}/".toString()) >> entries
+            downloadFile(_, _) >> { String key, Path file -> downloaded << [key, file] }
+        }
+        def fs = PipelinesTestSupport.fileSystem(client)
+
+        when:
+        fs.provider().download(fs.getPath('/fovus-storage/' + DIR), out)
+
+        then: 'only the ordinary entries are fetched'
+        downloaded == [["${DIR}/ok.txt".toString(), out.resolve('ok.txt')]]
+        Files.isDirectory(out.resolve('sub'))
+
+        and: 'nothing was created outside the target, or for a skipped entry'
+        names(tempDir) == ['out']
+        names(out) == ['sub']
+    }
+
+    def 'a folder listing should not return the folder itself for an empty name'() {
+        given:
+        def client = Stub(FovusS3Client) {
+            list('pipelines/p-1-user/sample/') >> [folder('pipelines/p-1-user/sample//'),
+                                                   object('pipelines/p-1-user/sample/y.txt')]
+        }
+        def fs = PipelinesTestSupport.fileSystem(client)
+
+        expect:
+        names(fs.getPath('/fovus-storage/pipelines/p-1-user/sample')) == ['y.txt']
+    }
+}
