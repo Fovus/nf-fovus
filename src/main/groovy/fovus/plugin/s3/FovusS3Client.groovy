@@ -9,7 +9,6 @@ import software.amazon.awssdk.core.checksums.RequestChecksumCalculation
 import software.amazon.awssdk.core.checksums.ResponseChecksumValidation
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.core.exception.SdkClientException
-import software.amazon.awssdk.core.exception.SdkException
 import software.amazon.awssdk.core.interceptor.ExecutionInterceptor
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient
@@ -217,12 +216,13 @@ class FovusS3Client {
         return getObject(key, 0L)
     }
 
+    /** The object's body from {@code fromByte}; a failure while it streams is an I/O error, see {@link S3BodyStream}. */
     InputStream getObject(String key, long fromByte) throws IOException {
         if (!readable(key)) throw new NoSuchFileException(uri(key))
         final builder = GetObjectRequest.builder().bucket(bucket).key(key)
         if (fromByte > 0) builder.range("bytes=${fromByte}-".toString())
         final request = builder.build()
-        return call('read', key) { reader.getObject(request) }
+        return new S3BodyStream(call('read', key) { reader.getObject(request) }, key)
     }
 
     // -- writes
@@ -359,9 +359,7 @@ class FovusS3Client {
         boolean moved = false
         try {
             if (entry.size <= partSize) {
-                readingBody(key) {
-                    getObject(key).withCloseable { InputStream input -> Files.copy(input, temp, StandardCopyOption.REPLACE_EXISTING) }
-                }
+                getObject(key).withCloseable { InputStream input -> Files.copy(input, temp, StandardCopyOption.REPLACE_EXISTING) }
             }
             else {
                 downloadRanges(key, entry.size, temp)
@@ -393,28 +391,12 @@ class FovusS3Client {
         }
         final out = newOutputStream(targetKey)
         try {
-            readingBody(sourceKey) {
-                getObject(sourceKey).withCloseable { InputStream input -> input.transferTo(out) }
-            }
+            getObject(sourceKey).withCloseable { InputStream input -> input.transferTo(out) }
             out.close()
         }
         finally {
             // A no-op once close() has run, whether or not it succeeded; otherwise it discards the partial upload
             out.abort()
-        }
-    }
-
-    /**
-     * Run a read of an object's bytes. The SDK reports a failure while the body streams (a dropped connection, an
-     * aborted request) as an unchecked exception; it becomes an I/O error that names only the key and the
-     * exception class, like every other S3 failure.
-     */
-    private static <T> T readingBody(String key, Closure<T> action) throws IOException {
-        try {
-            return action.call()
-        }
-        catch (SdkException e) {
-            throw new IOException("S3 read failed on ${key}: ${e.class.simpleName}".toString())
         }
     }
 

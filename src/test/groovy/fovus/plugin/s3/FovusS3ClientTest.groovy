@@ -2,8 +2,11 @@ package fovus.plugin.s3
 
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
 import software.amazon.awssdk.awscore.exception.AwsErrorDetails
+import software.amazon.awssdk.core.ResponseInputStream
+import software.amazon.awssdk.core.exception.AbortedException
 import software.amazon.awssdk.core.exception.SdkClientException
 import software.amazon.awssdk.core.sync.RequestBody
+import software.amazon.awssdk.http.AbortableInputStream
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.*
 import software.amazon.awssdk.services.s3.paginators.ListObjectsV2Iterable
@@ -348,6 +351,41 @@ class FovusS3ClientTest extends Specification {
         then:
         1 * s3.abortMultipartUpload({ AbortMultipartUploadRequest r -> r.key() == KEY && r.uploadId() == 'upload-1' }) >> { throw s3Error(500, 'InternalError') }
         noExceptionThrown()
+    }
+
+    @Unroll
+    def 'a #failure.class.simpleName while the body streams should be an I/O error naming only the key'() {
+        given:
+        def error = failure
+        def body = new InputStream() {
+            int served = 0
+
+            @Override
+            int read() {
+                throw error
+            }
+
+            @Override
+            int read(byte[] bytes, int offset, int length) {
+                if (served > 0) throw error
+                served = 1
+                return 1
+            }
+        }
+        s3.getObject(_ as GetObjectRequest) >> new ResponseInputStream<GetObjectResponse>(GetObjectResponse.builder().build(),
+                                                                                          AbortableInputStream.create(body))
+
+        when:
+        client.getObject(KEY).readAllBytes()
+
+        then:
+        def e = thrown(IOException)
+        e.message == "S3 read failed on ${KEY}: ${failure.class.simpleName}".toString()
+        e.cause == null
+
+        where:
+        failure << [SdkClientException.create('Unable to execute HTTP request: SECRET-BODY'),
+                    AbortedException.create('Thread was interrupted SECRET-BODY')]
     }
 
     def 'a client error without a credentials cause should be reported without the SDK exception as its cause'() {
