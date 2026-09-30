@@ -26,6 +26,8 @@ class FovusStorageCredentialsSource implements CredentialsFetcher {
 
     static final int MAX_OUTPUT_BYTES = 64 * 1024
     static final int MAX_ATTEMPTS = 3
+    /** The most of the CLI's stderr that goes into a message. */
+    static final int MAX_REPORTED_ERROR_CHARS = 2000
     static final String NOT_SIGNED_IN =
             'Fovus CLI is not signed in; run `fovus auth login` or configure `fovus.auth`'
     static final String UPGRADE_CLI =
@@ -137,11 +139,21 @@ class FovusStorageCredentialsSource implements CredentialsFetcher {
         if (errorText.contains('No such command')) throw new StorageCredentialsException(UPGRADE_CLI, false)
         if (exitCode == 2) {
             throw new StorageCredentialsException(
-                    "The Fovus CLI refused to print storage credentials: ${config.redactSecret(errorText)}".toString(), false)
+                    "The Fovus CLI refused to print storage credentials: ${reportable(errorText)}".toString(), false)
         }
         throw new StorageCredentialsException(
-                "Fovus CLI could not provide storage credentials (exit ${exitCode}): ${config.redactSecret(errorText)}".toString(),
+                "Fovus CLI could not provide storage credentials (exit ${exitCode}): ${reportable(errorText)}".toString(),
                 true)
+    }
+
+    /**
+     * The CLI's stderr as it may appear in a message: the PAT scrubbed first, so the cut can never leave part of
+     * it behind, then capped at {@link #MAX_REPORTED_ERROR_CHARS}.
+     */
+    private String reportable(String errorText) {
+        final scrubbed = config.redactSecret(errorText)
+        if (scrubbed.length() <= MAX_REPORTED_ERROR_CHARS) return scrubbed
+        return scrubbed.substring(0, MAX_REPORTED_ERROR_CHARS) + '…'
     }
 
     private static long remainingNanos(long deadline) {

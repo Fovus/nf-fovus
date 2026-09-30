@@ -138,6 +138,34 @@ cat '${credentialsFile()}'""")
         invocations() == 3
     }
 
+    def 'fetch should cap the CLI error it reports, after scrubbing the PAT'() {
+        given: 'a long error, with the PAT where a cap before scrubbing would cut it in half'
+        def cli = fakeCli("printf 'x%.0s' {1..1995} >&2\necho \"${PAT}\" >&2\nprintf 'y%.0s' {1..3000} >&2\nexit 1")
+
+        when:
+        source(cli).fetch()
+
+        then:
+        def e = thrown(StorageCredentialsException)
+        def reported = e.message.substring(e.message.indexOf(': ') + 2)
+        reported.length() == FovusStorageCredentialsSource.MAX_REPORTED_ERROR_CHARS + 1
+        reported.endsWith('…')
+        !reported.contains('y')
+        !e.message.contains(PAT.substring(0, 5))
+    }
+
+    def 'fetch should report a short CLI error in full'() {
+        given:
+        def cli = fakeCli("echo 'refused: pipeline is hosted' >&2\nexit 2")
+
+        when:
+        source(cli).fetch()
+
+        then:
+        def e = thrown(StorageCredentialsException)
+        e.message == 'The Fovus CLI refused to print storage credentials: refused: pipeline is hosted'
+    }
+
     def 'fetch should time out a CLI that hangs'() {
         given:
         def cli = fakeCli('sleep 30')
