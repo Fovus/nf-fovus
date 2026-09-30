@@ -215,14 +215,17 @@ executable on the compute node because its mount shows `pipelines/` files as 077
   | `download` (`FileSystemTransferAware`) | file or folder; parallel ranged `GetObject` into a temp file, moved into place on success |
   | symlinks, locks, `setAttribute` | `UnsupportedOperationException` naming the operation |
 
-- Copying from `files`/`jobs` to `pipelines` (rarely needed, since those inputs are not foreign)
-  downloads through the CLI to a temp file and uploads with the SDK.
+- Copying from `files`/`jobs` into `pipelines` is not supported. In direct mode those paths are
+  never foreign, so Nextflow never stages them, and no other Nextflow code path copies them into
+  the work directory.
 
 ### 6.4 `FovusS3Client`
 
 - Two sync `S3Client`s from AWS SDK v2: the reader uses the download token, the writer the
   upload token. HTTP client: `url-connection-client` (no Netty, no CRT).
 - Standard retry mode, up to 10 attempts, matching the CLI's boto settings.
+- Checksum calculation and validation set to `WHEN_REQUIRED` (TLS already protects the transfer,
+  and it keeps manual multipart uploads and S3-compatible test servers simple).
 - Bucket, region and prefix come from the first credential fetch and are fixed for the run.
 - **Prefix guard:** every key is checked against `Prefix` (`pipelines/<pid>/`) before any call.
   Writes outside it are refused; reads outside it raise `NoSuchFileException`.
@@ -235,7 +238,8 @@ executable on the compute node because its mount shows `pipelines/` files as 077
 
 - `FovusStorageCredentialsSource.fetch()` returns a `StorageCredentials` value (bucket, region,
   prefix, read and write session credentials with expirations). See §8 for how it runs the CLI.
-- `RefreshingStorageCredentials` wraps it with the AWS SDK's `CachedSupplier`:
+- `RefreshingStorageCredentials` caches it in a small lock-guarded cache with an injectable clock,
+  so the timing rules below are unit-testable:
   - prefetch 10 minutes before expiry; callers block for fresh credentials in the last 2 minutes;
   - thread-safe, single fetch under concurrency;
   - a failed prefetch keeps the current credentials while they have more than 2 minutes left.
@@ -260,8 +264,8 @@ fovus --silence storage credentials --pipeline-id <pid>
      3. Status is not `DELETED`, `DELETING` or `DELETE_FAILED`. `CREATED`, `RUNNING`,
         `COMPLETED`, `FAILED` are allowed (the plugin reuses cached pipelines in these states
         and fetches credentials before setting `RUNNING`).
-     4. Workflow host is `LOCAL`, if `get_pipeline` returns it (spike, §12). Otherwise this check
-        is dropped.
+     4. Workflow host is `LOCAL`. `get_pipeline` always returns `workflowHost` (the server schema
+        defaults it to `LOCAL`).
   3. Request both tokens for 3600 s: upload (`FOVUS_STORAGE`, `jobId = ""`) and download
      (`PIPELINE_STORAGE`, `pipelineId`).
   4. Require both responses to name the same bucket.
@@ -279,8 +283,10 @@ fovus --silence storage credentials --pipeline-id <pid>
      ```
 
 - **Region:** `s3Region` from the response, else the CLI's configured region.
-- **Expiration:** from the API if it ever returns one; otherwise the time captured just before
-  the request plus 3600 s (errs early).
+- **Expiration:** the API returns none, so it is the time captured just before the token requests
+  plus 3600 s (errs early).
+- **Not signed in:** the command catches `NotSignedInException` itself, writes it to stderr and
+  exits 3. The CLI's `main()` would otherwise print it to stdout.
 - **Exit codes:** 0 success (JSON on stdout); 1 validation or API error (stderr); 2 stdout is a
   terminal; 3 not signed in (existing CLI behaviour).
 - **Logging:** the command never logs either response. Nothing is printed to stdout except the
@@ -310,7 +316,8 @@ the plugin calling the Fovus API itself (duplicates CLI sign-in and needs its to
 - stdout is never logged or put in an exception, on success or failure. On failure only stderr
   is used, passed through `config.redactSecret`.
 - Exit 3 → "Fovus CLI is not signed in; run `fovus auth login` or configure `fovus.auth`".
-  "No such command" → "Direct mode (`fovus://` workDir) requires Fovus CLI ≥ <MIN_CLI_VERSION>".
+  "No such command" → "Direct mode (fovus:// workDir) needs a newer Fovus CLI that provides storage
+  credentials; upgrade it with `pip install --upgrade fovus`".
 - Three attempts with a 2 s backoff, like other CLI calls.
 - Credential holder classes have no `@ToString` / `@Canonical`; `toString()` prints only the
   expiry.
@@ -363,7 +370,7 @@ The plugin never enables AWS SDK request logging.
    `…/fovus-work/stage-<sessionId>/…`:
    - local files: provider `upload()` (`PutObject` or parallel multipart);
    - http or the user's own `s3://`: streamed through `newOutputStream()`;
-   - already-staged files with the same size and last-modified time are skipped.
+   - already-staged files with the same size are skipped (Nextflow's `FilePorter` compares sizes).
 3. Inputs already in Fovus storage (`fovus:///fovus-storage/files|jobs|pipelines/…`) are not
    foreign; they are linked on the compute node with `fovus_link /fovus-storage/…`. Nothing is
    copied.
@@ -429,7 +436,7 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 | `fovus://` `workDir` other than `fovus:///fovus-storage/pipelines` | "In direct mode, workDir must be fovus:///fovus-storage/pipelines" |
 | `workDir` with any other scheme (for example `s3://`) | "The Fovus executor needs workDir to be a Fovus storage mount (…/pipelines) or fovus:///fovus-storage/pipelines" |
 | `fovus://` `workDir` on a Fovus-hosted run | "Direct mode is only for pipelines launched on your own machine; Fovus-hosted runs use the mount" |
-| CLI lacks `storage credentials` | "Direct mode (`fovus://` workDir) requires Fovus CLI ≥ <MIN_CLI_VERSION>" |
+| CLI lacks `storage credentials` | "Direct mode (fovus:// workDir) needs a newer Fovus CLI …; upgrade it with `pip install --upgrade fovus`" |
 | CLI exit 3 | "Run `fovus auth login` or configure `fovus.auth`" |
 | CLI exit 1 | CLI stderr, redacted |
 | Malformed JSON, other `Version`, wrong `Prefix`, bucket mismatch | "Unexpected response from Fovus CLI (expected contract v1)"; stdout never included |
@@ -463,7 +470,9 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 - **Checking completion** (`.exitcode`, outputs, `.command.env`): a temporary error makes
   `checkIfCompleted()` return `false`; the next poll (10 s) retries. The task fails only after
   30 consecutive failed polls (about 5 minutes) or when credentials can no longer be refreshed. This
-  avoids re-running a task that succeeded.
+  avoids re-running a task that succeeded. The check reads `.exitcode` and lists the task folder
+  once; the output collection Nextflow runs afterwards relies on the SDK's retries (up to 10
+  attempts).
 
 ### All-or-nothing
 
@@ -509,7 +518,8 @@ Separate Gradle task so `check` needs no Docker. CI (`ubuntu-latest`) has Docker
   `walkFileTree` with globs; an SDK call-counting interceptor confirms no `HeadObject` per file.
 - Upload and download of files and folders; failed download leaves no partial file.
 - Copy, move, delete; missing object raises `NoSuchFileException`.
-- `FileHelper.copyPath` staging skips an already-staged file with equal size and last-modified.
+- `Files.size()` of a staged object equals the local file's size, which is what `FilePorter`'s
+  re-staging check compares.
 - Executor-level flow (`prepareLauncher` → `submit` → `checkIfCompleted`) with a fake job client
   that writes `.exitcode` and outputs into MinIO on `job create`: wrapper upload, staging, exit
   code, output collection, local `publishDir` download.
@@ -550,8 +560,12 @@ Run against a beta account first; record answers here before planning.
    directories.
 2. Can the upload token abort a multipart upload? Does the bucket have a lifecycle rule for
    incomplete multipart uploads?
-3. Does the `get_pipeline` response include `workflowHost`?
-4. Does `fovus job create --pipeline-id` accept a job directory that does not exist locally?
+3. ~~Does the `get_pipeline` response include `workflowHost`?~~ Answered: yes, always. The server's
+   `PipelineSchema` defaults `workflowHost` to `LOCAL`.
+4. ~~Does `fovus job create --pipeline-id` accept a job directory that does not exist locally?~~
+   Answered by code reading: for pipeline jobs the CLI only splits the path text
+   (`FileUtil.get_run_folders_for_pipeline_jobs`) and skips its cache file when absent. Confirmed
+   again by the end-to-end run.
 5. Can the upload token `CopyObject` within `pipelines/<pid>/` (it needs read access to the
    source)? If not, `copy` uses `GetObject` with the read client and `PutObject` with the write
    client.
@@ -572,9 +586,9 @@ Also confirm while there: the download token (`PIPELINE_STORAGE`) allows `ListOb
 
 - Existing pipelines use a local `workDir` and are unaffected. Direct mode is opt-in by setting a
   `fovus://` `workDir`.
-- Direct mode needs the Fovus CLI release that adds `storage credentials`. That
-  version number is fixed when the CLI is released and replaces `<MIN_CLI_VERSION>` in the plugin's
-  message and README; the plugin reports it if the command is missing.
+- Direct mode needs the Fovus CLI release that adds `storage credentials`. When the command is
+  missing the plugin tells the user to run `pip install --upgrade fovus`; the README names the
+  first CLI release that includes it once that release exists.
 - New nf-fovus dependencies: `software.amazon.awssdk:s3` and
   `software.amazon.awssdk:url-connection-client`, bundled in the plugin (isolated by the plugin
   classloader from any `nf-amazon` copy).
