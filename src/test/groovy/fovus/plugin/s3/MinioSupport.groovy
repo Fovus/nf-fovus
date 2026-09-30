@@ -1,6 +1,7 @@
 package fovus.plugin.s3
 
 import org.testcontainers.containers.MinIOContainer
+import org.testcontainers.utility.DockerImageName
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import software.amazon.awssdk.core.checksums.RequestChecksumCalculation
@@ -15,12 +16,15 @@ import software.amazon.awssdk.services.s3.model.CreateBucketRequest
 /** A MinIO container standing in for the user's Fovus bucket in the direct-mode S3 tests. */
 class MinioSupport {
 
+    // Override with FOVUS_MINIO_IMAGE; the default tag was removed from Docker Hub
     static final String IMAGE = 'minio/minio:RELEASE.2023-09-04T19-57-37Z'
     static final String BUCKET = 'fovus-test-bucket'
     static final String PREFIX = 'pipelines/p-1-user/'
 
     static MinIOContainer start() {
-        final minio = new MinIOContainer(IMAGE)
+        final override = System.getenv('FOVUS_MINIO_IMAGE')
+        final image = override?.trim() ? override.trim() : IMAGE
+        final minio = new MinIOContainer(DockerImageName.parse(image).asCompatibleSubstituteFor('minio/minio'))
         minio.start()
         s3Client(minio).withCloseable { it.createBucket(CreateBucketRequest.builder().bucket(BUCKET).build()) }
         return minio
