@@ -189,11 +189,16 @@ files at `/fovus-storage/pipelines/...` as in mount mode.
 - `workDir` must be exactly `fovus:///fovus-storage/pipelines`.
 - Local and remote (`http`, `s3://`) inputs are uploaded into the pipeline's work directory. Inputs
   already in Fovus storage (`fovus:///fovus-storage/files/...`) are used in place.
-- `publishDir` to a local folder downloads the results; `symlink` and `link` modes become `copy`.
+- `publishDir` to a local folder downloads the results. As for any remote work directory, the `symlink`,
+  `link` and `rellink` modes, and an unset mode, become `copy`. `mode: 'move'` copies and leaves the source
+  files in Fovus storage, with a warning, because the direct-mode credentials cannot delete.
   Publishing into Fovus storage `files/` is not supported in direct mode yet.
 - `cleanup = true` has no effect, as for any remote work directory in Nextflow.
 - Switching a pipeline between mount and direct mode re-runs its tasks on `-resume`.
+- The short-lived credentials can reach your whole Fovus storage bucket. The plugin keeps itself to the
+  pipeline's own folder and Nextflow's scratch folders (`pipelines/tmp/`, `pipelines/collect-file/`).
 - Your own AWS credentials are neither used nor changed: `s3://` inputs from your buckets keep using them.
+  Your AWS configuration, such as a custom endpoint URL, does not apply to Fovus storage either.
 
 ## Building
 

@@ -110,7 +110,7 @@ The existing mount mode is unchanged: a local `workDir` keeps working exactly as
 | D2 | Make the plugin's own `fovus://` filesystem read and write S3, and use it as the work directory in direct mode. | Nextflow keeps its normal staging, output collection and `-resume`. Fovus credentials stay isolated from the user's own AWS credentials. Two separate tokens (read/write) are possible. |
 | D3 | Rejected: Nextflow's `nf-amazon` `s3://` work directory. | One global credential chain: cannot use separate read/write tokens, and would override the user's AWS credentials for other `s3://` inputs. |
 | D4 | Rejected: local work directory synced at fixed points. | Every output would be downloaded in full to the control node. |
-| D5 | The CLI command is hidden (`hidden=True`) and undocumented. | Not a public interface. This deters casual use only; the real limit is the credentials' server-side scope. |
+| D5 | The CLI command is hidden (`hidden=True`) and undocumented. | Not a public interface. This deters casual use only; the real limit is the plugin's prefix guard (both tokens are bucket-wide), not the credentials' server-side scope. |
 | D6 | The CLI validates the pipeline ID before issuing credentials. | Stops credentials being issued for another user's, a deleted, or a hosted pipeline. |
 | D7 | The mode follows the scheme of Nextflow's `workDir`: a local path (the mount) is mount mode, `fovus:///fovus-storage/pipelines` is direct mode. There is no `fovus.storageMode` setting. | Still an explicit choice, with no automatic fallback. Matches how Nextflow treats `s3://` work directories, works with `-w`, and keeps `session.workDir` equal to where task files actually live. Suggested in review. |
 | D8 | The mode is called "direct" in docs and messages, not "S3". | Describes what users get (storage reached directly, no mount) rather than the AWS service behind it. "Remote" was avoided because it already means a Fovus-hosted run (`WORKFLOW_HOST=REMOTE`); "sync" because it suggests a local mirror. |
@@ -427,7 +427,10 @@ strongly consistent, so reads after that point see the final objects.
 
 - Local target: provider `download()` (parallel ranged `GetObject`, temp file then move).
   Folders via listing.
-- `symlink` / `link` modes: Nextflow switches remote work directories to `copy` with a warning.
+- `symlink` / `link` / `rellink` modes: Nextflow switches remote work directories to `copy` with a
+  warning; an unset mode becomes `copy` too.
+- `move` mode: the copy succeeds, but the source objects stay in Fovus storage, since the write
+  token cannot delete; the plugin warns once and logs further ones at debug level.
 - Fovus storage `files/` target: not supported in the first version (§13).
 
 ### `-resume`
