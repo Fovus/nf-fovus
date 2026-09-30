@@ -15,7 +15,6 @@ import nextflow.processor.TaskArrayRun
 import nextflow.processor.TaskHandler
 import nextflow.processor.TaskRun
 import nextflow.processor.TaskStatus
-import nextflow.util.Escape
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -53,6 +52,8 @@ class FovusTaskHandler extends TaskHandler {
 
     protected FovusJobClient jobClient;
     protected FovusTaskClient taskClient;
+
+    private final ExitStatusReader exitStatusReader = new ExitStatusReader()
 
     private List<FovusJobStatus> RUNNING_JOB_STATUSES = [
             FovusJobStatus.PENDING,
@@ -181,9 +182,15 @@ class FovusTaskHandler extends TaskHandler {
             }
         }
 
+        final exitStatus = exitStatusReader.read(exitFile, task.workDir)
+        if (exitStatus == null) {
+            // A temporary Fovus storage error (direct mode): check again on the next poll
+            return false
+        }
+
         task.stdout = outputFile
 
-        task.exitStatus = readExitFile()
+        task.exitStatus = exitStatus
 
         if (taskStatus != FovusJobStatus.COMPLETED || taskStatus != FovusTaskStatus.COMPLETED) {
             task.stderr = errorFile
@@ -205,6 +212,10 @@ class FovusTaskHandler extends TaskHandler {
                     task.error = new ProcessException("Job ${jobId} uncomplete")
                     break
             }
+        }
+
+        if (!task.error && exitStatusReader.failure) {
+            task.error = new ProcessException("Unable to read the task results from Fovus storage: ${exitStatusReader.failure.message}")
         }
 
         status = TaskStatus.COMPLETED
@@ -330,21 +341,6 @@ ln -s ${remoteWorkDir}/${FovusScriptLauncher.CMD_FOVUS_ENV} ${FovusScriptLaunche
         updateStatus(jobId)
 
         executor.jobIdMap.put(task.workDir.toString(), jobId);
-
-        // Change the run scripts permission in background
-        "chmod +x ${Escape.path(wrapperFile)} ${Escape.path(scriptFile)}".execute()
-        // Allow creating new files in work directory
-        "chmod 777 ${Escape.path(task.workDir)}".execute()
-    }
-
-    private int readExitFile() {
-        try {
-            exitFile.text as Integer
-        }
-        catch (Exception e) {
-            log.debug "[FOVUS] Cannot read exit status for task: `${task.lazyName()}` | ${e.message}"
-            return Integer.MAX_VALUE
-        }
     }
 
     protected void updateStatus(String jobId) {
@@ -405,10 +401,6 @@ ln -s ${remoteWorkDir}/${FovusScriptLauncher.CMD_FOVUS_ENV} ${FovusScriptLaunche
                     StandardOpenOption.TRUNCATE_EXISTING,
                     StandardOpenOption.WRITE
             )
-
-            "chmod +x ${Escape.path(runScriptPath)}".execute()
-            "chmod +x ${Escape.path(handler.wrapperFile)} ${Escape.path(handler.scriptFile)}".execute()
-            "chmod 777 ${Escape.path(handler.task.workDir)}".execute()
         }
     }
 }
