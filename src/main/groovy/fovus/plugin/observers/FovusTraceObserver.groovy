@@ -76,7 +76,10 @@ class FovusTraceObserver implements TraceObserverV2 {
      * Direct mode: connect the {@code fovus://} work directory now, before the script runs, so that an operator
      * evaluated before the first process (e.g. {@code collectFile}, which writes under {@code workDir}) can use
      * it. The executor prepares the same storage again when it registers, which is then a no-op. Mount mode and
-     * Fovus-hosted runs are left to the executor. A work directory the factory rejects fails here.
+     * Fovus-hosted runs are left to the executor. A failure (a work directory the factory rejects, credentials
+     * that cannot be fetched) is thrown, but Nextflow only logs an observer's exception at debug level: nothing is
+     * attached, and the run stops later -- when the executor registers and hits the same failure, or earlier, when
+     * an operator finds no S3 client attached.
      */
     @PackageScope
     static void prepareDirectModeStorage(Path workDir, boolean isHostedMode, String pipelineId,
