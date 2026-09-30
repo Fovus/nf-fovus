@@ -141,7 +141,6 @@ interface WorkDirStorage {
     Path workDir(String pipelineId)
     boolean isForeignFile(Path path)
     Path remotePath(Path path)                           // the path as the compute node sees it
-    boolean supportsPermissions()                        // false: skip chmod calls
 }
 ```
 
@@ -151,11 +150,16 @@ interface WorkDirStorage {
 | `workDir` | `<mount>/pipelines/<pid>/fovus-work` | `fovus:///fovus-storage/pipelines/<pid>/fovus-work` |
 | `isForeignFile` | outside the mount folder, or a different scheme | not a `FovusPath` |
 | `remotePath` | swap the mount prefix for `/fovus-storage` | `Path.of(path.toString())`, which is already `/fovus-storage/…` |
-| `supportsPermissions` | true | false (compute mount shows `pipelines/` as 0770) |
 
 `FovusExecutor.getWorkDir()`, `isForeignFile()` and `getRemotePath()` delegate to it.
-`FovusTaskHandler` and `FovusExecutor.uploadBinDir()` skip `chmod` when
-`supportsPermissions()` is false.
+
+**`chmod` calls are removed in both modes.** mountpoint-s3 does not support changing
+permissions ("Modifying file metadata (`chmod`, `chown`, `chgrp`) is not supported"), and the CLI
+fixes them at mount time with `--file-mode` / `--dir-mode` (0770 for `files/` and `pipelines/`).
+The plugin's current `chmod` calls in `FovusTaskHandler.submit()`, `prepareArrayTasks()` and
+`FovusExecutor.uploadBinDir()` run through `.execute()` without checking the result, so they
+already have no effect in mount mode. Direct mode has no local files to change either. Scripts are
+executable on the compute node because its mount shows `pipelines/` files as 0770.
 
 ### 6.3 Filesystem provider
 
@@ -313,7 +317,7 @@ The plugin never enables AWS SDK request logging.
 2. `DirectWorkDirStorage.prepare()`: first credential fetch, build `FovusS3Client`, register the
    `pipelines` filesystem. No mount, no `workDir` check.
 3. Work directory: `fovus:///fovus-storage/pipelines/<pid>/fovus-work`.
-4. `bin/` is uploaded to `…/fovus-work/tmp/<rand>/bin` (no `chmod`); `remoteBinDir` is
+4. `bin/` is uploaded to `…/fovus-work/tmp/<rand>/bin`; `remoteBinDir` is
    `/fovus-storage/pipelines/<pid>/fovus-work/tmp/<rand>/bin`.
 
 ### Preparing each task
@@ -332,13 +336,12 @@ The plugin never enables AWS SDK request logging.
    `.command.stage` when needed); `FovusScriptLauncher` writes `.command.fovus.env`. One
    `PutObject` each. Script contents are unchanged, since `FovusFileCopyStrategy` refers to
    files by name only.
-5. Array tasks: each child's `run.sh` is one `PutObject`; `chmod` skipped.
+5. Array tasks: each child's `run.sh` is one `PutObject`.
 
 ### Submitting
 
 - Job directory `task.workDir.parent.toString()` = `/fovus-storage/pipelines/<pid>/fovus-work/ab`.
 - `fovus job create cfg.json <that> --pipeline-id <pid> --include-paths cdef…/`, as today.
-- `chmod +x` and `chmod 777` calls skipped.
 
 ### Compute node
 
@@ -439,8 +442,8 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 
 - `FovusConfig.storageMode`: default, invalid values, hosted override.
 - `MountedWorkDirStorage`: existing tests keep passing; new tests pin today's path rewriting and
-  foreign-file rules. `DirectWorkDirStorage`: work directory, foreign-file rule, compute path, no
-  `chmod`.
+  foreign-file rules. `DirectWorkDirStorage`: work directory, foreign-file rule, compute path.
+  No `chmod` command is started in either mode.
 - `FovusStorageCredentialsSource` against a fake `fovus` script: valid JSON; wrong `Version`,
   `Prefix`, bucket mismatch; exit 1, 2, 3; "No such command"; timeout; stdout over 64 KiB. Each
   case asserts the fixture secrets appear in no log line and no exception message.
