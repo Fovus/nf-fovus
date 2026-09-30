@@ -150,6 +150,20 @@ cat '${credentialsFile()}'""")
         e.message.startsWith('Timed out after 300 ms')
     }
 
+    def 'fetch should time out when a background child keeps the output pipes open after the CLI exits'() {
+        given:
+        def cli = fakeCli("sleep 30 &\nexit 0")
+        def started = System.nanoTime()
+
+        when:
+        source(cli, Duration.ofMillis(300)).fetch()
+
+        then:
+        def e = thrown(StorageCredentialsException)
+        e.message.startsWith('Timed out after 300 ms')
+        Duration.ofNanos(System.nanoTime() - started) < Duration.ofSeconds(10)
+    }
+
     def 'fetch should reject stdout over the size cap without echoing it'() {
         given:
         def cli = fakeCli('yes READ-SECRET | head -c 70000')

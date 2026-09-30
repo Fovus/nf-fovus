@@ -8,7 +8,9 @@ import groovy.util.logging.Slf4j
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * Fetches direct-mode storage credentials by running the hidden {@code fovus storage credentials} command.
@@ -29,6 +31,8 @@ class FovusStorageCredentialsSource implements CredentialsFetcher {
     static final String UPGRADE_CLI =
             'Direct mode (fovus:// workDir) needs a newer Fovus CLI that provides storage credentials; ' +
             'upgrade it with `pip install --upgrade fovus`'
+    static final String UNREADABLE_OUTPUT = "Unable to read the Fovus CLI's output"
+    static final String INTERRUPTED = 'Interrupted while waiting for Fovus storage credentials'
 
     private final FovusConfig config
     private final String pipelineId
@@ -62,7 +66,7 @@ class FovusStorageCredentialsSource implements CredentialsFetcher {
                 if (!e.retryable) throw e
                 lastFailure = e
                 log.debug "[FOVUS] Fetching Fovus storage credentials failed (attempt ${attempt}/${MAX_ATTEMPTS}): ${e.message}"
-                if (attempt < MAX_ATTEMPTS) sleep(retryDelayMillis)
+                if (attempt < MAX_ATTEMPTS) pause()
             }
         }
         throw lastFailure
@@ -72,25 +76,59 @@ class FovusStorageCredentialsSource implements CredentialsFetcher {
         return [config.getCliPath(), '--silence', 'storage', 'credentials', '--pipeline-id', pipelineId]
     }
 
+    /** Wait between attempts; an interrupt is surfaced, never swallowed. */
+    private void pause() throws StorageCredentialsException {
+        try {
+            Thread.sleep(retryDelayMillis)
+        }
+        catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt()
+            throw new StorageCredentialsException(INTERRUPTED, false)
+        }
+    }
+
+    /**
+     * Run the CLI once. One deadline bounds the exit of the process and the end of both of its output
+     * streams, so a descendant that keeps an inherited pipe open cannot stall the call past {@link #timeout}.
+     */
     private StorageCredentials fetchOnce() throws StorageCredentialsException {
         final process = start()
-        process.outputStream.close()
-        final stdout = drain(process.inputStream)
-        final stderr = drain(process.errorStream)
-
-        if (!process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-            process.destroyForcibly()
+        try {
+            return collect(process)
+        }
+        catch (TimeoutException ignored) {
+            terminate(process)
             throw new StorageCredentialsException(
                     "Timed out after ${timeout.toMillis()} ms waiting for the Fovus CLI to return storage credentials".toString(),
                     true)
         }
+        catch (ExecutionException ignored) {
+            // Deliberately no cause: it could in theory carry what the CLI printed
+            terminate(process)
+            throw new StorageCredentialsException(UNREADABLE_OUTPUT, true)
+        }
+        catch (InterruptedException ignored) {
+            terminate(process)
+            Thread.currentThread().interrupt()
+            throw new StorageCredentialsException(INTERRUPTED, false)
+        }
+    }
+
+    private StorageCredentials collect(Process process)
+            throws StorageCredentialsException, TimeoutException, ExecutionException, InterruptedException {
+        process.outputStream.close()
+        final stdout = drain(process.inputStream)
+        final stderr = drain(process.errorStream)
+        final long deadline = System.nanoTime() + timeout.toNanos()
+
+        if (!process.waitFor(remainingNanos(deadline), TimeUnit.NANOSECONDS)) throw new TimeoutException()
 
         final exitCode = process.exitValue()
-        final errorBytes = stderr.get()
+        final errorBytes = stderr.get(remainingNanos(deadline), TimeUnit.NANOSECONDS)
         final errorText = errorBytes == null ? '' : new String(errorBytes, StandardCharsets.UTF_8).trim()
 
         if (exitCode == 0) {
-            final output = stdout.get()
+            final output = stdout.get(remainingNanos(deadline), TimeUnit.NANOSECONDS)
             if (output == null) throw StorageCredentials.contractError()
             return StorageCredentials.parse(output, expectedPrefix(pipelineId))
         }
@@ -104,6 +142,31 @@ class FovusStorageCredentialsSource implements CredentialsFetcher {
         throw new StorageCredentialsException(
                 "Fovus CLI could not provide storage credentials (exit ${exitCode}): ${config.redactSecret(errorText)}".toString(),
                 true)
+    }
+
+    private static long remainingNanos(long deadline) {
+        return Math.max(0L, deadline - System.nanoTime())
+    }
+
+    /** Kill the process and whatever it started, and release its streams. */
+    private static void terminate(Process process) {
+        try {
+            process.descendants().forEach { ProcessHandle child -> child.destroyForcibly() }
+        }
+        finally {
+            process.destroyForcibly()
+        }
+        closeQuietly(process.outputStream)
+        closeQuietly(process.inputStream)
+        closeQuietly(process.errorStream)
+    }
+
+    private static void closeQuietly(Closeable stream) {
+        try {
+            stream.close()
+        }
+        catch (IOException ignored) {
+        }
     }
 
     private Process start() throws StorageCredentialsException {
