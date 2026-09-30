@@ -49,6 +49,10 @@ class FovusS3Client {
 
     FovusS3Client(S3Client reader, S3Client writer, String bucket, String prefix, RefreshingStorageCredentials credentials,
                   int partSize = DEFAULT_PART_SIZE, int listPageSize = DEFAULT_LIST_PAGE_SIZE) {
+        // The guard treats the prefix as a folder: without the trailing slash it would also admit sibling pipelines
+        if (!prefix || !prefix.endsWith('/')) {
+            throw new IllegalArgumentException("The pipeline prefix must end with '/': ${prefix}".toString())
+        }
         this.reader = reader
         this.writer = writer
         this.bucket = bucket
@@ -95,20 +99,21 @@ class FovusS3Client {
         }
     }
 
-    /** True when at least one object starts with {@code dirKey}, which should end with {@code /}. */
+    /** True when at least one object is under {@code dirKey}; a missing trailing {@code /} is added. */
     boolean hasChildren(String dirKey) throws IOException {
-        if (!readable(dirKey)) return false
-        final request = ListObjectsV2Request.builder().bucket(bucket).prefix(dirKey).maxKeys(1).build()
-        final response = call('list', dirKey) { reader.listObjectsV2(request) }
+        final folder = asFolder(dirKey)
+        if (!readable(folder)) return false
+        final request = ListObjectsV2Request.builder().bucket(bucket).prefix(folder).maxKeys(1).build()
+        final response = call('list', folder) { reader.listObjectsV2(request) }
         return (response.keyCount() ?: 0) > 0
     }
 
-    /** The objects and sub-folder prefixes directly under {@code dirKey}, which should end with {@code /}. */
+    /** The objects and sub-folder prefixes directly under {@code dirKey}; a missing trailing {@code /} is added. */
     List<S3Entry> list(String dirKey) throws IOException {
         return listing(dirKey, '/')
     }
 
-    /** Every object under {@code dirKey}, at any depth. */
+    /** Every object under {@code dirKey}, at any depth; a missing trailing {@code /} is added. */
     List<S3Entry> listAll(String dirKey) throws IOException {
         return listing(dirKey, null)
     }
@@ -151,12 +156,14 @@ class FovusS3Client {
     }
 
     CompletedPart uploadPart(String key, String uploadId, int partNumber, byte[] bytes) throws IOException {
+        writable(key)
         final request = UploadPartRequest.builder().bucket(bucket).key(key).uploadId(uploadId).partNumber(partNumber).build()
         final response = call('write', key) { writer.uploadPart(request, RequestBody.fromBytes(bytes)) }
         return CompletedPart.builder().partNumber(partNumber).eTag(response.eTag()).build()
     }
 
     void completeMultipart(String key, String uploadId, List<CompletedPart> parts) throws IOException {
+        writable(key)
         final request = CompleteMultipartUploadRequest.builder().bucket(bucket).key(key).uploadId(uploadId)
                 .multipartUpload(CompletedMultipartUpload.builder().parts(parts).build())
                 .build()
@@ -165,6 +172,10 @@ class FovusS3Client {
 
     /** Best effort: an upload that cannot be aborted stays invisible until the bucket's lifecycle rule removes it. */
     void abortMultipart(String key, String uploadId) {
+        if (!inPipeline(key)) {
+            log.debug "[FOVUS] Not aborting a multipart upload outside the pipeline folder: ${key}"
+            return
+        }
         try {
             writer.abortMultipartUpload(AbortMultipartUploadRequest.builder().bucket(bucket).key(key).uploadId(uploadId).build())
         }
@@ -176,11 +187,12 @@ class FovusS3Client {
     // -- helpers
 
     private List<S3Entry> listing(String dirKey, String delimiter) throws IOException {
-        if (!readable(dirKey)) return []
-        final builder = ListObjectsV2Request.builder().bucket(bucket).prefix(dirKey).maxKeys(listPageSize)
+        final folder = asFolder(dirKey)
+        if (!readable(folder)) return []
+        final builder = ListObjectsV2Request.builder().bucket(bucket).prefix(folder).maxKeys(listPageSize)
         if (delimiter != null) builder.delimiter(delimiter)
         final request = builder.build()
-        return call('list', dirKey) {
+        return call('list', folder) {
             final List<S3Entry> entries = []
             for (ListObjectsV2Response page : reader.listObjectsV2Paginator(request)) {
                 for (S3Object object : page.contents()) {
@@ -231,9 +243,9 @@ class FovusS3Client {
             return new IOException("S3 ${operation} failed on ${key}: ${errorCode(s3Error)} (HTTP ${s3Error.statusCode()}, request ${s3Error.requestId()})".toString())
         }
         if (error instanceof SdkClientException) {
-            return new IOException("S3 ${operation} failed on ${key}: ${error.message}".toString(), error)
+            return new IOException("S3 ${operation} failed on ${key}: ${error.message}".toString())
         }
-        return new IOException("S3 ${operation} failed on ${key}: ${error.class.simpleName}".toString(), error)
+        return new IOException("S3 ${operation} failed on ${key}: ${error.class.simpleName}".toString())
     }
 
     private static StorageCredentialsException credentialsFailure(Throwable error) {
@@ -255,15 +267,32 @@ class FovusS3Client {
         return "fovus:///fovus-storage/${key}".toString()
     }
 
+    /** A folder key always ends with {@code /}, so that listing it cannot reach a sibling such as {@code <pid>2/}. */
+    private static String asFolder(String dirKey) {
+        return dirKey == null || dirKey.endsWith('/') ? dirKey : dirKey + '/'
+    }
+
     /** Inside this pipeline, including the pipeline folder itself. */
     private boolean readable(String key) {
-        return key.startsWith(prefix) || key + '/' == prefix
+        return inPipeline(key) || (key != null && !hasDotSegment(key) && key + '/' == prefix)
     }
 
     private String writable(String key) throws AccessDeniedException {
-        if (!key.startsWith(prefix)) {
+        if (!inPipeline(key)) {
             throw new AccessDeniedException(uri(key), null, "Refusing to write outside ${prefix}".toString())
         }
         return key
+    }
+
+    /** Under the pipeline prefix, with no {@code .} or {@code ..} segment that would lead back out of it. */
+    private boolean inPipeline(String key) {
+        return key != null && key.startsWith(prefix) && !hasDotSegment(key)
+    }
+
+    private static boolean hasDotSegment(String key) {
+        for (String segment : key.split('/')) {
+            if (segment == '.' || segment == '..') return true
+        }
+        return false
     }
 }
