@@ -29,8 +29,12 @@ import java.nio.file.StandardOpenOption
 import java.time.Duration
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
-import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * S3 access to the direct-mode work directory: {@code pipelines/<pid>/} in the user's Fovus bucket, plus
@@ -54,7 +58,10 @@ class FovusS3Client {
     static final int DEFAULT_LIST_PAGE_SIZE = 1000
     static final int MAX_ATTEMPTS = 10
     static final int TRANSFER_THREADS = 4
+    /** S3's limit on the parts of one multipart upload. */
+    static final int MAX_PARTS = 10000
     static final long MAX_COPY_OBJECT_SIZE = 5L * 1024 * 1024 * 1024
+    private static final int COPY_BUFFER_SIZE = 64 * 1024
     static final Set<String> EXPIRED_TOKEN_CODES =
             ['ExpiredToken', 'ExpiredTokenException', 'InvalidToken', 'TokenRefreshRequired'] as Set<String>
     /** Nextflow's session scratch folders, directly under its {@code workDir} (the pipelines area). */
@@ -69,6 +76,8 @@ class FovusS3Client {
     private final RefreshingStorageCredentials credentials
     /** The pipeline folder and the session scratch folders, each ending with {@code /}. */
     private final List<String> allowedFolders
+    /** The parts of every parallel upload and download of this client; see {@link #newTransferPool()}. */
+    private final ThreadPoolExecutor transfers
 
     FovusS3Client(S3Client reader, S3Client writer, String bucket, String prefix, RefreshingStorageCredentials credentials,
                   int partSize = DEFAULT_PART_SIZE, int listPageSize = DEFAULT_LIST_PAGE_SIZE) {
@@ -84,6 +93,31 @@ class FovusS3Client {
         this.partSize = partSize
         this.listPageSize = listPageSize
         this.allowedFolders = allowedFolders(prefix)
+        this.transfers = newTransferPool()
+    }
+
+    /**
+     * One bounded pool per client, so at most {@link #TRANSFER_THREADS} parts are in flight however many files
+     * Nextflow stages or publishes at once. Callers wait on their own parts, and parts never submit work, so
+     * waiting cannot deadlock. The threads are daemons and end after a minute without work.
+     */
+    private static ThreadPoolExecutor newTransferPool() {
+        final counter = new AtomicInteger()
+        final factory = { Runnable task ->
+            final thread = new Thread(task, "fovus-s3-transfer-${counter.incrementAndGet()}".toString())
+            thread.daemon = true
+            return thread
+        } as ThreadFactory
+        final pool = new ThreadPoolExecutor(TRANSFER_THREADS, TRANSFER_THREADS, 60L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<Runnable>(), factory)
+        pool.allowCoreThreadTimeOut(true)
+        return pool
+    }
+
+    /** Stop the transfer threads now. Tests only: in a run they are daemons that end on their own when idle. */
+    @PackageScope
+    void shutdownTransfers() {
+        transfers.shutdownNow()
     }
 
     /** The pipeline folder, and the scratch folders in the pipelines area it belongs to (the prefix's first segment). */
@@ -252,37 +286,62 @@ class FovusS3Client {
         return new S3MultipartOutputStream(this, writable(key))
     }
 
-    /** Upload a local file: one PutObject up to one part, otherwise parts in parallel. */
+    /**
+     * Upload a local file: one PutObject up to one part, otherwise parts in parallel on this client's transfer
+     * pool, each read from its slice of the file as it is sent. Parts are larger than {@link #partSize} only when
+     * the file would otherwise need more than {@link #MAX_PARTS}.
+     */
     void uploadFile(Path file, String key) throws IOException {
         writable(key)
         final long size = Files.size(file)
-        if (size <= partSize) {
+        final long part = uploadPartSize(size, partSize)
+        if (size <= part) {
             final request = PutObjectRequest.builder().bucket(bucket).key(key).build()
             call('write', key) { writer.putObject(request, RequestBody.fromFile(file)) }
             return
         }
 
         final uploadId = createMultipart(key)
-        final pool = Executors.newFixedThreadPool(TRANSFER_THREADS)
+        final List<Future<CompletedPart>> futures = []
+        boolean completed = false
         try {
-            final List<Future<CompletedPart>> futures = []
             int partNumber = 1
-            for (long offset = 0; offset < size; offset += partSize) {
+            for (long offset = 0; offset < size; offset += part) {
                 final long start = offset
-                final int length = (int) Math.min((long) partSize, size - offset)
+                final long length = Math.min(part, size - offset)
                 final int number = partNumber++
-                futures.add(pool.submit({ -> uploadPart(key, uploadId, number, readSlice(file, start, length)) } as Callable<CompletedPart>))
+                futures.add(transfers.submit({ -> uploadFilePart(key, uploadId, number, file, start, length) } as Callable<CompletedPart>))
             }
             final List<CompletedPart> parts = []
             for (Future<CompletedPart> future : futures) parts.add(await(future))
             completeMultipart(key, uploadId, parts)
-        }
-        catch (IOException e) {
-            abortMultipart(key, uploadId)
-            throw e
+            completed = true
         }
         finally {
-            pool.shutdownNow()
+            cancel(futures)
+            if (!completed) abortMultipart(key, uploadId)
+        }
+    }
+
+    /** The part size for a file upload: {@code partSize}, or more when that would take over {@link #MAX_PARTS} parts. */
+    @PackageScope
+    static long uploadPartSize(long size, int partSize) {
+        return Math.max((long) partSize, Math.floorDiv(size + MAX_PARTS - 1, (long) MAX_PARTS))
+    }
+
+    private CompletedPart uploadFilePart(String key, String uploadId, int partNumber, Path file, long start, long length)
+            throws IOException {
+        writable(key)
+        final request = UploadPartRequest.builder().bucket(bucket).key(key).uploadId(uploadId).partNumber(partNumber).build()
+        final body = new FileSliceProvider(file, start, length)
+        try {
+            final response = call('write', key) {
+                writer.uploadPart(request, RequestBody.fromContentProvider(body, length, 'application/octet-stream'))
+            }
+            return CompletedPart.builder().partNumber(partNumber).eTag(response.eTag()).build()
+        }
+        finally {
+            body.close()
         }
     }
 
@@ -369,40 +428,43 @@ class FovusS3Client {
     }
 
     private void downloadRanges(String key, long size, Path temp) throws IOException {
-        final pool = Executors.newFixedThreadPool(TRANSFER_THREADS)
-        try {
-            FileChannel.open(temp, StandardOpenOption.WRITE).withCloseable { FileChannel channel ->
-                final List<Future<Object>> futures = []
+        FileChannel.open(temp, StandardOpenOption.WRITE).withCloseable { FileChannel channel ->
+            final List<Future<Object>> futures = []
+            try {
                 for (long start = 0; start < size; start += partSize) {
                     final long from = start
                     final long to = Math.min(start + partSize, size) - 1
-                    futures.add(pool.submit({ -> readRange(key, from, to, channel); return null } as Callable<Object>))
+                    futures.add(transfers.submit({ -> readRange(key, from, to, channel); return null } as Callable<Object>))
                 }
                 for (Future<Object> future : futures) await(future)
             }
-        }
-        finally {
-            pool.shutdownNow()
-        }
-    }
-
-    private void readRange(String key, long from, long to, FileChannel channel) throws IOException {
-        final request = GetObjectRequest.builder().bucket(bucket).key(key).range("bytes=${from}-${to}".toString()).build()
-        final bytes = call('read', key) { reader.getObjectAsBytes(request).asByteArray() }
-        final buffer = ByteBuffer.wrap(bytes)
-        long position = from
-        while (buffer.hasRemaining()) position += channel.write(buffer, position)
-    }
-
-    private static byte[] readSlice(Path file, long start, int length) throws IOException {
-        final bytes = new byte[length]
-        final buffer = ByteBuffer.wrap(bytes)
-        FileChannel.open(file, StandardOpenOption.READ).withCloseable { FileChannel channel ->
-            while (buffer.hasRemaining()) {
-                if (channel.read(buffer, start + buffer.position()) < 0) throw new EOFException("${file} ended early".toString())
+            finally {
+                cancel(futures)
             }
         }
-        return bytes
+    }
+
+    /** One ranged GET, streamed straight into the file at its offset. */
+    private void readRange(String key, long from, long to, FileChannel channel) throws IOException {
+        final request = GetObjectRequest.builder().bucket(bucket).key(key).range("bytes=${from}-${to}".toString()).build()
+        final body = new S3BodyStream(call('read', key) { reader.getObject(request) }, key)
+        body.withCloseable { InputStream input ->
+            final buffer = new byte[COPY_BUFFER_SIZE]
+            long position = from
+            int count
+            while ((count = input.read(buffer)) >= 0) {
+                final chunk = ByteBuffer.wrap(buffer, 0, count)
+                while (chunk.hasRemaining()) position += channel.write(chunk, position)
+            }
+            if (position != to + 1) {
+                throw new IOException("S3 read failed on ${key}: the range ended at byte ${position} instead of ${to + 1}".toString())
+            }
+        }
+    }
+
+    /** Stop the parts of a transfer that is over, most usefully one that failed; a no-op for finished parts. */
+    private static void cancel(List<? extends Future> futures) {
+        for (Future future : futures) future.cancel(true)
     }
 
     private static <T> T await(Future<T> future) throws IOException {

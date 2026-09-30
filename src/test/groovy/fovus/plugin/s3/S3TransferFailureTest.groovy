@@ -1,6 +1,5 @@
 package fovus.plugin.s3
 
-import software.amazon.awssdk.core.ResponseBytes
 import software.amazon.awssdk.core.ResponseInputStream
 import software.amazon.awssdk.core.exception.AbortedException
 import software.amazon.awssdk.core.exception.SdkClientException
@@ -58,13 +57,14 @@ class S3TransferFailureTest extends Specification {
         given:
         def target = tempDir.resolve('out.bin')
         s3.headObject(_ as HeadObjectRequest) >> HeadObjectResponse.builder().contentLength(3L * FovusS3Client.MIN_PART_SIZE).build()
-        s3.getObjectAsBytes(_ as GetObjectRequest) >> { throw FovusS3ClientTest.s3Error(500, 'InternalError') }
+        s3.getObject(_ as GetObjectRequest) >> { throw FovusS3ClientTest.s3Error(500, 'InternalError') }
 
         when:
         client.downloadFile(KEY, target)
 
         then:
-        thrown(IOException)
+        def e = thrown(IOException)
+        e.message == "S3 read failed on ${KEY}: InternalError (HTTP 500, request req-1)".toString()
         !Files.exists(target)
         Files.list(tempDir).withCloseable { it.count() } == 0
     }
@@ -89,7 +89,7 @@ class S3TransferFailureTest extends Specification {
         given:
         def target = tempDir.resolve('out.bin')
         s3.headObject(_ as HeadObjectRequest) >> HeadObjectResponse.builder().contentLength(3L * FovusS3Client.MIN_PART_SIZE).build()
-        s3.getObjectAsBytes(_ as GetObjectRequest) >> { Thread.sleep(200); throw FovusS3ClientTest.s3Error(500, 'InternalError') }
+        s3.getObject(_ as GetObjectRequest) >> { Thread.sleep(200); throw FovusS3ClientTest.s3Error(500, 'InternalError') }
 
         when:
         Thread.currentThread().interrupt()
@@ -209,8 +209,10 @@ class S3TransferFailureTest extends Specification {
         def target = tempDir.resolve('out.bin')
         def reference = Files.createFile(tempDir.resolve('reference.bin'))
         s3.headObject(_ as HeadObjectRequest) >> HeadObjectResponse.builder().contentLength(size).build()
-        s3.getObject(_ as GetObjectRequest) >> responseStream(new ByteArrayInputStream(new byte[(int) size]))
-        s3.getObjectAsBytes(_ as GetObjectRequest) >> ResponseBytes.fromByteArray(GetObjectResponse.builder().build(), new byte[FovusS3Client.MIN_PART_SIZE])
+        // a single GET asks for the whole object, a ranged one for one part
+        s3.getObject(_ as GetObjectRequest) >> { GetObjectRequest r ->
+            responseStream(new ByteArrayInputStream(new byte[r.range() ? FovusS3Client.MIN_PART_SIZE : (int) size]))
+        }
 
         when:
         client.downloadFile(KEY, target)

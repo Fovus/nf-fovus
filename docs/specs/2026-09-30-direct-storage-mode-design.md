@@ -242,8 +242,12 @@ executable on the compute node because its mount shows `pipelines/` files as 077
   any call. Writes outside them are refused; reads outside them raise `NoSuchFileException`.
 - Maps S3 errors to NIO exceptions and messages as described in §10.
 - On `ExpiredToken` / `InvalidToken`: force a credential refresh and retry the request once.
-- Multipart uploads use a bounded thread pool and are aborted (`AbortMultipartUpload`) on
-  failure or interruption, best effort.
+- The parts of parallel uploads and ranged downloads share one bounded pool of daemon threads per
+  client (4), so transfer memory is bounded per process, not per file. Upload parts are read from
+  the file as they are sent and ranged GETs are streamed into the file at their offset, so no part
+  is held in memory. File uploads use parts larger than 16 MiB only when a file would otherwise
+  need more than 10,000 parts.
+- Multipart uploads are aborted (`AbortMultipartUpload`) on failure or interruption, best effort.
 
 ### 6.5 Credentials in the plugin
 
