@@ -1,6 +1,7 @@
 package fovus.plugin.s3
 
 import groovy.transform.CompileStatic
+import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
 import software.amazon.awssdk.awscore.retry.AwsRetryStrategy
@@ -9,8 +10,10 @@ import software.amazon.awssdk.core.checksums.ResponseChecksumValidation
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.core.exception.SdkClientException
 import software.amazon.awssdk.core.exception.SdkException
+import software.amazon.awssdk.core.interceptor.ExecutionInterceptor
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient
+import software.amazon.awssdk.profiles.ProfileFile
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.*
@@ -93,23 +96,52 @@ class FovusS3Client {
 
     /** Clients for the bucket and region named by the (already initialized) credentials. */
     static FovusS3Client create(RefreshingStorageCredentials credentials) throws StorageCredentialsException {
+        return createWithInterceptors(credentials, [])
+    }
+
+    /** Tests only: the same clients, with extra SDK interceptors to observe the requests. */
+    @PackageScope
+    static FovusS3Client createWithInterceptors(RefreshingStorageCredentials credentials, List<ExecutionInterceptor> interceptors)
+            throws StorageCredentialsException {
         final first = credentials.get()
-        return new FovusS3Client(buildClient(first.region, credentials.readProvider()),
-                                 buildClient(first.region, credentials.writeProvider()),
+        return new FovusS3Client(buildClient(first.region, credentials.readProvider(), interceptors),
+                                 buildClient(first.region, credentials.writeProvider(), interceptors),
                                  first.bucket, first.prefix, credentials)
     }
 
-    private static S3Client buildClient(String region, AwsCredentialsProvider provider) {
+    /**
+     * The user's own AWS configuration must not reach these clients: an explicit endpoint, so neither
+     * {@code AWS_ENDPOINT_URL(_S3)}, {@code aws.endpointUrl(S3)} nor a profile's {@code endpoint_url} can send
+     * Fovus-signed requests elsewhere, and an empty profile file, so {@code ~/.aws/config} and
+     * {@code ~/.aws/credentials} are not read at all. FIPS and dual-stack are switched off explicitly: the SDK
+     * refuses either one next to an explicit endpoint, so a user's {@code AWS_USE_FIPS_ENDPOINT} would
+     * otherwise fail every request.
+     */
+    private static S3Client buildClient(String region, AwsCredentialsProvider provider, List<ExecutionInterceptor> interceptors) {
         final retries = AwsRetryStrategy.standardRetryStrategy().toBuilder().maxAttempts(MAX_ATTEMPTS).build()
+        final overrides = ClientOverrideConfiguration.builder()
+                .retryStrategy(retries)
+                .defaultProfileFile(emptyProfileFile())
+        for (ExecutionInterceptor interceptor : interceptors) overrides.addExecutionInterceptor(interceptor)
         return S3Client.builder()
                 .region(Region.of(region))
+                .endpointOverride(URI.create("https://s3.${region}.amazonaws.com".toString()))
+                .fipsEnabled(false)
+                .dualstackEnabled(false)
                 .credentialsProvider(provider)
                 .httpClientBuilder(UrlConnectionHttpClient.builder()
                         .connectionTimeout(Duration.ofSeconds(30))
                         .socketTimeout(Duration.ofMinutes(5)))
                 .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
                 .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
-                .overrideConfiguration(ClientOverrideConfiguration.builder().retryStrategy(retries).build())
+                .overrideConfiguration(overrides.build())
+                .build()
+    }
+
+    private static ProfileFile emptyProfileFile() {
+        return ProfileFile.builder()
+                .content(new ByteArrayInputStream(new byte[0]))
+                .type(ProfileFile.Type.CONFIGURATION)
                 .build()
     }
 

@@ -234,6 +234,9 @@ executable on the compute node because its mount shows `pipelines/` files as 077
 - Checksum calculation and validation set to `WHEN_REQUIRED` (TLS already protects the transfer,
   and it keeps manual multipart uploads and S3-compatible test servers simple).
 - Bucket, region and prefix come from the first credential fetch and are fixed for the run.
+- The user's own AWS configuration never applies: an explicit endpoint
+  `https://s3.<region>.amazonaws.com` (so `AWS_ENDPOINT_URL[_S3]` or a profile's `endpoint_url`
+  cannot redirect Fovus-signed requests), an empty profile file, and FIPS and dual-stack off.
 - **Prefix guard:** every key is checked against `Prefix` (`pipelines/<pid>/`) and Nextflow's
   session scratch folders next to it (`pipelines/tmp/`, `pipelines/collect-file/`; see §8) before
   any call. Writes outside them are refused; reads outside them raise `NoSuchFileException`.
