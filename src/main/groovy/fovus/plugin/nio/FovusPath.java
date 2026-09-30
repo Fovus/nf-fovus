@@ -38,6 +38,8 @@ public class FovusPath implements Path {
 
     public static final String FOVUS_PATH_PREFIX = "/fovus-storage";
 
+    public static final String PIPELINES = "pipelines";
+
     /**
      * Parts without fovus-storage prefix and fileType name.
      */
@@ -98,10 +100,11 @@ public class FovusPath implements Path {
         }
 
         if (first.startsWith(PATH_SEPARATOR)) { // absolute path
-            Preconditions.checkArgument(parts.size() >= 2 &&
+            Preconditions.checkArgument(parts.size() >= 3 &&
                             parts.get(1).equals("fovus-storage") &&
-                            (parts.get(2).equals("jobs") || parts.get(2).equals("files") || parts.get(2).equals("shared")),
-                    "Invalid Fovus file path. Path must start with fovus-storage prefix and followed by 'files' or 'jobs' or 'shared");
+                            (parts.get(2).equals("jobs") || parts.get(2).equals("files") || parts.get(2).equals("shared")
+                                    || parts.get(2).equals(PIPELINES)),
+                    "Invalid Fovus file path. Path must start with fovus-storage prefix and followed by 'files', 'jobs', 'pipelines' or 'shared'");
 
             fileType = parts.get(2);
             if (fileType.equals("shared")) {
@@ -152,6 +155,13 @@ public class FovusPath implements Path {
      */
     public String toRemoteFilePath() {
         return getFileType() + PATH_SEPARATOR + getKey();
+    }
+
+    /**
+     * @return true for {@code /fovus-storage/pipelines} itself: the work directory of direct mode
+     */
+    public boolean isPipelinesAreaRoot() {
+        return PIPELINES.equals(fileType) && parts.isEmpty();
     }
     
     @Override

@@ -29,6 +29,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.file.*;
@@ -59,12 +61,9 @@ import static java.lang.String.format;
  * operation was issued i.e. Files.delete() and Files.deleteIfExists() are
  * equivalent.
  * <p>
- * <p>
- * Future versions of this provider might allow for a strict mode that mimics
- * the semantics of the FileSystem provider API on a best effort basis, at an
- * increased processing cost.
- *
- *
+ * The {@code files} and {@code jobs} areas are read-only and served through the Fovus CLI. The
+ * {@code pipelines} area is the work directory of direct mode: it is read and written through
+ * {@link PipelinesStorage} with the AWS S3 SDK, once the executor has attached an S3 client.
  */
 public class FovusFileSystemProvider extends FileSystemProvider implements FileSystemTransferAware {
 
@@ -88,8 +87,11 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
         synchronized (fileSystems) {
             if (fileSystems.containsKey(fileType))
                 throw new FileSystemAlreadyExistsException("Fovus filesystem already exists. Use getFileSystem() instead");
-            final FovusConfig fovusConfig = new FovusConfig(env);
-            final FovusFileSystem result = createFileSystem(uri, fovusConfig);
+            // The pipelines area needs no CLI client: Nextflow creates it while parsing workDir, before the
+            // pipeline or any credentials exist, and the executor attaches an S3 client later.
+            final FovusFileSystem result = FovusPath.PIPELINES.equals(fileType)
+                    ? new FovusFileSystem(this, null, uri)
+                    : createFileSystem(uri, new FovusConfig(env));
             fileSystems.put(fileType, result);
             return result;
         }
@@ -125,6 +127,9 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
 
         Preconditions.checkArgument(dir instanceof FovusPath, "path must be an instance of %s", FovusPath.class.getName());
         final FovusPath fovusPath = (FovusPath) dir;
+        if (isPipelines(fovusPath)) {
+            return pipelines(fovusPath).newDirectoryStream(fovusPath, filter);
+        }
 
         return new DirectoryStream<Path>() {
             @Override
@@ -153,6 +158,10 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
     @Override
     public void download(Path remoteFile, Path localDestination, CopyOption... options) throws IOException {
         final FovusPath source = (FovusPath) remoteFile;
+        if (isPipelines(source)) {
+            pipelines(source).download(source, localDestination, options);
+            return;
+        }
 
         final CopyOptions opts = CopyOptions.parse(options);
         // delete target if it exists and REPLACE_EXISTING is specified
@@ -177,36 +186,77 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
 
     @Override
     public void upload(Path localFile, Path remoteDestination, CopyOption... options) throws IOException {
+        if (isPipelines(remoteDestination)) {
+            pipelines(remoteDestination).upload(localFile, (FovusPath) remoteDestination, options);
+            return;
+        }
         throw new UnsupportedOperationException("Fovus Storage is read-only. upload is not supported");
+    }
+
+    @Override
+    public InputStream newInputStream(Path path, OpenOption... options) throws IOException {
+        if (isPipelines(path)) {
+            return pipelines(path).newInputStream((FovusPath) path);
+        }
+        return super.newInputStream(path, options);
+    }
+
+    @Override
+    public OutputStream newOutputStream(Path path, OpenOption... options) throws IOException {
+        if (isPipelines(path)) {
+            return pipelines(path).newOutputStream((FovusPath) path, options);
+        }
+        throw new UnsupportedOperationException("Fovus Storage is read-only. newOutputStream is not supported");
     }
 
     @Override
     public SeekableByteChannel newByteChannel(Path path,
                                               Set<? extends OpenOption> options, FileAttribute<?>... attrs)
             throws IOException {
+        if (isPipelines(path)) {
+            return pipelines(path).newByteChannel((FovusPath) path, options);
+        }
         throw new UnsupportedOperationException("Fovus Storage is read-only. newByteChannel is not supported");
     }
 
     @Override
     public void createDirectory(Path dir, FileAttribute<?>... attrs)
             throws IOException {
+        // The direct-mode work directory itself: nothing to create, and no credentials exist yet
+        if (isPipelinesAreaRoot(dir)) return;
+        if (isPipelines(dir)) {
+            pipelines(dir).createDirectory((FovusPath) dir);
+            return;
+        }
         throw new UnsupportedOperationException("Fovus Storage is read-only. createDirectory is not supported");
     }
 
     @Override
     public void delete(Path path) throws IOException {
+        if (isPipelines(path)) {
+            pipelines(path).delete((FovusPath) path);
+            return;
+        }
         throw new UnsupportedOperationException("Fovus Storage is read-only. delete is not supported");
     }
 
     @Override
     public void copy(Path source, Path target, CopyOption... options)
             throws IOException {
+        if (isPipelines(source) && isPipelines(target)) {
+            pipelines(target).copy((FovusPath) source, (FovusPath) target, options);
+            return;
+        }
         throw new UnsupportedOperationException("Fovus Storage is read-only. copy is not supported");
     }
 
 
     @Override
     public void move(Path source, Path target, CopyOption... options) throws IOException {
+        if (isPipelines(source) && isPipelines(target)) {
+            pipelines(target).move((FovusPath) source, (FovusPath) target, options);
+            return;
+        }
         throw new UnsupportedOperationException("Fovus Storage is read-only. move is not supported");
     }
 
@@ -231,6 +281,10 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
         FovusPath fovusPath = (FovusPath) path;
         Preconditions.checkArgument(fovusPath.isAbsolute(),
                 "path must be absolute: %s", fovusPath);
+        if (isPipelines(fovusPath) && !fovusPath.isPipelinesAreaRoot()) {
+            // throws NoSuchFileException when the path does not exist
+            pipelines(fovusPath).readAttributes(fovusPath);
+        }
     }
 
     @Override
@@ -240,7 +294,7 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
         FovusPath fovusPath = (FovusPath) path;
         if (type.isAssignableFrom(BasicFileAttributeView.class)) {
             try {
-                return (V) new FovusFileAttributesView(readAttr0(fovusPath));
+                return (V) new FovusFileAttributesView(readAttributesOf(fovusPath));
             } catch (IOException e) {
                 throw new RuntimeException("Unable read attributes for file: " + FilesEx.toUriString(fovusPath), e);
             }
@@ -256,15 +310,25 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
         FovusPath fovusPath = (FovusPath) path;
 
         if (type.isAssignableFrom(BasicFileAttributes.class)) {
-            A attributes = (A) ("".equals(fovusPath.getKey())
-                    ? new FovusFileAttributes("/", null, 0, true, false)
-                    // read the target path attributes
-                    : readAttr0(fovusPath));
+            A attributes = (A) readAttributesOf(fovusPath);
             log.trace("+++ Attributes for path {}: {}", path, attributes);
             return attributes;
         }
         // not support attribute class
         throw new UnsupportedOperationException(format("only %s supported", BasicFileAttributes.class));
+    }
+
+    private FovusFileAttributes readAttributesOf(FovusPath fovusPath) throws IOException {
+        if (fovusPath.isPipelinesAreaRoot()) {
+            return new FovusFileAttributes(FovusPath.PIPELINES + "/", null, 0, true, false);
+        }
+        if (isPipelines(fovusPath)) {
+            return pipelines(fovusPath).readAttributes(fovusPath);
+        }
+        return "".equals(fovusPath.getKey())
+                ? new FovusFileAttributes("/", null, 0, true, false)
+                // read the target path attributes
+                : readAttr0(fovusPath);
     }
 
     private Optional<FovusFileAttributes> readAttr1(FovusPath fovusPath) throws IOException {
@@ -334,6 +398,16 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
     @Override
     public boolean exists(Path path, LinkOption... options) {
         if (path instanceof FovusPath fovusPath) { // Java 16+ pattern matching for instanceof
+            if (fovusPath.isPipelinesAreaRoot()) {
+                return true;
+            }
+            if (isPipelines(fovusPath)) {
+                try {
+                    return pipelines(fovusPath).exists(fovusPath);
+                } catch (IOException e) {
+                    return false;
+                }
+            }
             try {
                 fovusFileMetadataLookup.lookup(fovusPath);
                 return true;
@@ -344,5 +418,17 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
             }
         }
         return super.exists(path, options); // no else needed — early return above
+    }
+
+    private static boolean isPipelines(Path path) {
+        return path instanceof FovusPath && FovusPath.PIPELINES.equals(((FovusPath) path).getFileType());
+    }
+
+    private static boolean isPipelinesAreaRoot(Path path) {
+        return path instanceof FovusPath && ((FovusPath) path).isPipelinesAreaRoot();
+    }
+
+    private static PipelinesStorage pipelines(Path path) {
+        return ((FovusPath) path).getFileSystem().pipelinesStorage();
     }
 }

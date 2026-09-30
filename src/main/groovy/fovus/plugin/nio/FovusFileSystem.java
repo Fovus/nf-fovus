@@ -32,6 +32,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 
 import fovus.plugin.job.FovusJobClient;
+import fovus.plugin.s3.FovusS3Client;
 
 public class FovusFileSystem extends FileSystem {
 
@@ -42,6 +43,11 @@ public class FovusFileSystem extends FileSystem {
 
     private final String fileType;
 
+    public static final String NOT_ATTACHED_MESSAGE =
+            "Fovus storage pipelines/ paths can only be read or written in direct mode, after the Fovus executor has started";
+
+    /** Direct mode only: set by the executor once storage credentials exist. */
+    private volatile PipelinesStorage pipelinesStorage;
 
     public FovusFileSystem(FovusFileSystemProvider provider, FovusJobClient client, URI uri) {
         this.provider = provider;
@@ -67,7 +73,7 @@ public class FovusFileSystem extends FileSystem {
 
     @Override
     public boolean isReadOnly() {
-        return true;
+        return !FovusPath.PIPELINES.equals(fileType);
     }
 
     @Override
@@ -117,5 +123,18 @@ public class FovusFileSystem extends FileSystem {
 
     public FovusJobClient getJobClient() {
         return jobClient;
+    }
+
+    /** Direct mode: give the pipelines/ file system its S3 client once storage credentials exist. */
+    public void attachS3Client(FovusS3Client client) {
+        this.pipelinesStorage = new PipelinesStorage(client);
+    }
+
+    PipelinesStorage pipelinesStorage() {
+        final PipelinesStorage storage = pipelinesStorage;
+        if (storage == null) {
+            throw new IllegalStateException(NOT_ATTACHED_MESSAGE);
+        }
+        return storage;
     }
 }
