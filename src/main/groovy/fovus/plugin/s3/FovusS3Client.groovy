@@ -14,9 +14,19 @@ import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.*
 
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 import java.nio.file.AccessDeniedException
+import java.nio.file.Files
 import java.nio.file.NoSuchFileException
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.time.Duration
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 /**
  * S3 access to the direct-mode work directory: {@code pipelines/<pid>/} in the user's Fovus bucket.
@@ -36,6 +46,7 @@ class FovusS3Client {
     static final int DEFAULT_LIST_PAGE_SIZE = 1000
     static final int MAX_ATTEMPTS = 10
     static final int TRANSFER_THREADS = 4
+    static final long MAX_COPY_OBJECT_SIZE = 5L * 1024 * 1024 * 1024
     static final Set<String> EXPIRED_TOKEN_CODES =
             ['ExpiredToken', 'ExpiredTokenException', 'InvalidToken', 'TokenRefreshRequired'] as Set<String>
 
@@ -181,6 +192,153 @@ class FovusS3Client {
         }
         catch (Exception e) {
             log.debug "[FOVUS] Could not abort the multipart upload of ${key}: ${e.class.simpleName}"
+        }
+    }
+
+    // -- transfers
+
+    /** A stream that uploads to {@code key}; see {@link S3MultipartOutputStream}. */
+    S3MultipartOutputStream newOutputStream(String key) throws IOException {
+        return new S3MultipartOutputStream(this, writable(key))
+    }
+
+    /** Upload a local file: one PutObject up to one part, otherwise parts in parallel. */
+    void uploadFile(Path file, String key) throws IOException {
+        writable(key)
+        final long size = Files.size(file)
+        if (size <= partSize) {
+            final request = PutObjectRequest.builder().bucket(bucket).key(key).build()
+            call('write', key) { writer.putObject(request, RequestBody.fromFile(file)) }
+            return
+        }
+
+        final uploadId = createMultipart(key)
+        final pool = Executors.newFixedThreadPool(TRANSFER_THREADS)
+        try {
+            final List<Future<CompletedPart>> futures = []
+            int partNumber = 1
+            for (long offset = 0; offset < size; offset += partSize) {
+                final long start = offset
+                final int length = (int) Math.min((long) partSize, size - offset)
+                final int number = partNumber++
+                futures.add(pool.submit({ -> uploadPart(key, uploadId, number, readSlice(file, start, length)) } as Callable<CompletedPart>))
+            }
+            final List<CompletedPart> parts = []
+            for (Future<CompletedPart> future : futures) parts.add(await(future))
+            completeMultipart(key, uploadId, parts)
+        }
+        catch (IOException e) {
+            abortMultipart(key, uploadId)
+            throw e
+        }
+        finally {
+            pool.shutdownNow()
+        }
+    }
+
+    /**
+     * Download an object to a local file: one GET up to one part, otherwise parallel ranged GETs. The data
+     * goes to a temporary file next to {@code target}, moved into place only on success.
+     */
+    void downloadFile(String key, Path target) throws IOException {
+        final entry = head(key)
+        if (entry == null) throw new NoSuchFileException(uri(key))
+        final directory = target.toAbsolutePath().parent
+        Files.createDirectories(directory)
+        final temp = Files.createTempFile(directory, ".${target.fileName}.".toString(), '.part')
+        try {
+            if (entry.size <= partSize) {
+                getObject(key).withCloseable { InputStream input -> Files.copy(input, temp, StandardCopyOption.REPLACE_EXISTING) }
+            }
+            else {
+                downloadRanges(key, entry.size, temp)
+            }
+            Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
+        }
+        catch (IOException e) {
+            Files.deleteIfExists(temp)
+            throw e
+        }
+    }
+
+    /** Copy inside the pipeline: CopyObject when allowed, otherwise a streamed download and upload. */
+    void copy(String sourceKey, String targetKey, long size) throws IOException {
+        writable(targetKey)
+        if (!readable(sourceKey)) throw new NoSuchFileException(uri(sourceKey))
+        if (size <= MAX_COPY_OBJECT_SIZE) {
+            final request = CopyObjectRequest.builder()
+                    .sourceBucket(bucket).sourceKey(sourceKey)
+                    .destinationBucket(bucket).destinationKey(targetKey)
+                    .build()
+            try {
+                call('copy', targetKey) { writer.copyObject(request) }
+                return
+            }
+            catch (AccessDeniedException ignored) {
+                log.debug "[FOVUS] CopyObject is not allowed for ${sourceKey}; copying it through a download instead"
+            }
+        }
+        final out = newOutputStream(targetKey)
+        try {
+            getObject(sourceKey).withCloseable { InputStream input -> input.transferTo(out) }
+            out.close()
+        }
+        finally {
+            // A no-op once close() has run, whether or not it succeeded; otherwise it discards the partial upload
+            out.abort()
+        }
+    }
+
+    private void downloadRanges(String key, long size, Path temp) throws IOException {
+        final pool = Executors.newFixedThreadPool(TRANSFER_THREADS)
+        try {
+            FileChannel.open(temp, StandardOpenOption.WRITE).withCloseable { FileChannel channel ->
+                final List<Future<Object>> futures = []
+                for (long start = 0; start < size; start += partSize) {
+                    final long from = start
+                    final long to = Math.min(start + partSize, size) - 1
+                    futures.add(pool.submit({ -> readRange(key, from, to, channel); return null } as Callable<Object>))
+                }
+                for (Future<Object> future : futures) await(future)
+            }
+        }
+        finally {
+            pool.shutdownNow()
+        }
+    }
+
+    private void readRange(String key, long from, long to, FileChannel channel) throws IOException {
+        final request = GetObjectRequest.builder().bucket(bucket).key(key).range("bytes=${from}-${to}".toString()).build()
+        final bytes = call('read', key) { reader.getObjectAsBytes(request).asByteArray() }
+        final buffer = ByteBuffer.wrap(bytes)
+        long position = from
+        while (buffer.hasRemaining()) position += channel.write(buffer, position)
+    }
+
+    private static byte[] readSlice(Path file, long start, int length) throws IOException {
+        final bytes = new byte[length]
+        final buffer = ByteBuffer.wrap(bytes)
+        FileChannel.open(file, StandardOpenOption.READ).withCloseable { FileChannel channel ->
+            while (buffer.hasRemaining()) {
+                if (channel.read(buffer, start + buffer.position()) < 0) throw new EOFException("${file} ended early".toString())
+            }
+        }
+        return bytes
+    }
+
+    private static <T> T await(Future<T> future) throws IOException {
+        try {
+            return future.get()
+        }
+        catch (ExecutionException e) {
+            final cause = e.cause
+            if (cause instanceof IOException) throw (IOException) cause
+            throw new IOException(cause?.message ?: 'S3 transfer failed', cause)
+        }
+        catch (InterruptedException ignored) {
+            // Keep the flag for the caller, and fail as an I/O error so the transfer's own cleanup still runs
+            Thread.currentThread().interrupt()
+            throw new InterruptedIOException('Interrupted while waiting for an S3 transfer')
         }
     }
 

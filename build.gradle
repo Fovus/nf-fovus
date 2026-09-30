@@ -21,6 +21,9 @@ dependencies {
     }
     implementation 'software.amazon.awssdk:url-connection-client:2.31.0'
 
+    testImplementation 'org.testcontainers:testcontainers:1.21.4'
+    testImplementation 'org.testcontainers:minio:1.21.4'
+
     // see https://docs.gradle.org/4.1/userguide/dependency_management.html#sec:module_replacement
     modules {
         module("commons-logging:commons-logging") { replacedBy("org.slf4j:jcl-over-slf4j") }
@@ -37,6 +40,22 @@ configurations.runtimeClasspath {
 test {
     workingDir = layout.buildDirectory.dir('test-workdir').get().asFile
     doFirst { workingDir.mkdirs() }
+    useJUnitPlatform {
+        excludeTags 'integration'
+    }
+}
+
+// Direct-mode S3 tests against a MinIO container. Needs Docker, so it is kept out of `check`.
+tasks.register('integrationTest', Test) {
+    description = 'Runs the direct-mode S3 tests against a MinIO container (needs Docker).'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    workingDir = layout.buildDirectory.dir('integration-test-workdir').get().asFile
+    doFirst { workingDir.mkdirs() }
+    useJUnitPlatform {
+        includeTags 'integration'
+    }
 }
 
 nextflowPlugin {
