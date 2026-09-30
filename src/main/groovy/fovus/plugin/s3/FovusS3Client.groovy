@@ -528,12 +528,15 @@ class FovusS3Client {
         }
     }
 
-    private static IOException mapError(String operation, String key, Exception error) {
+    private IOException mapError(String operation, String key, Exception error) {
         final credentialsFailure = credentialsFailure(error)
         if (credentialsFailure != null) return credentialsFailure
         if (error instanceof IOException) return (IOException) error
         if (error instanceof S3Exception) {
             final s3Error = (S3Exception) error
+            if (s3Error.statusCode() == 404 && errorCode(s3Error) == 'NoSuchBucket') {
+                return new IOException("Fovus storage bucket ${bucket} was not found".toString())
+            }
             if (s3Error.statusCode() == 404) return new NoSuchFileException(uri(key))
             if (s3Error.statusCode() == 403) {
                 return new AccessDeniedException(uri(key), null,

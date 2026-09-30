@@ -9,6 +9,7 @@ import fovus.plugin.s3.StorageCredentialsException
 import nextflow.exception.AbortOperationException
 import spock.lang.Specification
 
+import java.nio.file.AccessDeniedException
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -44,6 +45,43 @@ class DirectWorkDirStorageTest extends Specification {
         then:
         1 * connector.connect('p-1-user') >> Stub(FovusS3Client)
         fs.hasS3Client()
+    }
+
+    def 'prepare should check read and write access at start-up'() {
+        given:
+        def fs = PipelinesTestSupport.fileSystem()
+        def client = Mock(FovusS3Client)
+        def connector = Stub(S3Connector) { connect('p-1-user') >> client }
+
+        when:
+        new DirectWorkDirStorage((FovusPath) fs.getPath('/fovus-storage/pipelines'), connector).prepare('p-1-user')
+
+        then: 'one listing with the read token, then the work folder marker with the write token'
+        1 * client.hasChildren('pipelines/p-1-user/')
+
+        then:
+        1 * client.putDirectoryMarker('pipelines/p-1-user/fovus-work/')
+        0 * client._
+        fs.hasS3Client()
+    }
+
+    def 'a failed start-up check should stop the run with its message and attach nothing'() {
+        given:
+        def fs = PipelinesTestSupport.fileSystem()
+        def client = Stub(FovusS3Client) {
+            putDirectoryMarker(_) >> { throw new AccessDeniedException('fovus:///fovus-storage/pipelines/p-1-user/fovus-work/', null,
+                                                                      "Fovus storage credentials don't allow write on pipelines/p-1-user/fovus-work/ (write token)") }
+        }
+        def connector = Stub(S3Connector) { connect('p-1-user') >> client }
+
+        when:
+        new DirectWorkDirStorage((FovusPath) fs.getPath('/fovus-storage/pipelines'), connector).prepare('p-1-user')
+
+        then:
+        def e = thrown(AbortOperationException)
+        e.message.startsWith('[FOVUS] ')
+        e.message.contains("Fovus storage credentials don't allow write on pipelines/p-1-user/fovus-work/ (write token)")
+        !fs.hasS3Client()
     }
 
     def 'a credentials failure should stop the run with its message'() {

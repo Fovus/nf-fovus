@@ -1,6 +1,7 @@
 package fovus.plugin.storage
 
 import fovus.plugin.nio.FovusPath
+import fovus.plugin.nio.PipelinesStorage
 import fovus.plugin.s3.FovusS3Client
 import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
@@ -51,9 +52,17 @@ class DirectWorkDirStorage implements WorkDirStorage {
         return Path.of(path.toString())
     }
 
+    /**
+     * Fetch credentials, then list the pipeline folder with the read token and write its work folder marker with
+     * the write token, so a wrong bucket, region or permission stops the run here rather than at the first task.
+     */
     private FovusS3Client connect(String pipelineId) {
         try {
-            return connector.connect(pipelineId)
+            final client = connector.connect(pipelineId)
+            final pipelineKey = PipelinesStorage.keyOf((FovusPath) workDir.resolve(pipelineId))
+            client.hasChildren(pipelineKey + '/')
+            client.putDirectoryMarker(pipelineKey + '/fovus-work/')
+            return client
         }
         catch (IOException e) {
             throw new AbortOperationException("[FOVUS] ${e.message}".toString(), e)

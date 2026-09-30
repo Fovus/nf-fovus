@@ -121,6 +121,20 @@ class FovusS3ClientTest extends Specification {
         e.cause == null
     }
 
+    def 'a missing bucket should be reported as such, not as a missing file'() {
+        given:
+        s3.listObjectsV2(_ as ListObjectsV2Request) >> { throw s3Error(404, 'NoSuchBucket') }
+
+        when:
+        client.hasChildren(PREFIX)
+
+        then:
+        def e = thrown(IOException)
+        !(e instanceof NoSuchFileException)
+        e.message == 'Fovus storage bucket bucket was not found'
+        e.cause == null
+    }
+
     def 'an expired token should force one refresh and retry once'() {
         when:
         def found = client.head(KEY)
