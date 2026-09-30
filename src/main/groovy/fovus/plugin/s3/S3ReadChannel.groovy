@@ -11,6 +11,8 @@ import java.nio.channels.SeekableByteChannel
 @CompileStatic
 class S3ReadChannel implements SeekableByteChannel {
 
+    static final int BLOCK_SIZE = 64 * 1024
+
     private final FovusS3Client client
     private final String key
     private final long objectSize
@@ -25,22 +27,33 @@ class S3ReadChannel implements SeekableByteChannel {
         this.objectSize = size
     }
 
+    /**
+     * Reads a full block -- {@code destination}'s free space, up to {@link #BLOCK_SIZE} -- unless the object ends
+     * first. A network stream returns short reads, and callers such as Nextflow's {@code FilesEx.tail} expect
+     * a full block.
+     */
     @Override
     int read(ByteBuffer destination) throws IOException {
         ensureOpen()
+        if (!destination.hasRemaining()) return 0
         if (currentOffset >= objectSize) return -1
         if (stream == null || streamOffset != currentOffset) {
             stream?.close()
             stream = client.getObject(key, currentOffset)
             streamOffset = currentOffset
         }
-        final chunk = new byte[Math.min(destination.remaining(), 64 * 1024)]
-        final count = stream.read(chunk)
-        if (count < 0) return -1
-        destination.put(chunk, 0, count)
-        currentOffset += count
-        streamOffset += count
-        return count
+        final chunk = new byte[Math.min(destination.remaining(), BLOCK_SIZE)]
+        int filled = 0
+        while (filled < chunk.length) {
+            final count = stream.read(chunk, filled, chunk.length - filled)
+            if (count < 0) break
+            filled += count
+        }
+        if (filled == 0) return -1
+        destination.put(chunk, 0, filled)
+        currentOffset += filled
+        streamOffset += filled
+        return filled
     }
 
     @Override
