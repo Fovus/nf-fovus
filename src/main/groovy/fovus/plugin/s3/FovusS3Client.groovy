@@ -64,7 +64,7 @@ class FovusS3Client {
     static final Set<String> EXPIRED_TOKEN_CODES =
             ['ExpiredToken', 'ExpiredTokenException', 'InvalidToken', 'TokenRefreshRequired'] as Set<String>
     /** Nextflow's session scratch folders, directly under its {@code workDir} (the pipelines area). */
-    static final List<String> SESSION_SCRATCH_FOLDERS = ['tmp/', 'collect-file/']
+    static final List<String> SESSION_SCRATCH_FOLDERS = List.of('tmp/', 'collect-file/')
 
     private final S3Client reader
     private final S3Client writer
