@@ -166,9 +166,15 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         return "${jobId}:${index}"
     }
 
+    /**
+     * The command Nextflow puts in an array's own script, in the form it uses for a local work directory.
+     * Fovus never runs that script: each child's {@code run.sh} is what runs on the compute node. Nextflow's
+     * default refuses a work directory that is not on the default file system, which would stop every array
+     * task in direct mode.
+     */
     @Override
     String getArrayLaunchCommand(String taskDir) {
-        return TaskArrayExecutor.super.getArrayLaunchCommand(taskDir);
+        return "bash ${taskDir}/${TaskRun.CMD_RUN} 2>&1 > ${taskDir}/${TaskRun.CMD_LOG}".toString()
     }
 
     /** The path as the compute node sees it, under /fovus-storage */
