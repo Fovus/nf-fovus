@@ -1,0 +1,52 @@
+package fovus.plugin.storage
+
+import fovus.plugin.nio.FovusPath
+import fovus.plugin.s3.FovusS3Client
+import groovy.transform.CompileStatic
+import groovy.util.logging.Slf4j
+import nextflow.exception.AbortOperationException
+
+import java.nio.file.Path
+
+/**
+ * Direct mode: the work directory is {@code fovus:///fovus-storage/pipelines}, read and written with the
+ * AWS S3 SDK. A {@link FovusPath} prints as {@code /fovus-storage/...}, which is already the path the
+ * compute node sees.
+ */
+@Slf4j
+@CompileStatic
+class DirectWorkDirStorage implements WorkDirStorage {
+
+    private final FovusPath workDir
+    private final S3Connector connector
+
+    DirectWorkDirStorage(FovusPath workDir, S3Connector connector) {
+        this.workDir = workDir
+        this.connector = connector
+    }
+
+    @Override
+    void prepare(String pipelineId) {
+        workDir.getFileSystem().attachS3Client(connect(pipelineId))
+        log.debug "[FOVUS] Direct mode: using Fovus storage for pipeline ${pipelineId} without a mount"
+    }
+
+    @Override
+    boolean isForeignFile(Path path) {
+        return !(path instanceof FovusPath)
+    }
+
+    @Override
+    Path remotePath(Path path) {
+        return Path.of(path.toString())
+    }
+
+    private FovusS3Client connect(String pipelineId) {
+        try {
+            return connector.connect(pipelineId)
+        }
+        catch (IOException e) {
+            throw new AbortOperationException("[FOVUS] ${e.message}".toString(), e)
+        }
+    }
+}

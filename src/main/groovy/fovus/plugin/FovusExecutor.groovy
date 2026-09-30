@@ -1,7 +1,8 @@
 package fovus.plugin
 
 import fovus.plugin.pipeline.FovusPipelineClient
-import fovus.plugin.storage.FovusStorageClient
+import fovus.plugin.storage.WorkDirStorage
+import fovus.plugin.storage.WorkDirStorageFactory
 import fovus.plugin.util.FovusEnvironment
 import fovus.plugin.util.PublishDirResolver
 import groovy.transform.CompileStatic
@@ -24,12 +25,11 @@ import java.nio.file.Path
 @ServiceName('fovus')
 @CompileStatic
 class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecutor {
-    private static final String REMOTE_INPUT_MOUNT_POINT = '/fovus-storage'
     protected FovusConfig fovusConfig
 
     protected FovusPipelineClient pipelineClient;
-    protected FovusStorageClient storageClient;
-    protected Path localWorkDirMount;
+    /** Where the work directory lives: a Fovus storage mount, or Fovus storage itself (direct mode) */
+    protected WorkDirStorage workDirStorage
     protected Path remoteBinDir;
 
     /**
@@ -53,6 +53,8 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
 
         final isHostedMode = FovusEnvironment.isHostedMode()
         fovusConfig = FovusConfig.fromSession(session);
+        // Pick and validate the storage mode from workDir before anything is created
+        workDirStorage = WorkDirStorageFactory.create(session.workDir, isHostedMode, fovusConfig)
 
         if (!isHostedMode && fovusConfig.auth.isConfigured()) {
             warmUpAuth(fovusConfig)
@@ -61,11 +63,11 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         log.debug "[FOVUS] Creating fovus pipeline."
         this.pipelineClient = new FovusPipelineClient();
 
-        FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, fovusConfig, this.fovusConfig.getPipelineName(),
-                                                 session?.getCommandLine())
+        final pipelineId = FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, fovusConfig,
+                                                                    this.fovusConfig.getPipelineName(),
+                                                                    session?.getCommandLine())
 
-        storageClient = new FovusStorageClient(fovusConfig)
-        validateWorkDir()
+        workDirStorage.prepare(pipelineId)
         uploadBinDir()
 
         if (isHostedMode) {
@@ -91,13 +93,6 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         }
     }
 
-    private void validateWorkDir() {
-        // Or should we auto map to session.workDir/pipelines?
-        assert session.workDir.endsWith("pipelines"), "[FOVUS] Working directory must end with pipelines. Current work directory: ${session.workDir}"
-        storageClient.validateOrMountFovusStorage(session.workDir.parent)
-        localWorkDirMount = session.workDir.parent
-    }
-
     protected void uploadBinDir() {
         /*
          * upload local binaries
@@ -105,11 +100,8 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         if (session.binDir && !session.binDir.empty() && !session.disableRemoteBinDir) {
             def tempDir = getTempDir()
             def copyBinDir = FilesEx.copyTo(session.binDir, tempDir)
+            // No chmod: Fovus storage mounts fix file modes at mount time (0770), so the scripts are executable
             remoteBinDir = getRemotePath(copyBinDir)
-
-            // Change permission to executable in background
-            def changePermissionCmd = "chmod -R 755 ${copyBinDir}"
-            changePermissionCmd.execute()
         }
     }
 
@@ -137,14 +129,7 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
 
     @Override
     boolean isForeignFile(Path path) {
-        if (path.scheme != getStageDir().scheme) {
-            return true
-        }
-
-        final mountDir = session.workDir.parent.toAbsolutePath()
-        final isInsideMountDir = path.toAbsolutePath().startsWith(mountDir)
-
-        return !isInsideMountDir
+        return workDirStorage.isForeignFile(path)
     }
 
     /**
@@ -186,9 +171,9 @@ class FovusExecutor extends Executor implements ExtensionPoint, TaskArrayExecuto
         return TaskArrayExecutor.super.getArrayLaunchCommand(taskDir);
     }
 
+    /** The path as the compute node sees it, under /fovus-storage */
     Path getRemotePath(Path file) {
-        // Replace the juicefs mount point part with the REMOTE_INPUT_MOUNT_POINT
-        return Path.of(REMOTE_INPUT_MOUNT_POINT, file.toString().replace(localWorkDirMount.toString(), ""))
+        return workDirStorage.remotePath(file)
     }
 
 }
