@@ -234,8 +234,9 @@ executable on the compute node because its mount shows `pipelines/` files as 077
 - Checksum calculation and validation set to `WHEN_REQUIRED` (TLS already protects the transfer,
   and it keeps manual multipart uploads and S3-compatible test servers simple).
 - Bucket, region and prefix come from the first credential fetch and are fixed for the run.
-- **Prefix guard:** every key is checked against `Prefix` (`pipelines/<pid>/`) before any call.
-  Writes outside it are refused; reads outside it raise `NoSuchFileException`.
+- **Prefix guard:** every key is checked against `Prefix` (`pipelines/<pid>/`) and Nextflow's
+  session scratch folders next to it (`pipelines/tmp/`, `pipelines/collect-file/`; see §8) before
+  any call. Writes outside them are refused; reads outside them raise `NoSuchFileException`.
 - Maps S3 errors to NIO exceptions and messages as described in §10.
 - On `ExpiredToken` / `InvalidToken`: force a credential refresh and retry the request once.
 - Multipart uploads use a bounded thread pool and are aborted (`AbortMultipartUpload`) on
@@ -355,6 +356,8 @@ The plugin never enables AWS SDK request logging.
   thing keeping the plugin inside `pipelines/<pid>/`, and a leaked credentials document grants
   that bucket-wide access. A pipeline-scoped backend endpoint (§13) would remove the gap, and it
   is now the main open hardening item.
+- Direct mode also reads and writes Nextflow's session scratch folders `pipelines/tmp/` and
+  `pipelines/collect-file/` (e.g. `collectFile` without `storeDir`), exactly as mount mode does.
 
 ## 9. Lifecycle in direct mode
 

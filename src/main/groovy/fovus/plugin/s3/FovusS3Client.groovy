@@ -30,13 +30,17 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
 /**
- * S3 access to the direct-mode work directory: {@code pipelines/<pid>/} in the user's Fovus bucket.
+ * S3 access to the direct-mode work directory: {@code pipelines/<pid>/} in the user's Fovus bucket, plus
+ * Nextflow's session scratch folders next to it, {@code pipelines/tmp/} and {@code pipelines/collect-file/}.
+ * Nextflow writes those under its {@code workDir} itself (collectFile without {@code storeDir}, and the list
+ * of collected files kept for {@code -resume}); mount mode writes them to the same keys through the mount.
  *
- * Reads use the pipeline-scoped download token and writes the upload token. Every key is checked against
- * the pipeline prefix before any call; the upload token itself can write to all of {@code files/} and
- * {@code pipelines/}, so this guard is what keeps the plugin inside its own pipeline. S3 errors are
- * reported by code, HTTP status, request ID and key only -- never the S3 error body, which can echo the
- * access key ID.
+ * Reads use the download token and writes the upload token. Neither token is limited to the pipeline: both
+ * reach the whole bucket. Every key is therefore checked before any call -- it must be inside the pipeline
+ * folder or one of the scratch folders, with no {@code .} or {@code ..} segment -- and this guard is what
+ * keeps the plugin there. Writes elsewhere are refused; reads elsewhere look like missing files. S3 errors
+ * are reported by code, HTTP status, request ID and key only -- never the S3 error body, which can echo
+ * the access key ID.
  */
 @Slf4j
 @CompileStatic
@@ -50,6 +54,8 @@ class FovusS3Client {
     static final long MAX_COPY_OBJECT_SIZE = 5L * 1024 * 1024 * 1024
     static final Set<String> EXPIRED_TOKEN_CODES =
             ['ExpiredToken', 'ExpiredTokenException', 'InvalidToken', 'TokenRefreshRequired'] as Set<String>
+    /** Nextflow's session scratch folders, directly under its {@code workDir} (the pipelines area). */
+    static final List<String> SESSION_SCRATCH_FOLDERS = ['tmp/', 'collect-file/']
 
     private final S3Client reader
     private final S3Client writer
@@ -58,6 +64,8 @@ class FovusS3Client {
     final int partSize
     private final int listPageSize
     private final RefreshingStorageCredentials credentials
+    /** The pipeline folder and the session scratch folders, each ending with {@code /}. */
+    private final List<String> allowedFolders
 
     FovusS3Client(S3Client reader, S3Client writer, String bucket, String prefix, RefreshingStorageCredentials credentials,
                   int partSize = DEFAULT_PART_SIZE, int listPageSize = DEFAULT_LIST_PAGE_SIZE) {
@@ -72,6 +80,15 @@ class FovusS3Client {
         this.credentials = credentials
         this.partSize = partSize
         this.listPageSize = listPageSize
+        this.allowedFolders = allowedFolders(prefix)
+    }
+
+    /** The pipeline folder, and the scratch folders in the pipelines area it belongs to (the prefix's first segment). */
+    private static List<String> allowedFolders(String prefix) {
+        final area = prefix.substring(0, prefix.indexOf('/') + 1)
+        final List<String> folders = [prefix]
+        for (String scratch : SESSION_SCRATCH_FOLDERS) folders.add(area + scratch)
+        return folders.asImmutable()
     }
 
     /** Clients for the bucket and region named by the (already initialized) credentials. */
@@ -184,8 +201,8 @@ class FovusS3Client {
 
     /** Best effort: an upload that cannot be aborted stays invisible until the bucket's lifecycle rule removes it. */
     void abortMultipart(String key, String uploadId) {
-        if (!inPipeline(key)) {
-            log.debug "[FOVUS] Not aborting a multipart upload outside the pipeline folder: ${key}"
+        if (!inScope(key)) {
+            log.debug "[FOVUS] Not aborting a multipart upload outside the pipeline and scratch folders: ${key}"
             return
         }
         try {
@@ -460,21 +477,28 @@ class FovusS3Client {
         return dirKey == null || dirKey.endsWith('/') ? dirKey : dirKey + '/'
     }
 
-    /** Inside this pipeline, including the pipeline folder itself. */
+    /** Inside the pipeline or a scratch folder, including the folder itself written without its trailing slash. */
     private boolean readable(String key) {
-        return inPipeline(key) || (key != null && !hasDotSegment(key) && key + '/' == prefix)
+        return inScope(key) || (key != null && !hasDotSegment(key) && allowedFolders.contains(key + '/'))
     }
 
     private String writable(String key) throws AccessDeniedException {
-        if (!inPipeline(key)) {
+        if (!inScope(key)) {
             throw new AccessDeniedException(uri(key), null, "Refusing to write outside ${prefix}".toString())
         }
         return key
     }
 
-    /** Under the pipeline prefix, with no {@code .} or {@code ..} segment that would lead back out of it. */
-    private boolean inPipeline(String key) {
-        return key != null && key.startsWith(prefix) && !hasDotSegment(key)
+    /**
+     * Under the pipeline prefix or a session scratch folder, with no {@code .} or {@code ..} segment that would
+     * lead back out of it.
+     */
+    private boolean inScope(String key) {
+        if (key == null || hasDotSegment(key)) return false
+        for (String folder : allowedFolders) {
+            if (key.startsWith(folder)) return true
+        }
+        return false
     }
 
     private static boolean hasDotSegment(String key) {

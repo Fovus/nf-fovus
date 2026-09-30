@@ -23,6 +23,12 @@ class FovusS3ClientTest extends Specification {
     /** Keys that start with the pipeline prefix as text but are not inside the pipeline folder. */
     static final List<String> DOT_SEGMENT_KEYS = [PREFIX + '../p-2-user/x', PREFIX + './x', PREFIX + 'a/../../p-2-user/x',
                                                   PREFIX + 'a/..', PREFIX + '..', PREFIX + 'a/./b']
+    /** Keys in Nextflow's session scratch folders next to the pipeline folder, which mount mode also uses. */
+    static final List<String> SCRATCH_KEYS = ['pipelines/tmp/xx/yyy', 'pipelines/collect-file/abc', 'pipelines/tmp/', 'pipelines/collect-file/']
+    /** Keys that look like the scratch folders but are not inside them. */
+    static final List<String> NEAR_SCRATCH_KEYS = ['pipelines/tmpx/y', 'pipelines/collect-filex/y', 'pipelines/tmp/../p-2-user/x',
+                                                   'pipelines/collect-file/../p-2-user/x', 'pipelines/tmp/./x', 'files/tmp/x',
+                                                   'tmp/x', 'collect-file/x', 'pipelines/p-1-user/../tmp/x']
 
     S3Client s3 = Mock()
     RefreshingStorageCredentials credentials = Mock()
@@ -215,7 +221,8 @@ class FovusS3ClientTest extends Specification {
         0 * s3._
 
         where:
-        dirKey << ['pipelines/p-1-usery', 'pipelines/p-2-user/', 'pipelines', '', PREFIX + '../p-2-user/', PREFIX + '..']
+        dirKey << ['pipelines/p-1-usery', 'pipelines/p-2-user/', 'pipelines', '', PREFIX + '../p-2-user/', PREFIX + '..',
+                   'pipelines/tmpx', 'pipelines/collect-filex/', 'pipelines/tmp/../p-2-user/', 'pipelines/tmp/..']
     }
 
     @Unroll
@@ -229,7 +236,45 @@ class FovusS3ClientTest extends Specification {
         0 * s3._
 
         where:
-        key << [OTHER_PIPELINE_KEY, 'pipelines/p-1-user2/x', 'pipelines/p-1-user', '', 'files/x'] + DOT_SEGMENT_KEYS
+        key << [OTHER_PIPELINE_KEY, 'pipelines/p-1-user2/x', 'pipelines/p-1-user', '', 'files/x', 'pipelines/tmp',
+                'pipelines/collect-file'] + DOT_SEGMENT_KEYS + NEAR_SCRATCH_KEYS
+    }
+
+    @Unroll
+    def "Nextflow's session scratch key #key should be writable and readable, as it is in mount mode"() {
+        when:
+        client.putObject(key, new byte[0])
+        def found = client.head(key)
+        def stream = client.newOutputStream(key)
+        client.abortMultipart(key, 'upload-1')
+
+        then:
+        1 * s3.putObject({ PutObjectRequest r -> r.key() == key }, _ as RequestBody)
+        1 * s3.headObject({ HeadObjectRequest r -> r.key() == key }) >> HeadObjectResponse.builder().contentLength(0L).build()
+        1 * s3.abortMultipartUpload({ AbortMultipartUploadRequest r -> r.key() == key })
+        found != null
+        stream != null
+
+        where:
+        key << SCRATCH_KEYS
+    }
+
+    @Unroll
+    def "Nextflow's session scratch folder #folder should be listable"() {
+        given:
+        s3.listObjectsV2Paginator(_ as ListObjectsV2Request) >> { ListObjectsV2Request request -> new ListObjectsV2Iterable(s3, request) }
+
+        when:
+        def found = client.hasChildren(folder)
+        client.list(folder)
+
+        then:
+        1 * s3.listObjectsV2({ ListObjectsV2Request r -> r.prefix() == folder + '/' && r.maxKeys() == 1 }) >> ListObjectsV2Response.builder().keyCount(1).build()
+        1 * s3.listObjectsV2({ ListObjectsV2Request r -> r.prefix() == folder + '/' && r.delimiter() == '/' }) >> ListObjectsV2Response.builder().isTruncated(false).build()
+        found
+
+        where:
+        folder << ['pipelines/tmp', 'pipelines/collect-file']
     }
 
     @Unroll
@@ -249,7 +294,7 @@ class FovusS3ClientTest extends Specification {
         0 * s3._
 
         where:
-        key << [OTHER_PIPELINE_KEY, 'pipelines/p-1-user2/x', 'files/x', ''] + DOT_SEGMENT_KEYS
+        key << [OTHER_PIPELINE_KEY, 'pipelines/p-1-user2/x', 'files/x', ''] + DOT_SEGMENT_KEYS + NEAR_SCRATCH_KEYS
     }
 
     @Unroll
