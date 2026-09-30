@@ -27,6 +27,7 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.FileTime
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * NIO operations for the {@code pipelines/} area of Fovus storage in direct mode, on top of
@@ -39,6 +40,7 @@ import java.time.Instant
 class PipelinesStorage {
 
     private final FovusS3Client s3
+    private final AtomicBoolean deniedDeleteWarned = new AtomicBoolean()
 
     PipelinesStorage(FovusS3Client s3) {
         this.s3 = s3
@@ -136,7 +138,13 @@ class PipelinesStorage {
             else s3.delete(key + '/')
         }
         catch (AccessDeniedException e) {
-            log.warn "[FOVUS] ${e.reason ?: e.message} -- ${path} was left in place"
+            // Every delete is denied the same way (the write credentials cannot delete): say so once, not per file
+            if (deniedDeleteWarned.compareAndSet(false, true)) {
+                log.warn "[FOVUS] ${e.reason ?: e.message} -- ${path} was left in place (further files left in place are logged at debug level)"
+            }
+            else {
+                log.debug "[FOVUS] ${e.reason ?: e.message} -- ${path} was left in place"
+            }
         }
     }
 
