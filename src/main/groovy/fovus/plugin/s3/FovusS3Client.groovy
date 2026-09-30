@@ -8,6 +8,7 @@ import software.amazon.awssdk.core.checksums.RequestChecksumCalculation
 import software.amazon.awssdk.core.checksums.ResponseChecksumValidation
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.core.exception.SdkClientException
+import software.amazon.awssdk.core.exception.SdkException
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient
 import software.amazon.awssdk.regions.Region
@@ -245,19 +246,23 @@ class FovusS3Client {
         if (entry == null) throw new NoSuchFileException(uri(key))
         final directory = target.toAbsolutePath().parent
         Files.createDirectories(directory)
-        final temp = Files.createTempFile(directory, ".${target.fileName}.".toString(), '.part')
+        // Not createTempFile: that is owner-only on POSIX, and the moved file would keep the mode
+        final temp = Files.createFile(directory.resolve(".${target.fileName}.${UUID.randomUUID()}.part".toString()))
+        boolean moved = false
         try {
             if (entry.size <= partSize) {
-                getObject(key).withCloseable { InputStream input -> Files.copy(input, temp, StandardCopyOption.REPLACE_EXISTING) }
+                readingBody(key) {
+                    getObject(key).withCloseable { InputStream input -> Files.copy(input, temp, StandardCopyOption.REPLACE_EXISTING) }
+                }
             }
             else {
                 downloadRanges(key, entry.size, temp)
             }
             Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
+            moved = true
         }
-        catch (IOException e) {
-            Files.deleteIfExists(temp)
-            throw e
+        finally {
+            if (!moved) deleteQuietly(temp)
         }
     }
 
@@ -280,12 +285,37 @@ class FovusS3Client {
         }
         final out = newOutputStream(targetKey)
         try {
-            getObject(sourceKey).withCloseable { InputStream input -> input.transferTo(out) }
+            readingBody(sourceKey) {
+                getObject(sourceKey).withCloseable { InputStream input -> input.transferTo(out) }
+            }
             out.close()
         }
         finally {
             // A no-op once close() has run, whether or not it succeeded; otherwise it discards the partial upload
             out.abort()
+        }
+    }
+
+    /**
+     * Run a read of an object's bytes. The SDK reports a failure while the body streams (a dropped connection, an
+     * aborted request) as an unchecked exception; it becomes an I/O error that names only the key and the
+     * exception class, like every other S3 failure.
+     */
+    private static <T> T readingBody(String key, Closure<T> action) throws IOException {
+        try {
+            return action.call()
+        }
+        catch (SdkException e) {
+            throw new IOException("S3 read failed on ${key}: ${e.class.simpleName}".toString())
+        }
+    }
+
+    private static void deleteQuietly(Path file) {
+        try {
+            Files.deleteIfExists(file)
+        }
+        catch (IOException e) {
+            log.debug "[FOVUS] Could not delete the partial download ${file}: ${e.class.simpleName}"
         }
     }
 

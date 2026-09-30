@@ -125,6 +125,18 @@ class FovusS3ClientIT extends Specification {
         read(base + 'b.txt') == 'a'.bytes
     }
 
+    def 'copy should stream the object when it is too large for CopyObject'() {
+        given:
+        client.putObject(base + 'a.txt', 'a'.bytes)
+
+        when:
+        client.copy(base + 'a.txt', base + 'b.txt', FovusS3Client.MAX_COPY_OBJECT_SIZE + 1)
+
+        then:
+        read(base + 'b.txt') == 'a'.bytes
+        requests.count('CopyObjectRequest') == 0
+    }
+
     def 'a read channel should seek within an object'() {
         given:
         client.putObject(base + 'seek.txt', '0123456789'.bytes)
