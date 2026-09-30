@@ -9,10 +9,11 @@
 
 Today nf-fovus requires Fovus storage to be FUSE-mounted on the machine running Nextflow (the
 control node). Some users cannot mount FUSE there. This design adds a second storage mode,
-`storageMode = 'direct'`, in which the plugin reads and writes the pipeline's work directory directly
-with the AWS S3 SDK for Java, using short-lived credentials obtained from the Fovus CLI.
+**direct mode**, in which the plugin reads and writes the pipeline's work directory directly with
+the AWS S3 SDK for Java, using short-lived credentials obtained from the Fovus CLI. Users select it
+by pointing Nextflow's `workDir` at `fovus:///fovus-storage/pipelines` instead of at a mount.
 
-The existing mount mode is unchanged and stays the default.
+The existing mount mode is unchanged: a local `workDir` keeps working exactly as today.
 
 ## 2. Background
 
@@ -61,6 +62,18 @@ The existing mount mode is unchanged and stays the default.
   ([FovusUtil.groovy:73](../../src/main/groovy/fovus/plugin/FovusUtil.groovy)), so it must not
   be used to fetch credentials.
 
+### Facts from Nextflow 25.10 that shape the design
+
+- Plugins declared in the config are loaded before the `Session` is created and `workDir` is
+  parsed (`CmdRun.groovy:362-396`), so a `fovus://` `workDir` is parsed by this plugin's
+  filesystem provider.
+- `Session.init()` calls `workDir.mkdirs()` (`Session.groovy:440`) before any executor registers,
+  that is before the pipeline ID or any credentials exist.
+- `cleanup = true` is skipped, with a warning, when `workDir` is not on the local filesystem
+  (`Session.groovy:1177`).
+- `publishDir` switches `symlink` / `link` modes to `copy`, with a warning, when the source is on
+  another filesystem (`PublishDir.groovy:566-576`).
+
 ## 3. Goals and non-goals
 
 ### Goals
@@ -92,26 +105,32 @@ The existing mount mode is unchanged and stays the default.
 | D4 | Rejected: local work directory synced at fixed points. | Every output would be downloaded in full to the control node. |
 | D5 | The CLI command is hidden (`hidden=True`) and undocumented. | Not a public interface. This deters casual use only; the real limit is the credentials' server-side scope. |
 | D6 | The CLI validates the pipeline ID before issuing credentials. | Stops credentials being issued for another user's, a deleted, or a hosted pipeline. |
-| D7 | The mode is chosen explicitly with `fovus.storageMode`. | Predictable behaviour; no silent change of semantics. |
-| D8 | The mode value is `direct`, not `s3`. | Describes what users get (storage reached directly, no mount) rather than the AWS service behind it. `remote` was avoided because it already means a Fovus-hosted run (`WORKFLOW_HOST=REMOTE`); `sync` because it suggests a local mirror. |
+| D7 | The mode follows the scheme of Nextflow's `workDir`: a local path (the mount) is mount mode, `fovus:///fovus-storage/pipelines` is direct mode. There is no `fovus.storageMode` setting. | Still an explicit choice, with no automatic fallback. Matches how Nextflow treats `s3://` work directories, works with `-w`, and keeps `session.workDir` equal to where task files actually live. Suggested in review. |
+| D8 | The mode is called "direct" in docs and messages, not "S3". | Describes what users get (storage reached directly, no mount) rather than the AWS service behind it. "Remote" was avoided because it already means a Fovus-hosted run (`WORKFLOW_HOST=REMOTE`); "sync" because it suggests a local mirror. |
 
 ## 5. User-facing configuration
 
 ```groovy
+// mount mode (unchanged)
+workDir = '/home/me/fovus-mount/pipelines'
+
+// direct mode (or on the command line: nextflow run … -w fovus:///fovus-storage/pipelines)
+workDir = 'fovus:///fovus-storage/pipelines'
+
 fovus {
     pipelineName = 'my-pipeline'
-    storageMode  = 'direct'   // 'mount' (default) or 'direct'
 }
 ```
 
-- `storageMode` only applies when the pipeline is launched on the user's machine. On a
-  Fovus-hosted run (`WORKFLOW_HOST=REMOTE`) it is ignored with a one-time warning and the
-  mount is used.
-- In `direct` mode the local `workDir` setting is ignored for Fovus tasks. Task folders live under
-  `fovus:///fovus-storage/pipelines/<pid>/fovus-work/`, the same S3 prefix mount mode uses.
+- A `fovus://` `workDir` must be exactly `fovus:///fovus-storage/pipelines`. Anything else, such as
+  `fovus:///fovus-storage/files/…` or `fovus:///fovus-storage/pipelines/x`, fails at start-up.
+- Task folders live under `fovus:///fovus-storage/pipelines/<pid>/fovus-work/`, the same S3 prefix
+  mount mode uses.
+- Direct mode is only for pipelines launched on the user's machine. A `fovus://` `workDir` on a
+  Fovus-hosted run (`WORKFLOW_HOST=REMOTE`) fails at start-up with a clear message.
 - `fovus.auth` works the same in both modes.
-- The plugin README documents `storageMode` and the minimum Fovus CLI version. It does not
-  mention the CLI credentials command.
+- The plugin README documents the `fovus://` `workDir` and the minimum Fovus CLI version. It does
+  not mention the CLI credentials command.
 
 ## 6. Architecture
 
@@ -119,11 +138,10 @@ fovus {
 
 | Component | Repo | New / changed | Responsibility |
 |---|---|---|---|
-| `FovusConfig.storageMode` | nf-fovus | changed | Parse and validate `mount` / `direct`; hosted runs force `mount`. |
-| `WorkDirStorage` (interface) | nf-fovus | new | Everything the executor and task handler need to know about where the work directory lives. |
+| `WorkDirStorage` (interface) | nf-fovus | new | Everything the executor and task handler need to know about where the work directory lives. A factory picks the implementation from `session.workDir`'s scheme and validates it. |
 | `MountedWorkDirStorage` | nf-fovus | new (moved code) | Today's mount behaviour, moved without change. |
-| `DirectWorkDirStorage` | nf-fovus | new | Direct mode: credentials, S3 client, `pipelines` filesystem, path rules. |
-| `FovusFileSystemProvider`, `FovusPath`, `FovusFileSystem` | nf-fovus | changed | Add the `pipelines` storage area with full read/write via `FovusS3Client`. `files` and `jobs` stay read-only through the CLI. |
+| `DirectWorkDirStorage` | nf-fovus | new | Direct mode: credentials, S3 client, attaching the client to the `pipelines` filesystem, path rules. |
+| `FovusFileSystemProvider`, `FovusPath`, `FovusFileSystem` | nf-fovus | changed | Add the `pipelines` storage area with full read/write via `FovusS3Client`; the filesystem exists before credentials do and gets its client later. `files` and `jobs` stay read-only through the CLI. |
 | `FovusS3Client` | nf-fovus | new | Two AWS SDK v2 `S3Client`s (read, write), prefix guard, error mapping, multipart. |
 | `FovusStorageCredentialsSource` | nf-fovus | new | Runs the CLI command with a dedicated, non-logging runner and parses the JSON. |
 | `RefreshingStorageCredentials` | nf-fovus | new | Caches one fetch; exposes read and write `AwsCredentialsProvider`s; refreshes before expiry. |
@@ -132,13 +150,14 @@ fovus {
 
 ### 6.2 `WorkDirStorage`
 
-The executor and handler currently assume a mount in four places. They move behind one
+The executor and handler currently assume a mount in three places: preparing the work directory,
+deciding which files are foreign, and rewriting paths for the compute node. They move behind one
 interface:
 
 ```groovy
 interface WorkDirStorage {
-    void prepare(Session session, String pipelineId)   // mount, or fetch credentials + register filesystem
-    Path workDir(String pipelineId)
+    static WorkDirStorage forSession(Session session)  // picks and validates the mode from session.workDir
+    void prepare(Session session, String pipelineId)   // mount, or fetch credentials + attach the S3 client
     boolean isForeignFile(Path path)
     Path remotePath(Path path)                           // the path as the compute node sees it
 }
@@ -146,12 +165,18 @@ interface WorkDirStorage {
 
 | | `MountedWorkDirStorage` | `DirectWorkDirStorage` |
 |---|---|---|
-| `prepare` | `fovus storage mount … --no-auto-remount`; `workDir` must end with `pipelines` | first credential fetch (fails fast); build `FovusS3Client`; register the `pipelines` filesystem |
-| `workDir` | `<mount>/pipelines/<pid>/fovus-work` | `fovus:///fovus-storage/pipelines/<pid>/fovus-work` |
+| Chosen when `session.workDir` is | a local path | a `FovusPath` |
+| `workDir` check | must end with `pipelines` (as today) | must be exactly `/fovus-storage/pipelines`; not allowed on a Fovus-hosted run |
+| `prepare` | `fovus storage mount … --no-auto-remount` | first credential fetch (fails fast); build `FovusS3Client`; attach it to the `pipelines` filesystem |
 | `isForeignFile` | outside the mount folder, or a different scheme | not a `FovusPath` |
 | `remotePath` | swap the mount prefix for `/fovus-storage` | `Path.of(path.toString())`, which is already `/fovus-storage/…` |
 
-`FovusExecutor.getWorkDir()`, `isForeignFile()` and `getRemotePath()` delegate to it.
+Any other `workDir` scheme (for example `s3://`) fails at start-up, as it effectively does today.
+
+`FovusExecutor.isForeignFile()` and `getRemotePath()` delegate to it. `FovusExecutor.getWorkDir()`
+does not change: `session.workDir.resolve(<pid>).resolve('fovus-work')` gives
+`<mount>/pipelines/<pid>/fovus-work` in mount mode and
+`fovus:///fovus-storage/pipelines/<pid>/fovus-work` in direct mode.
 
 **`chmod` calls are removed in both modes.** mountpoint-s3 does not support changing
 permissions ("Modifying file metadata (`chmod`, `chown`, `chgrp`) is not supported"), and the CLI
@@ -166,9 +191,13 @@ executable on the compute node because its mount shows `pipelines/` files as 077
 - `FovusPath` accepts a third storage area, `pipelines`, alongside `files` and `jobs`. Its
   `toString()` already yields `/fovus-storage/<area>/<key>`, the compute-node path.
 - The provider dispatches on the storage area:
-  - `pipelines`: read/write through `FovusS3Client`. The filesystem is registered by
-    `DirectWorkDirStorage.prepare()`; using a `pipelines` path before that, or in mount mode,
-    raises a clear error.
+  - `pipelines`: read/write through `FovusS3Client`.
+    - The filesystem is created when Nextflow parses `workDir`, before the pipeline ID or any
+      credentials exist, so it starts without an S3 client.
+    - The area root (`/fovus-storage/pipelines`, the `workDir` itself) needs no S3 call:
+      `mkdirs()` succeeds and `exists()` is true. This is what `Session.init()` does.
+    - `DirectWorkDirStorage.prepare()` attaches the S3 client. Any other read or write on a
+      `pipelines` path before that, or in mount mode, raises a clear error.
   - `files`, `jobs`: unchanged, read-only through the CLI, in both modes.
 - Operations implemented for `pipelines`:
 
@@ -176,7 +205,7 @@ executable on the compute node because its mount shows `pipelines/` files as 077
   |---|---|
   | `newByteChannel` / `newInputStream` (read) | `GetObject`, streamed |
   | `newByteChannel` / `newOutputStream` (write, create, truncate) | `PutObject` on close below one part; streamed multipart above, 16 MiB parts, bounded memory, no local spooling |
-  | `createDirectory` | zero-byte `key/` marker object |
+  | `createDirectory` | zero-byte `key/` marker object; no-op for the area root |
   | `newDirectoryStream` | `ListObjectsV2` with delimiter `/`, paginated; each entry carries size and last-modified |
   | `readAttributes` | cached listing metadata, else `HeadObject`, else prefix listing (implicit folder) |
   | `exists` / `checkAccess` | as `readAttributes` |
@@ -281,7 +310,7 @@ the plugin calling the Fovus API itself (duplicates CLI sign-in and needs its to
 - stdout is never logged or put in an exception, on success or failure. On failure only stderr
   is used, passed through `config.redactSecret`.
 - Exit 3 → "Fovus CLI is not signed in; run `fovus auth login` or configure `fovus.auth`".
-  "No such command" → "`storageMode = 'direct'` requires Fovus CLI ≥ <MIN_CLI_VERSION>".
+  "No such command" → "Direct mode (`fovus://` workDir) requires Fovus CLI ≥ <MIN_CLI_VERSION>".
 - Three attempts with a 2 s backoff, like other CLI calls.
 - Credential holder classes have no `@ToString` / `@Canonical`; `toString()` prints only the
   expiry.
@@ -313,11 +342,17 @@ The plugin never enables AWS SDK request logging.
 
 ### Start-up (`FovusExecutor.register()`)
 
-1. Warm up `fovus.auth` and get or create the pipeline, as today.
-2. `DirectWorkDirStorage.prepare()`: first credential fetch, build `FovusS3Client`, register the
-   `pipelines` filesystem. No mount, no `workDir` check.
-3. Work directory: `fovus:///fovus-storage/pipelines/<pid>/fovus-work`.
-4. `bin/` is uploaded to `…/fovus-work/tmp/<rand>/bin`; `remoteBinDir` is
+1. Before any executor exists, Nextflow parses `workDir = fovus:///fovus-storage/pipelines`, which
+   creates the `pipelines` filesystem without an S3 client, and calls `mkdirs()` on it, which
+   succeeds without an S3 call.
+2. `FovusExecutor.register()`: `WorkDirStorage.forSession()` sees a `FovusPath` and checks it is
+   exactly `/fovus-storage/pipelines` and that the run is not Fovus-hosted.
+3. Warm up `fovus.auth` and get or create the pipeline, as today.
+4. `DirectWorkDirStorage.prepare()`: first credential fetch, build `FovusS3Client`, attach it to
+   the `pipelines` filesystem. No mount.
+5. Work directory: `fovus:///fovus-storage/pipelines/<pid>/fovus-work`, from the unchanged
+   `getWorkDir()`.
+6. `bin/` is uploaded to `…/fovus-work/tmp/<rand>/bin`; `remoteBinDir` is
    `/fovus-storage/pipelines/<pid>/fovus-work/tmp/<rand>/bin`.
 
 ### Preparing each task
@@ -369,8 +404,8 @@ strongly consistent, so reads after that point see the final objects.
 ### `-resume`
 
 - The cache database (`.nextflow/cache/`) stays local; entries hold
-  `fovus://fovus-storage/pipelines/<pid>/…` and parse back to `FovusPath`s after the executor
-  registers the filesystem.
+  `fovus://fovus-storage/pipelines/<pid>/…` and parse back to `FovusPath`s. They are only read
+  when a task is about to run, which is after the executor has attached the S3 client.
 - Cached tasks are checked with `exists()`, `.exitcode` and outputs.
 - Pipeline ID changed: reads outside the current prefix are "not found", so those tasks re-run.
 - Switching between mount and direct mode: old entries are local mount paths, so tasks re-run.
@@ -378,8 +413,9 @@ strongly consistent, so reads after that point see the final objects.
 ### End of run
 
 - Pipeline status updates unchanged.
-- `cleanup = true`: `DeleteObject` on task folders. If the upload token cannot delete (spike),
-  log a warning and leave the objects; do not fail the run.
+- `cleanup = true`: Nextflow skips it for non-local work directories and logs a warning
+  (`Session.groovy:1177`), so nothing is deleted. This matches how Nextflow treats `s3://` work
+  directories.
 
 ## 10. Error handling
 
@@ -390,9 +426,10 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 
 | Failure | Message |
 |---|---|
-| `storageMode` not `mount` or `direct` | lists the valid values |
-| `storageMode = 'direct'` on a Fovus-hosted run | not an error: one warning, mount used |
-| CLI lacks `storage credentials` | "`storageMode = 'direct'` requires Fovus CLI ≥ <MIN_CLI_VERSION>" |
+| `fovus://` `workDir` other than `fovus:///fovus-storage/pipelines` | "In direct mode, workDir must be fovus:///fovus-storage/pipelines" |
+| `workDir` with any other scheme (for example `s3://`) | "The Fovus executor needs workDir to be a Fovus storage mount (…/pipelines) or fovus:///fovus-storage/pipelines" |
+| `fovus://` `workDir` on a Fovus-hosted run | "Direct mode is only for pipelines launched on your own machine; Fovus-hosted runs use the mount" |
+| CLI lacks `storage credentials` | "Direct mode (`fovus://` workDir) requires Fovus CLI ≥ <MIN_CLI_VERSION>" |
 | CLI exit 3 | "Run `fovus auth login` or configure `fovus.auth`" |
 | CLI exit 1 | CLI stderr, redacted |
 | Malformed JSON, other `Version`, wrong `Prefix`, bucket mismatch | "Unexpected response from Fovus CLI (expected contract v1)"; stdout never included |
@@ -413,10 +450,10 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 | 5xx, `SlowDown`, timeouts | SDK standard retries, up to 10 attempts |
 | `NoSuchKey` / 404 | `NoSuchFileException` |
 | `AccessDenied` (not expiry) | no retry; "Fovus storage credentials don't allow `<op>` on `<key>` (read/write token)" |
-| `AccessDenied` on delete | warning only |
+| `AccessDenied` on delete (only `publishDir` with `mode: 'move'` deletes) | warning only; the file is published and the source is left in place |
 | Write outside `pipelines/<pid>/` | refused before calling S3 |
 | Read outside `pipelines/<pid>/` | `NoSuchFileException` |
-| `pipelines` path before executor start, or in mount mode | "pipelines paths are only available with `storageMode = 'direct'` once the Fovus executor has started" |
+| Read or write on a `pipelines` path before the S3 client is attached, or in mount mode | "Fovus storage pipelines/ paths can only be read or written in direct mode, after the Fovus executor has started" |
 | Unsupported operation | `UnsupportedOperationException` naming it |
 
 ### Where a failure lands
@@ -440,7 +477,11 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 
 ### nf-fovus unit tests (Spock, `./gradlew check`, no Docker)
 
-- `FovusConfig.storageMode`: default, invalid values, hosted override.
+- Mode selection (`WorkDirStorage.forSession`): a local `workDir` gives mount mode;
+  `fovus:///fovus-storage/pipelines` gives direct mode; any other `fovus://` `workDir` is rejected;
+  a `fovus://` `workDir` on a Fovus-hosted run is rejected.
+- `pipelines` filesystem before the S3 client is attached: `mkdirs()` and `exists()` on the area
+  root succeed with no S3 call; any other read or write raises the clear error.
 - `MountedWorkDirStorage`: existing tests keep passing; new tests pin today's path rewriting and
   foreign-file rules. `DirectWorkDirStorage`: work directory, foreign-file rule, compute path.
   No `chmod` command is started in either mode.
@@ -488,7 +529,8 @@ Separate Gradle task so `check` needs no Docker. CI (`ubuntu-latest`) has Docker
 
 ### End-to-end acceptance (manual, beta account)
 
-Docker container started without `/dev/fuse` or `SYS_ADMIN`; Fovus CLI signed in with a PAT.
+Docker container started without `/dev/fuse` or `SYS_ADMIN`; Fovus CLI signed in with a PAT;
+`workDir = 'fovus:///fovus-storage/pipelines'`.
 
 1. Small pipeline with local inputs (one over 100 MiB), an input from
    `fovus:///fovus-storage/files/…`, glob and `env` outputs, an array task, a failing task with
@@ -503,7 +545,9 @@ Docker container started without `/dev/fuse` or `SYS_ADMIN`; Fovus CLI signed in
 
 Run against a beta account first; record answers here before planning.
 
-1. Can the upload token delete objects (`s3:DeleteObject` on `pipelines/<pid>/*`)?
+1. Can the upload token delete objects (`s3:DeleteObject` on `pipelines/<pid>/*`)? Only
+   `publishDir` with `mode: 'move'` needs it, since Nextflow skips `cleanup` for remote work
+   directories.
 2. Can the upload token abort a multipart upload? Does the bucket have a lifecycle rule for
    incomplete multipart uploads?
 3. Does the `get_pipeline` response include `workflowHost`?
@@ -526,8 +570,9 @@ Also confirm while there: the download token (`PIPELINE_STORAGE`) allows `ListOb
 
 ## 14. Compatibility and rollout
 
-- Default `storageMode = 'mount'`: existing pipelines are unaffected.
-- `storageMode = 'direct'` needs the Fovus CLI release that adds `storage credentials`. That
+- Existing pipelines use a local `workDir` and are unaffected. Direct mode is opt-in by setting a
+  `fovus://` `workDir`.
+- Direct mode needs the Fovus CLI release that adds `storage credentials`. That
   version number is fixed when the CLI is released and replaces `<MIN_CLI_VERSION>` in the plugin's
   message and README; the plugin reports it if the command is missing.
 - New nf-fovus dependencies: `software.amazon.awssdk:s3` and
