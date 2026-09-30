@@ -4817,7 +4817,15 @@ Needs the CLI branch from the CLI plan and a beta Fovus account. Nothing here is
 
 **Interfaces:** consumes everything above.
 
-- [ ] **Step 1: Build and install the plugin on the host**
+- [ ] **Step 1: Run the MinIO integration tests**
+
+```bash
+cd /Users/jashminpatel/Desktop/Code/Nextflow-Plugin/nf-fovus && FOVUS_MINIO_IMAGE=<a published MinIO image> ./gradlew integrationTest
+```
+
+Expected: `BUILD SUCCESSFUL`, with the `@Tag('integration')` specs run (not skipped).
+
+- [ ] **Step 2: Build and install the plugin on the host**
 
 ```bash
 cd /Users/jashminpatel/Desktop/Code/Nextflow-Plugin/nf-fovus && ./gradlew assemble install
@@ -4825,13 +4833,14 @@ cd /Users/jashminpatel/Desktop/Code/Nextflow-Plugin/nf-fovus && ./gradlew assemb
 
 Expected: `BUILD SUCCESSFUL`; the plugin is under `~/.nextflow/plugins/nf-fovus-<version>`.
 
-- [ ] **Step 2: Write the test pipeline**
+- [ ] **Step 3: Write the test pipeline**
 
 `/tmp/direct-mode-e2e/main.nf`:
 
 ```groovy
 params.big = 'big.bin'
 params.samplesheet = null
+params.remote = 'https://raw.githubusercontent.com/nf-core/test-datasets/modules/data/genomics/sarscov2/genome/genome.fasta'
 
 process HELLO {
     publishDir 'results', mode: 'copy'
@@ -4867,6 +4876,31 @@ process FLAKY {
     """
 }
 
+process REMOTE {
+    input:
+    path remote
+
+    output:
+    stdout
+
+    script:
+    "wc -c < ${remote} | tr -d ' '"
+}
+
+process MOVED {
+    publishDir 'moved', mode: 'move'
+
+    output:
+    path 'folder'
+
+    script:
+    """
+    mkdir -p folder/sub
+    echo one > folder/a.txt
+    echo two > folder/sub/b.txt
+    """
+}
+
 process ARRAYED {
     array 3
 
@@ -4886,13 +4920,15 @@ workflow {
     Channel.of('x', 'y').collectFile(name: 'stored.txt', newLine: true, storeDir: 'collected').view { it.text }
     HELLO(file(params.big), file(params.samplesheet))
     FLAKY().view()
+    REMOTE(file(params.remote)).view()
+    MOVED()
     ARRAYED(Channel.of('a', 'b', 'c')).view()
 }
 ```
 
 Create the large input: `dd if=/dev/urandom of=/tmp/direct-mode-e2e/big.bin bs=1M count=120`. Upload any small CSV to Fovus storage and note its path, e.g. `/fovus-storage/files/e2e/samplesheet.csv`.
 
-- [ ] **Step 3: Start a container that cannot mount FUSE**
+- [ ] **Step 4: Start a container that cannot mount FUSE**
 
 ```bash
 docker run --rm -it -v /tmp/direct-mode-e2e:/e2e -v "$HOME/.nextflow/plugins:/root/.nextflow/plugins" -v /Users/jashminpatel/Desktop/Code/CLI/fovus-cli-python:/cli -w /e2e eclipse-temurin:21 bash
@@ -4902,21 +4938,21 @@ Inside: `apt-get update && apt-get install -y python3-pip curl && pip install /c
 
 Check FUSE really is unavailable: `fovus storage mount` must fail.
 
-- [ ] **Step 4: Run and check**
+- [ ] **Step 5: Run and check**
 
 ```bash
 ./nextflow run main.nf -plugins nf-fovus -w fovus:///fovus-storage/pipelines --samplesheet fovus:///fovus-storage/files/e2e/samplesheet.csv
 ```
 
-Expected: the run completes; `results/out/size.txt` contains `125829120`; `results/out/header.txt` is the CSV's first line; `FLAKY` prints `recovered` after one retry; `ARRAYED` prints three paths; both `collectFile`s print `x` and `y` (the one without `storeDir` from `fovus:///fovus-storage/pipelines/tmp/…`, the other from the local `collected/stored.txt`).
+Expected: the run completes; `results/out/size.txt` contains `125829120`; `results/out/header.txt` is the CSV's first line; `FLAKY` prints `recovered` after one retry; `ARRAYED` runs as one array job and prints three paths; `REMOTE` prints the size of the `https://` file (compare with `curl -s <url> | wc -c`); `moved/folder/a.txt` and `moved/folder/sub/b.txt` exist locally, `.nextflow.log` has exactly one WARN saying files were left in place, and the folder is still under the task's folder in Fovus storage; both `collectFile`s print `x` and `y` (the one without `storeDir` from `fovus:///fovus-storage/pipelines/tmp/…`, the other from the local `collected/stored.txt`).
 
-- [ ] **Step 5: Resume, interrupt, and refresh**
+- [ ] **Step 6: Resume, interrupt, and refresh**
 
 1. Re-run with `-resume`: every task reports `cached`.
 2. Add `process.cache = false` temporarily, start the run, press Ctrl-C while `HELLO` is staging, then run again with `-resume` (and the cache line removed): the run completes and `results/` is correct.
 3. Add a process with `script: "sleep 4500"` and run it once: it completes, and `grep -c 'Fetched Fovus storage credentials' .nextflow.log` is at least 2 (with `-trace fovus.plugin.s3` on the command line).
 
-- [ ] **Step 6: Check nothing leaked**
+- [ ] **Step 7: Check nothing leaked**
 
 ```bash
 grep -E 'ASIA[A-Z0-9]{16}' .nextflow.log ~/.fovus/logs/* ; echo "exit=$?"
@@ -4925,10 +4961,10 @@ grep -iE 'SessionToken|SecretAccessKey' .nextflow.log ~/.fovus/logs/* ; echo "ex
 
 Expected: both print only `exit=1` (no matches).
 
-- [ ] **Step 7: Mount mode still works**
+- [ ] **Step 8: Mount mode still works**
 
 On a machine that can mount FUSE, run the same pipeline with `-w <mount>/pipelines` (the current way). Expected: it completes as before.
 
-- [ ] **Step 8: Record the result**
+- [ ] **Step 9: Record the result**
 
-Note the date, Nextflow version, CLI version and outcome of Steps 4–7 in the pull request description.
+Note the date, Nextflow version, CLI version and outcome of Steps 5–8 in the pull request description.
