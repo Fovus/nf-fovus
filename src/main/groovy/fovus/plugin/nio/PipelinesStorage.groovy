@@ -14,6 +14,7 @@ import java.nio.file.CopyOption
 import java.nio.file.DirectoryStream
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.FileVisitOption
+import java.nio.file.FileSystems
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
@@ -160,15 +161,17 @@ class PipelinesStorage {
         delete(source)
     }
 
+    /** Upload a file or folder, from the local disk or from another file system such as https:// or s3://. */
     void upload(Path local, FovusPath target, CopyOption... options) throws IOException {
         if (!Arrays.asList(options).contains(StandardCopyOption.REPLACE_EXISTING) && exists(target)) {
             throw new FileAlreadyExistsException(target.toString())
         }
         if (!Files.isDirectory(local)) {
-            s3.uploadFile(local, keyOf(target))
+            uploadFile(local, keyOf(target))
             return
         }
         final FovusS3Client client = s3
+        final PipelinesStorage storage = this
         // Follow links, like Files.isDirectory above: a symlinked folder, or a symlinked sub-folder, is uploaded as a folder
         Files.walkFileTree(local, EnumSet.of(FileVisitOption.FOLLOW_LINKS), Integer.MAX_VALUE, new SimpleFileVisitor<Path>() {
             @Override
@@ -179,10 +182,47 @@ class PipelinesStorage {
 
             @Override
             FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                client.uploadFile(file, keyOf(within(target, local, file)))
+                storage.uploadFile(file, keyOf(within(target, local, file)))
                 return FileVisitResult.CONTINUE
             }
         })
+    }
+
+    /**
+     * A local file is uploaded in parallel parts. A file on another file system is streamed, and published only
+     * once it was read in full: any failure while reading it, or fewer bytes than its known size, discards the
+     * upload, so FilePorter never finds a truncated input to reuse.
+     */
+    private void uploadFile(Path source, String key) throws IOException {
+        if (source.getFileSystem() == FileSystems.getDefault()) {
+            s3.uploadFile(source, key)
+            return
+        }
+        final long expected = knownSize(source)
+        final out = s3.newOutputStream(key)
+        boolean complete = false
+        try {
+            final long copied = Files.newInputStream(source).withCloseable { InputStream input -> input.transferTo(out) }
+            if (expected > 0 && copied != expected) {
+                throw new IOException("Read ${copied} of ${expected} bytes for ${FovusS3Client.uri(key)}: the source ended early, so nothing was uploaded".toString())
+            }
+            out.close()
+            complete = true
+        }
+        finally {
+            // A no-op once close() has run, whether or not it succeeded; otherwise it discards the partial upload
+            if (!complete) out.abort()
+        }
+    }
+
+    /** The size a file system reports for a file, or -1 when it has none (e.g. an http response without a length). */
+    private static long knownSize(Path source) {
+        try {
+            return Files.size(source)
+        }
+        catch (IOException | UnsupportedOperationException ignored) {
+            return -1L
+        }
     }
 
     void download(FovusPath source, Path local, CopyOption... options) throws IOException {

@@ -383,7 +383,8 @@ The plugin never enables AWS SDK request logging.
 2. Foreign inputs (not `fovus://`) are staged by `FilePorter` into
    `…/fovus-work/stage-<sessionId>/…`:
    - local files: provider `upload()` (`PutObject` or parallel multipart);
-   - http or the user's own `s3://`: streamed through `newOutputStream()`;
+   - http or the user's own `s3://`: provider `upload()` streams it, and publishes the object only
+     once the source was read in full (and matches its size, when known); any failure discards it;
    - already-staged files with the same size are skipped (Nextflow's `FilePorter` compares sizes).
 3. Inputs already in Fovus storage (`fovus:///fovus-storage/files|jobs|pipelines/…`) are not
    foreign; they are linked on the compute node with `fovus_link /fovus-storage/…`. Nothing is

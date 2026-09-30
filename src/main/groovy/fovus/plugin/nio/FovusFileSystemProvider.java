@@ -145,8 +145,16 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
     }
 
 
+    /**
+     * The pipelines area takes a source from any file system: {@link PipelinesStorage#upload} streams a remote one
+     * (https://, s3://) and publishes it only once it was read in full. Nextflow's own fallback copies through
+     * {@code newOutputStream}, which would publish whatever was read before a failure.
+     */
     @Override
     public boolean canUpload(Path source, Path target) {
+        if (isPipelines(target)) {
+            return true;
+        }
         return FileSystems.getDefault().equals(source.getFileSystem()) && target instanceof FovusPath;
     }
 
