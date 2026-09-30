@@ -31,6 +31,21 @@ class DirectWorkDirStorageTest extends Specification {
         Files.size(fs.getPath('/fovus-storage/pipelines/p-1-user/x')) == 3
     }
 
+    def 'a second prepare should keep the attached client and not fetch credentials again'() {
+        given:
+        def fs = PipelinesTestSupport.fileSystem()
+        def connector = Mock(S3Connector)
+        def root = (FovusPath) fs.getPath('/fovus-storage/pipelines')
+
+        when: 'the trace observer prepares at flow creation, then the executor when it registers'
+        new DirectWorkDirStorage(root, connector).prepare('p-1-user')
+        new DirectWorkDirStorage(root, connector).prepare('p-1-user')
+
+        then:
+        1 * connector.connect('p-1-user') >> Stub(FovusS3Client)
+        fs.hasS3Client()
+    }
+
     def 'a credentials failure should stop the run with its message'() {
         given:
         def connector = Stub(S3Connector) {

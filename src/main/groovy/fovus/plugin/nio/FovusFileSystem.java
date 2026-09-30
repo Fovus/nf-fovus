@@ -130,6 +130,11 @@ public class FovusFileSystem extends FileSystem {
         this.pipelinesStorage = new PipelinesStorage(client);
     }
 
+    /** Direct mode: whether an S3 client is already attached (by the trace observer, or the executor). */
+    public boolean hasS3Client() {
+        return pipelinesStorage != null;
+    }
+
     PipelinesStorage pipelinesStorage() {
         final PipelinesStorage storage = pipelinesStorage;
         if (storage == null) {

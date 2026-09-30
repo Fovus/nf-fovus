@@ -4881,6 +4881,9 @@ process ARRAYED {
 }
 
 workflow {
+    // Before any process: collectFile writes under workDir (pipelines/tmp/) before the executor exists
+    Channel.of('x', 'y').collectFile(name: 'collected.txt', newLine: true).view { it.text }
+    Channel.of('x', 'y').collectFile(name: 'stored.txt', newLine: true, storeDir: 'collected').view { it.text }
     HELLO(file(params.big), file(params.samplesheet))
     FLAKY().view()
     ARRAYED(Channel.of('a', 'b', 'c')).view()
@@ -4905,7 +4908,7 @@ Check FUSE really is unavailable: `fovus storage mount` must fail.
 ./nextflow run main.nf -plugins nf-fovus -w fovus:///fovus-storage/pipelines --samplesheet fovus:///fovus-storage/files/e2e/samplesheet.csv
 ```
 
-Expected: the run completes; `results/out/size.txt` contains `125829120`; `results/out/header.txt` is the CSV's first line; `FLAKY` prints `recovered` after one retry; `ARRAYED` prints three paths.
+Expected: the run completes; `results/out/size.txt` contains `125829120`; `results/out/header.txt` is the CSV's first line; `FLAKY` prints `recovered` after one retry; `ARRAYED` prints three paths; both `collectFile`s print `x` and `y` (the one without `storeDir` from `fovus:///fovus-storage/pipelines/tmp/…`, the other from the local `collected/stored.txt`).
 
 - [ ] **Step 5: Resume, interrupt, and refresh**
 

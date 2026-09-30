@@ -12,10 +12,16 @@ import fovus.plugin.job.FovusJobConfigBuilder
 import fovus.plugin.pipeline.FovusPipelineClient
 import fovus.plugin.pipeline.FovusPipelineStatus
 import fovus.plugin.pipeline.ResourceConfiguration
+import fovus.plugin.nio.FovusPath
+import fovus.plugin.storage.WorkDirStorage
+import fovus.plugin.storage.WorkDirStorageFactory
+import fovus.plugin.util.FovusEnvironment
 import nextflow.trace.TraceObserverV2
 import nextflow.trace.event.TaskEvent
 
+import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.function.Function
 
 @Slf4j
 @CompileStatic
@@ -48,8 +54,12 @@ class FovusTraceObserver implements TraceObserverV2 {
     @Override
     void onFlowCreate(Session session) {
         log.info "Pipeline is starting! 🚀"
-        FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, fovusConfig, fovusConfig.getPipelineName(),
-                                                 session?.getCommandLine())
+        final pipelineId = FovusPipelineCache.getOrCreatePipelineId(this.pipelineClient, fovusConfig,
+                                                                    fovusConfig.getPipelineName(), session?.getCommandLine())
+
+        final isHostedMode = FovusEnvironment.isHostedMode()
+        prepareDirectModeStorage(session?.getWorkDir(), isHostedMode, pipelineId,
+                { Path workDir -> WorkDirStorageFactory.create(workDir, isHostedMode, fovusConfig) } as Function<Path, WorkDirStorage>)
 
 
         try {
@@ -60,6 +70,19 @@ class FovusTraceObserver implements TraceObserverV2 {
         } catch (Exception e) {
             log.trace "[FOVUS] Cannot configure pipeline resources: ${e.message}"
         }
+    }
+
+    /**
+     * Direct mode: connect the {@code fovus://} work directory now, before the script runs, so that an operator
+     * evaluated before the first process (e.g. {@code collectFile}, which writes under {@code workDir}) can use
+     * it. The executor prepares the same storage again when it registers, which is then a no-op. Mount mode and
+     * Fovus-hosted runs are left to the executor. A work directory the factory rejects fails here.
+     */
+    @PackageScope
+    static void prepareDirectModeStorage(Path workDir, boolean isHostedMode, String pipelineId,
+                                         Function<Path, WorkDirStorage> storageFactory) {
+        if (isHostedMode || !(workDir instanceof FovusPath)) return
+        storageFactory.apply(workDir).prepare(pipelineId)
     }
 
     /**

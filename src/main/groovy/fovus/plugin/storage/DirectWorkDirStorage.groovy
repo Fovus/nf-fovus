@@ -25,9 +25,19 @@ class DirectWorkDirStorage implements WorkDirStorage {
         this.connector = connector
     }
 
+    /**
+     * Fetch credentials and attach the S3 client. The trace observer does this when the flow is created, so
+     * operators evaluated before the first process can use the work directory; the executor's own call when it
+     * registers then finds the client attached and does nothing.
+     */
     @Override
     void prepare(String pipelineId) {
-        workDir.getFileSystem().attachS3Client(connect(pipelineId))
+        final fileSystem = workDir.getFileSystem()
+        if (fileSystem.hasS3Client()) {
+            log.debug "[FOVUS] Direct mode: Fovus storage is already connected for pipeline ${pipelineId}"
+            return
+        }
+        fileSystem.attachS3Client(connect(pipelineId))
         log.debug "[FOVUS] Direct mode: using Fovus storage for pipeline ${pipelineId} without a mount"
     }
 
