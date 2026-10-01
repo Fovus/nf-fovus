@@ -1,5 +1,6 @@
 package fovus.plugin.s3
 
+import io.netty.channel.nio.NioEventLoopGroup
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
 import software.amazon.awssdk.core.async.AsyncRequestBody
@@ -9,6 +10,8 @@ import software.amazon.awssdk.http.nio.netty.SdkEventLoopGroup
 import software.amazon.awssdk.services.s3.model.GetObjectResponse
 import software.amazon.awssdk.core.exception.SdkClientException
 import software.amazon.awssdk.services.s3.S3AsyncClient
+import software.amazon.awssdk.services.s3.S3AsyncClientBuilder
+import software.amazon.awssdk.services.s3.multipart.MultipartConfiguration
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import software.amazon.awssdk.services.s3.model.PutObjectResponse
 import software.amazon.awssdk.services.s3.model.S3Exception
@@ -26,6 +29,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
+import java.util.concurrent.TimeUnit
 
 /** {@link TransferManagerTransfers} with the SDK mocked: requests, waiting, and how failures come out. */
 class TransferManagerTransfersTest extends Specification {
@@ -375,6 +379,64 @@ class TransferManagerTransfersTest extends Specification {
         1 * writer.close()
         1 * readerClient.close()
         1 * writerClient.close()
+        eventLoops.eventLoopGroup().isTerminated()
+    }
+
+    def 'close should give the event loops a short quiet period, for the connections that close with the clients'() {
+        given:
+        NioEventLoopGroup group = Spy(constructorArgs: [1])
+        def built = new TransferManagerTransfers(reader, writer, writerClient, 'bucket', [writerClient], SdkEventLoopGroup.create(group))
+
+        when:
+        built.close()
+
+        then: 'not none: a connection that closes as the loops stop hands its last task to a loop that already stopped, and Netty warns'
+        1 * group.shutdownGracefully({ long quiet -> quiet > 0 && quiet <= 500 }, { long timeout -> timeout >= 1000 }, TimeUnit.MILLISECONDS)
+        group.isTerminated()
+    }
+
+    def 'when the writer client cannot be built, the reader client and the event loops should be closed'() {
+        given:
+        S3AsyncClient readerClient = Mock()
+        S3AsyncClientBuilder readerBuilder = Mock()
+        readerBuilder.httpClientBuilder(_) >> readerBuilder
+        readerBuilder.build() >> readerClient
+        S3AsyncClientBuilder writerBuilder = Mock()
+        writerBuilder.httpClientBuilder(_) >> writerBuilder
+        writerBuilder.multipartEnabled(_) >> writerBuilder
+        writerBuilder.multipartConfiguration(_ as MultipartConfiguration) >> writerBuilder
+        writerBuilder.build() >> { throw new IllegalStateException('no writer client') }
+        def eventLoops = SdkEventLoopGroup.builder().numberOfThreads(1).build()
+
+        when:
+        TransferManagerTransfers.fromBuilders(readerBuilder, writerBuilder, 'bucket', TransferManagerTransfers.MIN_PART_SIZE,
+                                              TransferManagerTransfers.MAX_CONNECTIONS, eventLoops)
+
+        then:
+        def e = thrown(IllegalStateException)
+        e.message == 'no writer client'
+        1 * readerClient.close()
+        eventLoops.eventLoopGroup().isTerminated()
+    }
+
+    def 'close should close everything and shut the event loops down even when a close fails, then throw the first failure'() {
+        given:
+        S3AsyncClient readerClient = Mock()
+        def eventLoops = SdkEventLoopGroup.builder().numberOfThreads(1).build()
+        def built = new TransferManagerTransfers(reader, writer, writerClient, 'bucket', [readerClient, writerClient], eventLoops)
+        def failure = new IllegalStateException('the reader did not close')
+
+        when:
+        built.close()
+
+        then:
+        1 * reader.close() >> { throw failure }
+        1 * writer.close()
+        1 * readerClient.close() >> { throw new IllegalStateException('the reader client did not close') }
+        1 * writerClient.close()
+        def e = thrown(IllegalStateException)
+        e.is(failure)
+        e.suppressed*.message == ['the reader client did not close']
         eventLoops.eventLoopGroup().isTerminated()
     }
 }

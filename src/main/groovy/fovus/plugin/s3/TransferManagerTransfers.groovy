@@ -91,6 +91,15 @@ class TransferManagerTransfers implements S3Transfers {
     /** How long a read or write may stall, and how long a request waits for a free connection. */
     static final Duration IO_TIMEOUT = Duration.ofMinutes(5)
     /**
+     * How long the event loop must be idle before it stops, once the clients are closed. Closing a client closes its
+     * connections, and each one, as it closes, hands a last task to an event loop of the group, maybe another one:
+     * with no quiet period at all a loop that already stopped rejects it, and Netty logs a warning
+     * ({@code RejectedExecutionException: event executor terminated}). The SDK's own 2 seconds would slow every close.
+     */
+    static final Duration EVENT_LOOP_QUIET_PERIOD = Duration.ofMillis(100)
+    /** How long the event loop is given to stop, quiet period included, and how long {@link #close()} waits for it. */
+    static final Duration EVENT_LOOP_SHUTDOWN_TIMEOUT = Duration.ofSeconds(5)
+    /**
      * A download writes into the destination from its start, opening it for writing only: unlike the
      * {@code downloadFile} default, it never creates the file. The caller deletes its temp file on failure or
      * interrupt; an SDK attempt whose response arrives later then fails to open it instead of re-creating it.
@@ -130,26 +139,38 @@ class TransferManagerTransfers implements S3Transfers {
 
     /**
      * The reader and writer clients from these builders, with the HTTP client and the part handling described
-     * above. Tests point the builders at MinIO or a local fake, and may narrow the connection pool.
+     * above, on {@code eventLoops}, which the transfers then own. Tests point the builders at MinIO or a local fake,
+     * and may narrow the connection pool. When a step fails, what was built before it is closed, the event loop
+     * included.
      */
     @PackageScope
     static TransferManagerTransfers fromBuilders(S3AsyncClientBuilder readerBuilder, S3AsyncClientBuilder writerBuilder,
-                                                 String bucket, long partSize, int maxConnections = MAX_CONNECTIONS) {
-        final eventLoops = SdkEventLoopGroup.builder().build()
-        final readerClient = readerBuilder.httpClientBuilder(httpClient(eventLoops, maxConnections)).build()
-        final writerClient = writerBuilder.httpClientBuilder(httpClient(eventLoops, maxConnections))
-                .multipartEnabled(true)
-                .multipartConfiguration(MultipartConfiguration.builder()
-                        .thresholdInBytes(partSize)
-                        .minimumPartSizeInBytes(partSize)
-                        // what bounds the memory of a streamed write; a file's parts are read from the file
-                        .apiCallBufferSizeInBytes(STREAM_BUFFER_PARTS * partSize)
-                        .parallelConfiguration { it.maxInFlightParts(MAX_IN_FLIGHT_PARTS) }
-                        .build())
-                .build()
-        return new TransferManagerTransfers(S3TransferManager.builder().s3Client(readerClient).build(),
-                                            S3TransferManager.builder().s3Client(writerClient).build(),
-                                            writerClient, bucket, [readerClient, writerClient], eventLoops)
+                                                 String bucket, long partSize, int maxConnections = MAX_CONNECTIONS,
+                                                 SdkEventLoopGroup eventLoops = SdkEventLoopGroup.builder().build()) {
+        // In the order close() closes them: the transfer managers first, then the clients they were given
+        final List<SdkAutoCloseable> built = []
+        try {
+            final readerClient = readerBuilder.httpClientBuilder(httpClient(eventLoops, maxConnections)).build()
+            built.add(0, readerClient)
+            final writerClient = writerBuilder.httpClientBuilder(httpClient(eventLoops, maxConnections))
+                    .multipartEnabled(true)
+                    .multipartConfiguration(MultipartConfiguration.builder()
+                            .thresholdInBytes(partSize)
+                            .minimumPartSizeInBytes(partSize)
+                            // what bounds the memory of a streamed write; a file's parts are read from the file
+                            .apiCallBufferSizeInBytes(STREAM_BUFFER_PARTS * partSize)
+                            .parallelConfiguration { it.maxInFlightParts(MAX_IN_FLIGHT_PARTS) }
+                            .build())
+                    .build()
+            built.add(0, writerClient)
+            final reader = S3TransferManager.builder().s3Client(readerClient).build()
+            built.add(0, reader)
+            final writer = S3TransferManager.builder().s3Client(writerClient).build()
+            return new TransferManagerTransfers(reader, writer, writerClient, bucket, [readerClient, writerClient], eventLoops)
+        }
+        catch (Throwable failure) {
+            throw closeAll(built, eventLoops, failure)
+        }
     }
 
     private static NettyNioAsyncHttpClient.Builder httpClient(SdkEventLoopGroup eventLoops, int maxConnections) {
@@ -201,13 +222,38 @@ class TransferManagerTransfers implements S3Transfers {
         return new UploadStream(key, body, upload)
     }
 
+    /** Close the transfer managers, then their clients, then shut the event loop down, whatever fails on the way. */
     @Override
     void close() {
-        reader.close()
-        writer.close()
-        for (SdkAutoCloseable client : clients) client.close()
-        // At once: the clients are closed, so there is nothing for a quiet period to wait for
-        eventLoops?.eventLoopGroup()?.shutdownGracefully(0, 5, TimeUnit.SECONDS)?.awaitUninterruptibly(5, TimeUnit.SECONDS)
+        final List<SdkAutoCloseable> all = [reader, writer] as List<SdkAutoCloseable>
+        all.addAll(clients)
+        final failure = closeAll(all, eventLoops, null)
+        if (failure != null) throw failure
+    }
+
+    /**
+     * Close each of {@code closeables} in turn, then shut {@code eventLoops} down, each step whether or not the ones
+     * before it failed. Returns {@code failure}, or else the first failure, with any later ones suppressed in it.
+     */
+    private static Throwable closeAll(List<? extends SdkAutoCloseable> closeables, SdkEventLoopGroup eventLoops, Throwable failure) {
+        Throwable first = failure
+        try {
+            for (SdkAutoCloseable closeable : closeables) {
+                try {
+                    closeable.close()
+                }
+                catch (Throwable e) {
+                    if (first == null) first = e
+                    else first.addSuppressed(e)
+                }
+            }
+        }
+        finally {
+            eventLoops?.eventLoopGroup()
+                    ?.shutdownGracefully(EVENT_LOOP_QUIET_PERIOD.toMillis(), EVENT_LOOP_SHUTDOWN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+                    ?.awaitUninterruptibly(EVENT_LOOP_SHUTDOWN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+        }
+        return first
     }
 
     /**

@@ -47,13 +47,26 @@ class FovusStorageCredentialsSourceTest extends Specification {
         return Files.exists(counter) ? Files.readAllLines(counter).size() : 0
     }
 
-    private static ListAppender<ILoggingEvent> captureLogs() {
+    private ListAppender<ILoggingEvent> s3Log
+    private Level s3LevelBefore
+
+    def cleanup() {
+        if (s3Log != null) {
+            final logger = LoggerFactory.getLogger('fovus.plugin.s3') as Logger
+            logger.detachAppender(s3Log)
+            logger.level = s3LevelBefore
+        }
+    }
+
+    /** Captures everything fovus.plugin.s3 logs for the duration of a test; undone after the feature. */
+    private ListAppender<ILoggingEvent> captureLogs() {
         final logger = LoggerFactory.getLogger('fovus.plugin.s3') as Logger
+        s3LevelBefore = logger.level
         logger.level = Level.TRACE
-        final appender = new ListAppender<ILoggingEvent>()
-        appender.start()
-        logger.addAppender(appender)
-        return appender
+        s3Log = new ListAppender<ILoggingEvent>()
+        s3Log.start()
+        logger.addAppender(s3Log)
+        return s3Log
     }
 
     def 'fetch should parse the JSON the CLI prints'() {

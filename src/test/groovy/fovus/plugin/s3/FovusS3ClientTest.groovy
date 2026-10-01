@@ -558,6 +558,46 @@ class FovusS3ClientTest extends Specification {
         prefix << [null, '', 'pipelines/p-1-user']
     }
 
+    def 'the sync clients should be built before the transfers, and closed when the transfers cannot be built'() {
+        given:
+        S3Client readerClient = Mock()
+        S3Client writerClient = Mock()
+        def built = []
+        def sync = { AwsCredentialsProvider provider -> built << 'sync'; built.size() == 1 ? readerClient : writerClient }
+
+        when:
+        FovusS3Client.assemble(storageCredentials(PREFIX), credentials, sync) { built << 'transfers'; throw new IllegalStateException('no event loop') }
+
+        then:
+        def e = thrown(IllegalStateException)
+        e.message == 'no event loop'
+        built == ['sync', 'sync', 'transfers']
+        1 * readerClient.close()
+        1 * writerClient.close()
+    }
+
+    def 'everything built should be closed when the client cannot be made from it'() {
+        given:
+        S3Client readerClient = Mock()
+        S3Client writerClient = Mock()
+        S3Transfers builtTransfers = Mock()
+        def clients = [readerClient, writerClient].iterator()
+
+        when: 'a prefix without its trailing slash, which the client refuses'
+        FovusS3Client.assemble(storageCredentials('pipelines/p-1-user'), credentials, { AwsCredentialsProvider provider -> clients.next() }) { builtTransfers }
+
+        then:
+        thrown(IllegalArgumentException)
+        1 * builtTransfers.close()
+        1 * readerClient.close()
+        1 * writerClient.close()
+    }
+
+    private static StorageCredentials storageCredentials(String prefix) {
+        final keys = new SessionKeys('AKIA-TEST', 'secret-test', 'token-test', Instant.now().plusSeconds(3600))
+        return new StorageCredentials('bucket', 'us-east-2', prefix, keys, keys)
+    }
+
     def 'a real client should ask the credentials provider once and surface its failure as itself'() {
         given:
         def calls = new AtomicInteger()

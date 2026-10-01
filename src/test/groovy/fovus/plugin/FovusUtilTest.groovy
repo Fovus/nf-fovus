@@ -16,14 +16,26 @@ class FovusUtilTest extends Specification {
     @TempDir
     Path tempDir
 
-    /** Captures log events emitted by FovusUtil for the duration of a test. */
-    private static ListAppender<ILoggingEvent> captureFovusUtilLogs() {
+    private ListAppender<ILoggingEvent> fovusUtilLog
+    private Level fovusUtilLevelBefore
+
+    def cleanup() {
+        if (fovusUtilLog != null) {
+            final logger = LoggerFactory.getLogger(FovusUtil) as Logger
+            logger.detachAppender(fovusUtilLog)
+            logger.level = fovusUtilLevelBefore
+        }
+    }
+
+    /** Captures log events emitted by FovusUtil for the duration of a test; undone after the feature. */
+    private ListAppender<ILoggingEvent> captureFovusUtilLogs() {
         final logger = LoggerFactory.getLogger(FovusUtil) as Logger
+        fovusUtilLevelBefore = logger.level
         logger.level = Level.DEBUG
-        final appender = new ListAppender<ILoggingEvent>()
-        appender.start()
-        logger.addAppender(appender)
-        return appender
+        fovusUtilLog = new ListAppender<ILoggingEvent>()
+        fovusUtilLog.start()
+        logger.addAppender(fovusUtilLog)
+        return fovusUtilLog
     }
 
     def 'readNextflowConfig should return null when there is no config file'() {

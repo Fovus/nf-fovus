@@ -113,11 +113,40 @@ class FovusS3Client implements Closeable {
     static FovusS3Client createWithInterceptors(RefreshingStorageCredentials credentials, List<ExecutionInterceptor> interceptors)
             throws StorageCredentialsException {
         final first = credentials.get()
-        final transfers = TransferManagerTransfers.create(first.bucket, first.region, credentials.readProvider(),
-                                                          credentials.writeProvider(), interceptors)
-        return new FovusS3Client(buildClient(first.region, credentials.readProvider(), interceptors),
-                                 buildClient(first.region, credentials.writeProvider(), interceptors),
-                                 transfers, first.bucket, first.prefix, credentials)
+        return assemble(first, credentials, { AwsCredentialsProvider provider -> buildClient(first.region, provider, interceptors) }) {
+            TransferManagerTransfers.create(first.bucket, first.region, credentials.readProvider(), credentials.writeProvider(), interceptors)
+        }
+    }
+
+    /**
+     * The client over the sync clients {@code syncClient} builds for each token and the transfers {@code transfers}
+     * builds. The sync clients first: they are cheap, with no thread and no connection before their first request,
+     * while the transfers start an event loop. When a step fails, what was built before it is closed.
+     */
+    @PackageScope
+    static FovusS3Client assemble(StorageCredentials first, RefreshingStorageCredentials credentials,
+                                  Closure<S3Client> syncClient, Closure<S3Transfers> transfers) {
+        final List<AutoCloseable> built = []
+        try {
+            final S3Client reader = syncClient.call(credentials.readProvider())
+            built.add(reader)
+            final S3Client writer = syncClient.call(credentials.writeProvider())
+            built.add(writer)
+            final S3Transfers fileTransfers = transfers.call()
+            built.add(fileTransfers)
+            return new FovusS3Client(reader, writer, fileTransfers, first.bucket, first.prefix, credentials)
+        }
+        catch (Throwable failure) {
+            for (AutoCloseable closeable : built.reverse()) {
+                try {
+                    closeable.close()
+                }
+                catch (Throwable e) {
+                    failure.addSuppressed(e)
+                }
+            }
+            throw failure
+        }
     }
 
     private static S3Client buildClient(String region, AwsCredentialsProvider provider, List<ExecutionInterceptor> interceptors) {
