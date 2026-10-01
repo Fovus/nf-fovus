@@ -2,7 +2,7 @@
 
 - **Date:** 2026-09-30
 - **Status:** Draft for review
-- **Revised:** 2026-10-01, after review of the implementation: D9–D11
+- **Revised:** 2026-10-01, after review of the implementation: D9–D11, and §6.4 after the SDK finding behind D11
 - **Repos affected:** `nf-fovus` (most of the work), `fovus-cli-python` (one hidden command)
 - **Backend (fovus-infra):** no change
 
@@ -122,7 +122,7 @@ The existing mount mode is unchanged: a local `workDir` keeps working exactly as
 | D8 | The mode is called "direct" in docs and messages, not "S3". | Describes what users get (storage reached directly, no mount) rather than the AWS service behind it. "Remote" was avoided because it already means a Fovus-hosted run (`WORKFLOW_HOST=REMOTE`); "sync" because it suggests a local mirror. |
 | D9 | One S3-backed storage serves every `fovus://` area (`pipelines`, `files`, `jobs`). The old `files`/`jobs` filesystem, which listed and downloaded through `fovus` subprocesses, is removed, so `fovus://` paths work only in direct mode. | One code path instead of two. Suggested in review. The read token already reaches the whole bucket, and one `HeadObject` replaces a CLI subprocess per file lookup, which `-resume` does for every input. The CLI-backed areas predate the mount and were undocumented; mount mode uses mounted paths. |
 | D10 | Direct mode also writes into `files/` (`publishDir`, uploads). `jobs/` stays read-only. | Suggested in review. The upload token already writes `files/` (the CLI uses it for `fovus storage upload`), and without it a run with no mount could not put results in Fovus storage. |
-| D11 | File transfers and streamed writes use the AWS SDK's S3 Transfer Manager and the Java-based S3 async client with multipart enabled (Netty HTTP client). The plugin has no multipart or ranged-download code of its own. | Suggested in review: the SDK's tested part handling, retries and parallelism instead of our own. The Java-based client (parallel multipart since SDK 2.27.5) avoids the CRT's native libraries on users' control nodes. |
+| D11 | File transfers and streamed writes use the AWS SDK's S3 Transfer Manager and the Java-based S3 async client (Netty HTTP client): multipart for writes, one GET for downloads. The plugin has no multipart or ranged-download code of its own. The SDK is 2.55.9. | Suggested in review: the SDK's tested part handling and retries instead of our own. The Java-based client (parallel multipart since SDK 2.27.5) avoids the CRT's native libraries on users' control nodes. The SDK was bumped from 2.31.0 to 2.55.9 so that every transfer path is retried: on 2.31.0 neither streamed writes nor multipart downloads were. Downloads are therefore one retried GET, not parallel ranged GETs. |
 
 ## 5. User-facing configuration
 
@@ -228,15 +228,15 @@ executable on the compute node because its mount shows `pipelines/` files as 077
   | NIO operation | S3 |
   |---|---|
   | `newByteChannel` / `newInputStream` (read) | `GetObject`, streamed |
-  | `newByteChannel` / `newOutputStream` (write, create, truncate) | streamed upload of unknown length by the multipart-enabled async client: one `PutObject` below 16 MiB, multipart above; bounded memory, no local spooling |
+  | `newByteChannel` / `newOutputStream` (write, create, truncate) | streamed upload of unknown length by the multipart-enabled writer client: one `PutObject` below 16 MiB, multipart above; every part (or the single `PutObject`) is buffered whole before it is sent, so the SDK can retry it; at most 2 parts (32 MiB) in memory per open stream, no local spooling |
   | `createDirectory` | zero-byte `key/` marker object; no-op for an area root |
   | `newDirectoryStream` | `ListObjectsV2` with delimiter `/`, paginated; each entry carries size and last-modified |
   | `readAttributes` | cached listing metadata, else `HeadObject`, else prefix listing (implicit folder) |
   | `exists` / `checkAccess` | as `readAttributes` |
   | `delete` | `DeleteObject`; a folder's own marker |
   | `copy` / `move` | between any readable and any writable path, including across areas (`pipelines` → `files` for `publishDir`): `CopyObject` (write client) when allowed, else a streamed `GetObject` + upload; `move` = copy + delete, a folder object by object |
-  | `upload` (`FileSystemTransferAware`) | file or folder, into `pipelines` or `files`; Transfer Manager `uploadFile` (parallel multipart above 16 MiB); other file systems (https, `s3://`) streamed |
-  | `download` (`FileSystemTransferAware`) | file or folder; Transfer Manager `downloadFile` into a temp file, moved into place on success |
+  | `upload` (`FileSystemTransferAware`) | file or folder, into `pipelines` or `files`; Transfer Manager `uploadFile` (parallel multipart above 16 MiB, at most 4 parts in flight, each part read again from the file on a retry); other file systems (https, `s3://`) streamed |
+  | `download` (`FileSystemTransferAware`) | file or folder; Transfer Manager `downloadFile`: one `GetObject`, retried as a whole by the SDK, into a temp file next to the target, moved into place on success |
   | symlinks, locks, `setAttribute` | `UnsupportedOperationException` naming the operation |
 
 - Inputs in `files`/`jobs` are never foreign in direct mode, so Nextflow never stages them; the
@@ -247,11 +247,29 @@ executable on the compute node because its mount shows `pipelines/` files as 077
 - Two sync `S3Client`s from AWS SDK v2: the reader uses the download token, the writer the
   upload token. HTTP client: `url-connection-client`. They serve listings, `HeadObject`, streamed
   `GetObject`, small `PutObject`s (folder markers), `CopyObject` and `DeleteObject`.
-- Two `S3TransferManager`s (D11), one per token, on the Java-based `S3AsyncClient` with multipart
-  enabled and the Netty HTTP client (no CRT), built with the same credentials, endpoint and
-  settings. They serve file uploads and downloads, and streamed writes of unknown length
-  (`AsyncRequestBody.forBlockingOutputStream`). Multipart threshold and part size are 16 MiB; the
-  SDK uses larger parts when a file would otherwise need more than 10,000.
+- Two `S3TransferManager`s (D11), one per token, on the Java-based `S3AsyncClient` over the Netty HTTP
+  client (no CRT, no Apache HTTP client), built with the same credentials, endpoint and settings as
+  the sync clients. They serve file uploads and downloads, and streamed writes of unknown length. The
+  AWS SDK for Java v2 is 2.55.9, bumped from 2.31.0: on 2.31.0 neither streamed writes nor multipart
+  downloads were retried.
+  - The **writer** client is multipart-enabled: threshold and part size 16 MiB, at most 4 parts in
+    flight per upload.
+  - The **reader** client is not multipart. A download is one `GetObject` that the SDK retries as a
+    whole; there are no parallel ranged GETs.
+  - Both clients run on Netty with one shared event loop, at most 50 connections each. A request waits
+    up to 5 minutes for a free connection, because the SDK does not retry a connection it failed to
+    get. Four parts in flight keep one large upload from taking every connection of the writer from
+    the small writes (task files) that share it.
+  - A streamed write uses the SDK's blocking output stream body, wrapped in
+    `BufferedSplittableAsyncRequestBody` with `bufferBeforeSend`. Every part, and the single
+    `PutObject` of a short stream, is buffered whole before it is sent, so every part is retried.
+    An open stream holds at most 2 parts (32 MiB) in memory, and the writer blocks until a part is
+    sent; a short stream holds only its own bytes. A streamed write is limited to 10,000 parts, about
+    156 GiB at 16 MiB. A file upload is not: its parts grow when the file would otherwise need more
+    than 10,000.
+  - A download writes into the temp file the caller created and never creates the file: a response
+    that arrives after an interrupt, when the caller has deleted the temp file, fails instead of
+    creating it again.
 - Standard retry mode, up to 10 attempts, matching the CLI's boto settings.
 - Checksum calculation and validation set to `WHEN_REQUIRED` (TLS already protects the transfer,
   and it keeps S3-compatible test servers simple).
@@ -268,7 +286,9 @@ executable on the compute node because its mount shows `pipelines/` files as 077
     write fails as read-only.
 - Maps S3 errors to NIO exceptions and messages as described in §10.
 - On `ExpiredToken` / `InvalidToken`: force a credential refresh and retry the request, or the
-  whole file transfer, once. A streamed write cannot be replayed and fails.
+  whole file transfer (an upload or a download), once. A streamed write cannot be replayed after a
+  refresh and fails; the SDK still retries its parts, and the single `PutObject` of a short stream,
+  for transient failures.
 - The SDK aborts a failed multipart upload, best effort: the write token cannot abort (§12), so
   leftover parts stay invisible until the bucket's lifecycle rule removes them.
 
@@ -375,6 +395,11 @@ the plugin calling the Fovus API itself (duplicates CLI sign-in and needs its to
   the raw S3 error body, which can echo the access key ID)
 
 The plugin never enables AWS SDK request logging.
+
+The SDK's Netty client logs wire dumps of every request and response, including the signed headers
+and the session token, at DEBUG under `io.netty`. Nextflow's default log levels never enable it.
+Users must not turn on `-trace io.netty`, or DEBUG for `io.netty`, in direct mode. The plugin's
+tests keep `io.netty` and the SDK at INFO for the same reason.
 
 ### Limits of this design
 
@@ -565,6 +590,13 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 - Error mapping with a mocked `S3Client` and Transfer Manager: `ExpiredToken` refresh and single retry;
   `AccessDenied` message and no retry; delete denial is a warning; no raw S3 error body in any
   message.
+- The Transfer Manager settings on the real SDK 2.55.9 clients, against a local fake S3 server (no
+  Docker; `TransferManagerTransfersSdkTest`, parts of 1 MiB): the `PutObject` of a short stream, the
+  parts of a stream, the parts and the `PutObject` of a file upload, and the GET of a download are each
+  retried after a transient failure, and a retried download fetches the whole object again with one
+  GET; an aborted stream publishes nothing; a file upload has at most 4 parts in flight; a request
+  waits for a free connection past the SDK's default of 10 seconds, then goes through; an open stream
+  holds at most 2 parts in memory.
 - `FovusTaskHandler.checkIfCompleted()`: temporary read error defers, fails after the bound;
   missing `.exitcode` gives `MAX_VALUE`. `submit()` passes
   `/fovus-storage/pipelines/<pid>/fovus-work/ab` to `job create`.
@@ -664,6 +696,8 @@ Also confirm while there: the download token (`PIPELINE_STORAGE`) allows `ListOb
 - `fovus://` inputs in mount mode, an undocumented use of the removed CLI-backed filesystem, stop
   working (D9); the error names the mounted path as the replacement.
 - New nf-fovus dependencies: `software.amazon.awssdk:s3`, `s3-transfer-manager`,
-  `url-connection-client` and `netty-nio-client`, bundled in the plugin (isolated by the plugin
-  classloader from any `nf-amazon` copy).
+  `url-connection-client` and `netty-nio-client`, all at 2.55.9 and bundled in the plugin (isolated
+  by the plugin classloader from any `nf-amazon` copy). `apache-client` and `apache5-client` are
+  excluded (2.55's `s3` pulls in `apache5-client`), and there is no CRT client or native library.
+  The plugin zip grows from about 9.5 MB to about 14.4 MB.
 - Release order: CLI first, then nf-fovus.

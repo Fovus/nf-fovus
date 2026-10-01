@@ -188,15 +188,36 @@ files at `/fovus-storage/pipelines/...` as in mount mode.
 - It is only for pipelines launched on your own machine; Fovus-hosted runs always use the mount.
 - `workDir` must be exactly `fovus:///fovus-storage/pipelines`.
 - Local and remote (`http`, `s3://`) inputs are uploaded into the pipeline's work directory. Inputs
-  already in Fovus storage (`fovus:///fovus-storage/files/...`) are used in place.
-- `publishDir` to a local folder downloads the results. As for any remote work directory, the `symlink`,
-  `link` and `rellink` modes, and an unset mode, become `copy`. `mode: 'move'` copies and leaves the source
-  files in Fovus storage, with a warning, because the direct-mode credentials cannot delete.
-  Publishing into Fovus storage `files/` is not supported in direct mode yet.
+  already in Fovus storage are read in place, not copied: `fovus:///fovus-storage/files/...` (your files)
+  and `fovus:///fovus-storage/jobs/<jobId>/...` (the outputs of your jobs). Globs work on them.
+- `publishDir` can target a local folder or Fovus storage `files/`, for example
+  `publishDir 'fovus:///fovus-storage/files/results'`. `jobs/` is read-only: publishing there fails with
+  "Fovus storage jobs/ is read-only".
+  - A local folder gets a download of the results.
+  - As for any remote work directory, the `symlink`, `link` and `rellink` modes, and an unset mode,
+    become `copy`.
+  - `overwrite` (the default) replaces an existing object in `files/` with the new one. The credentials
+    cannot delete the old one first, so the plugin warns about it once.
+  - `mode: 'move'` copies and leaves the source files in the pipeline's work directory in Fovus storage,
+    with a warning, because the direct-mode credentials cannot delete.
+- `fovus://` paths work only in direct mode. In a run with a mount they fail with this message, and you
+  use the mounted path instead:
+
+  ```
+  Fovus storage paths (fovus://) can only be used in direct mode (workDir = 'fovus:///fovus-storage/pipelines'), after the Fovus executor has started. With a Fovus storage mount, use the mounted path instead.
+  ```
+- Files over 16 MiB are uploaded in parts, at most four at a time per file, and a failed request is retried.
+  A download is one request, retried as a whole, into a temporary file that is moved into place once it is
+  complete. Data the plugin streams without knowing its size in advance, such as a remote input or a
+  publish into `files/`, is limited to about 156 GiB. Uploading a local file is not.
 - `cleanup = true` has no effect, as for any remote work directory in Nextflow.
 - Switching a pipeline between mount and direct mode re-runs its tasks on `-resume`.
 - The short-lived credentials can reach your whole Fovus storage bucket. The plugin keeps itself to the
-  pipeline's own folder and Nextflow's scratch folders (`pipelines/tmp/`, `pipelines/collect-file/`).
+  pipeline's own folder, Nextflow's scratch folders (`pipelines/tmp/`, `pipelines/collect-file/`), `files/`
+  and, for reading only, `jobs/`.
+- Do not turn on debug or trace logging for `io.netty` (for example `-trace io.netty`) in direct mode. Its
+  output includes the signed request headers and the session token, which would end up in `.nextflow.log`.
+  Nextflow's default log levels do not enable it.
 - Your own AWS credentials are neither used nor changed: `s3://` inputs from your buckets keep using them.
   Your AWS configuration, such as a custom endpoint URL, does not apply to Fovus storage either.
 
