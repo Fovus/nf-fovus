@@ -37,12 +37,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 @Slf4j
 @CompileStatic
-class PipelinesStorage {
+class S3Storage {
 
     private final FovusS3Client s3
     private final AtomicBoolean deniedDeleteWarned = new AtomicBoolean()
 
-    PipelinesStorage(FovusS3Client s3) {
+    S3Storage(FovusS3Client s3) {
         this.s3 = s3
     }
 
@@ -179,7 +179,7 @@ class PipelinesStorage {
             return
         }
         final FovusS3Client client = s3
-        final PipelinesStorage storage = this
+        final S3Storage storage = this
         // Follow links, like Files.isDirectory above: a symlinked folder, or a symlinked sub-folder, is uploaded as a folder
         Files.walkFileTree(local, EnumSet.of(FileVisitOption.FOLLOW_LINKS), Integer.MAX_VALUE, new SimpleFileVisitor<Path>() {
             @Override

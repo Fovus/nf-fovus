@@ -30,7 +30,7 @@ class ForeignSourceUploadTest extends Specification {
 
     S3Client s3 = Mock()
     FovusS3Client client = new FovusS3Client(s3, s3, 'bucket', 'pipelines/p-1-user/', null, PART)
-    FovusFileSystem fs = PipelinesTestSupport.fileSystem(client)
+    FovusFileSystem fs = StorageTestSupport.fileSystem(client)
     Path target = fs.getPath('/fovus-storage/' + KEY)
 
     /** A file on a file system other than the default one (https://, s3://), whose size and content each feature sets. */

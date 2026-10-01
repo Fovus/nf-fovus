@@ -2,7 +2,7 @@ package fovus.plugin.storage
 
 import fovus.plugin.FovusConfig
 import fovus.plugin.nio.FovusFileSystemProvider
-import fovus.plugin.nio.PipelinesTestSupport
+import fovus.plugin.nio.StorageTestSupport
 import fovus.plugin.util.FovusPathFactory
 import nextflow.exception.AbortOperationException
 import nextflow.file.FileHelper
@@ -68,7 +68,7 @@ class WorkDirStorageFactoryTest extends Specification {
 
     def 'a fovus workDir other than the pipelines area should be rejected'() {
         given:
-        def workDir = PipelinesTestSupport.fileSystem().getPath('/fovus-storage/pipelines/p-1-user')
+        def workDir = StorageTestSupport.fileSystem().getPath('/fovus-storage/pipelines/p-1-user')
 
         when:
         WorkDirStorageFactory.create(workDir, false, CONFIG)
@@ -80,7 +80,7 @@ class WorkDirStorageFactoryTest extends Specification {
 
     def 'direct mode should be refused on a Fovus-hosted run'() {
         given:
-        def workDir = PipelinesTestSupport.fileSystem().getPath('/fovus-storage/pipelines')
+        def workDir = StorageTestSupport.fileSystem().getPath('/fovus-storage/pipelines')
 
         when:
         WorkDirStorageFactory.create(workDir, true, CONFIG)

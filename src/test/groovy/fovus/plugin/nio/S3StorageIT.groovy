@@ -19,7 +19,7 @@ import java.nio.file.StandardOpenOption
 import java.util.stream.Collectors
 
 @Tag('integration')
-class PipelinesStorageIT extends Specification {
+class S3StorageIT extends Specification {
 
     @Shared MinIOContainer minio
     @Shared S3Client s3
@@ -42,7 +42,7 @@ class PipelinesStorageIT extends Specification {
 
     def setup() {
         // a page size of 2 makes every listing below span several pages
-        final fs = PipelinesTestSupport.fileSystem(MinioSupport.fovusClient(s3, FovusS3Client.MIN_PART_SIZE, 2))
+        final fs = StorageTestSupport.fileSystem(MinioSupport.fovusClient(s3, FovusS3Client.MIN_PART_SIZE, 2))
         dir = (FovusPath) fs.getPath("/fovus-storage/pipelines/p-1-user/${UUID.randomUUID()}")
         Files.createDirectories(dir)
         requests.reset()

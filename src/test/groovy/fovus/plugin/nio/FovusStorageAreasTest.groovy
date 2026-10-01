@@ -9,11 +9,11 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.stream.Collectors
 
-class FovusPipelinesAreaTest extends Specification {
+class FovusStorageAreasTest extends Specification {
 
     def 'pipelines paths should parse and print as the compute node sees them'() {
         given:
-        def fs = PipelinesTestSupport.fileSystem()
+        def fs = StorageTestSupport.fileSystem()
 
         when:
         def path = (FovusPath) fs.getPath('/fovus-storage/pipelines/p-1-user/fovus-work/ab/cdef')
@@ -29,7 +29,7 @@ class FovusPipelinesAreaTest extends Specification {
 
     def 'the area root should be the direct-mode work directory'() {
         given:
-        def fs = PipelinesTestSupport.fileSystem()
+        def fs = StorageTestSupport.fileSystem()
 
         expect:
         (fs.getPath('/fovus-storage/pipelines') as FovusPath).isPipelinesAreaRoot()
@@ -39,7 +39,7 @@ class FovusPipelinesAreaTest extends Specification {
 
     def 'Nextflow can create and check the work directory before any credentials exist'() {
         given:
-        def root = PipelinesTestSupport.fileSystem().getPath('/fovus-storage/pipelines')
+        def root = StorageTestSupport.fileSystem().getPath('/fovus-storage/pipelines')
 
         when:
         Files.createDirectories(root)
@@ -51,7 +51,7 @@ class FovusPipelinesAreaTest extends Specification {
 
     def 'any other access before the S3 client is attached should explain direct mode'() {
         given:
-        def path = PipelinesTestSupport.fileSystem().getPath('/fovus-storage/pipelines/p-1-user/x')
+        def path = StorageTestSupport.fileSystem().getPath('/fovus-storage/pipelines/p-1-user/x')
 
         when:
         Files.readAllBytes(path)
@@ -79,7 +79,7 @@ class FovusPipelinesAreaTest extends Specification {
                                                 "Fovus storage credentials don't allow delete on pipelines/p-1-user/x (write token)")
             }
         }
-        def path = PipelinesTestSupport.fileSystem(client).getPath('/fovus-storage/pipelines/p-1-user/x')
+        def path = StorageTestSupport.fileSystem(client).getPath('/fovus-storage/pipelines/p-1-user/x')
 
         when:
         Files.delete(path)
@@ -88,14 +88,14 @@ class FovusPipelinesAreaTest extends Specification {
         noExceptionThrown()
     }
 
-    // The two cases below stand in for the MinIO integration tests (PipelinesStorageIT), which are not run here.
+    // The two cases below stand in for the MinIO integration tests (S3StorageIT), which are not run here.
 
     def 'an empty file should be a regular file of size 0'() {
         given:
         def client = Stub(FovusS3Client) {
             head('pipelines/p-1-user/.command.err') >> new S3Entry('pipelines/p-1-user/.command.err', 0L, null, false)
         }
-        def empty = PipelinesTestSupport.fileSystem(client).getPath('/fovus-storage/pipelines/p-1-user/.command.err')
+        def empty = StorageTestSupport.fileSystem(client).getPath('/fovus-storage/pipelines/p-1-user/.command.err')
 
         expect:
         Files.exists(empty)
@@ -111,7 +111,7 @@ class FovusPipelinesAreaTest extends Specification {
             hasChildren('pipelines/p-1-user/out.txt/') >> false
             list('pipelines/p-1-user/sample/') >> [new S3Entry('pipelines/p-1-user/sample/y.txt', 1L, null, false)]
         }
-        def fs = PipelinesTestSupport.fileSystem(client)
+        def fs = StorageTestSupport.fileSystem(client)
 
         expect:
         !Files.exists(fs.getPath('/fovus-storage/pipelines/p-1-user/out.txt'))

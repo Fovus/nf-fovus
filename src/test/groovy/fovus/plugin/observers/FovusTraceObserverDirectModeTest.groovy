@@ -1,8 +1,8 @@
 package fovus.plugin.observers
 
 import fovus.plugin.nio.FovusPath
-import fovus.plugin.nio.PipelinesStorage
-import fovus.plugin.nio.PipelinesTestSupport
+import fovus.plugin.nio.S3Storage
+import fovus.plugin.nio.StorageTestSupport
 import fovus.plugin.s3.FovusS3Client
 import fovus.plugin.s3.FovusS3ClientTest
 import fovus.plugin.storage.DirectWorkDirStorage
@@ -32,7 +32,7 @@ class FovusTraceObserverDirectModeTest extends Specification {
 
     def 'a fovus:// work dir should get its S3 client when the flow is created'() {
         given:
-        def fs = PipelinesTestSupport.fileSystem()
+        def fs = StorageTestSupport.fileSystem()
         def connector = Mock(S3Connector)
 
         when:
@@ -58,7 +58,7 @@ class FovusTraceObserverDirectModeTest extends Specification {
         kind                      | workDir                                                             | hosted
         'mount mode'              | Path.of('/mnt/fovus/pipelines')                                     | false
         'mount mode hosted'       | Path.of('/fovus-storage/pipelines')                                 | true
-        'hosted fovus:// workDir' | PipelinesTestSupport.fileSystem().getPath('/fovus-storage/pipelines') | true
+        'hosted fovus:// workDir' | StorageTestSupport.fileSystem().getPath('/fovus-storage/pipelines') | true
         'missing workDir'         | null                                                                | false
     }
 
@@ -67,7 +67,7 @@ class FovusTraceObserverDirectModeTest extends Specification {
         def factory = { Path workDir -> throw new AbortOperationException('[FOVUS] In direct mode, workDir must be ...') } as Function<Path, WorkDirStorage>
 
         when:
-        FovusTraceObserver.prepareDirectModeStorage(PipelinesTestSupport.fileSystem().getPath('/fovus-storage/pipelines/x'), false, 'p-1-user', factory)
+        FovusTraceObserver.prepareDirectModeStorage(StorageTestSupport.fileSystem().getPath('/fovus-storage/pipelines/x'), false, 'p-1-user', factory)
 
         then:
         def e = thrown(AbortOperationException)
@@ -78,7 +78,7 @@ class FovusTraceObserverDirectModeTest extends Specification {
         given:
         def s3 = Mock(S3Client)
         def client = new FovusS3Client(s3, s3, 'bucket', 'pipelines/p-1-user/', null)
-        def fs = PipelinesTestSupport.fileSystem()
+        def fs = StorageTestSupport.fileSystem()
         def root = fs.getPath('/fovus-storage/pipelines')
         def connector = Stub(S3Connector) { connect('p-1-user') >> client }
         s3.headObject(_ as HeadObjectRequest) >> { throw FovusS3ClientTest.s3Error(404, 'NotFound') }
@@ -92,7 +92,7 @@ class FovusTraceObserverDirectModeTest extends Specification {
         then:
         1 * s3.putObject({ PutObjectRequest r -> r.key() ==~ /pipelines\/tmp\/[0-9a-f]{2}\/[0-9a-f]+\// }, _ as RequestBody)
         1 * s3.putObject({ PutObjectRequest r -> r.key() == 'pipelines/collect-file/' }, _ as RequestBody)
-        PipelinesStorage.keyOf((FovusPath) temp).startsWith('pipelines/tmp/')
+        S3Storage.keyOf((FovusPath) temp).startsWith('pipelines/tmp/')
         collected
     }
 }

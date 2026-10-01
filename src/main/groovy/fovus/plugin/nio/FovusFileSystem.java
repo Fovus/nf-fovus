@@ -47,7 +47,7 @@ public class FovusFileSystem extends FileSystem {
             "Fovus storage pipelines/ paths can only be read or written in direct mode, after the Fovus executor has started";
 
     /** Direct mode only: set by the executor once storage credentials exist. */
-    private volatile PipelinesStorage pipelinesStorage;
+    private volatile S3Storage pipelinesStorage;
 
     public FovusFileSystem(FovusFileSystemProvider provider, FovusJobClient client, URI uri) {
         this.provider = provider;
@@ -127,7 +127,7 @@ public class FovusFileSystem extends FileSystem {
 
     /** Direct mode: give the pipelines/ file system its S3 client once storage credentials exist. */
     public void attachS3Client(FovusS3Client client) {
-        this.pipelinesStorage = new PipelinesStorage(client);
+        this.pipelinesStorage = new S3Storage(client);
     }
 
     /** Direct mode: whether an S3 client is already attached (by the trace observer, or the executor). */
@@ -135,8 +135,8 @@ public class FovusFileSystem extends FileSystem {
         return pipelinesStorage != null;
     }
 
-    PipelinesStorage pipelinesStorage() {
-        final PipelinesStorage storage = pipelinesStorage;
+    S3Storage pipelinesStorage() {
+        final S3Storage storage = pipelinesStorage;
         if (storage == null) {
             throw new IllegalStateException(NOT_ATTACHED_MESSAGE);
         }

@@ -2,7 +2,7 @@ package fovus.plugin.nio
 
 import fovus.plugin.s3.FovusS3Client
 
-class PipelinesTestSupport {
+class StorageTestSupport {
 
     static final URI AREA = URI.create('fovus:///fovus-storage/pipelines')
 

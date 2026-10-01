@@ -63,7 +63,7 @@ import static java.lang.String.format;
  * <p>
  * The {@code files} and {@code jobs} areas are read-only and served through the Fovus CLI. The
  * {@code pipelines} area is the work directory of direct mode: it is read and written through
- * {@link PipelinesStorage} with the AWS S3 SDK, once the executor has attached an S3 client.
+ * {@link S3Storage} with the AWS S3 SDK, once the executor has attached an S3 client.
  */
 public class FovusFileSystemProvider extends FileSystemProvider implements FileSystemTransferAware {
 
@@ -146,7 +146,7 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
 
 
     /**
-     * The pipelines area takes a source from any file system: {@link PipelinesStorage#upload} streams a remote one
+     * The pipelines area takes a source from any file system: {@link S3Storage#upload} streams a remote one
      * (https://, s3://) and publishes it only once it was read in full. Nextflow's own fallback copies through
      * {@code newOutputStream}, which would publish whatever was read before a failure.
      */
@@ -436,7 +436,7 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
         return path instanceof FovusPath && ((FovusPath) path).isPipelinesAreaRoot();
     }
 
-    private static PipelinesStorage pipelines(Path path) {
+    private static S3Storage pipelines(Path path) {
         return ((FovusPath) path).getFileSystem().pipelinesStorage();
     }
 }

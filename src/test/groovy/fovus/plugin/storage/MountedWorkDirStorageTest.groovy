@@ -1,6 +1,6 @@
 package fovus.plugin.storage
 
-import fovus.plugin.nio.PipelinesTestSupport
+import fovus.plugin.nio.StorageTestSupport
 import spock.lang.Specification
 import spock.lang.TempDir
 
@@ -39,6 +39,6 @@ class MountedWorkDirStorageTest extends Specification {
         expect:
         !storage.isForeignFile(tempDir.resolve('mnt/files/input.txt'))
         storage.isForeignFile(tempDir.resolve('elsewhere/input.txt'))
-        storage.isForeignFile(PipelinesTestSupport.fileSystem().getPath('/fovus-storage/files/input.txt'))
+        storage.isForeignFile(StorageTestSupport.fileSystem().getPath('/fovus-storage/files/input.txt'))
     }
 }

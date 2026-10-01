@@ -16,7 +16,7 @@ import java.nio.file.Path
 import java.util.stream.Collectors
 
 /** Uploads, downloads and listings of the pipelines/ area against a stubbed S3 client. */
-class PipelinesStorageTest extends Specification {
+class S3StorageTest extends Specification {
 
     private static final String DIR = 'pipelines/p-1-user/dl'
 
@@ -55,7 +55,7 @@ class PipelinesStorageTest extends Specification {
             uploadFile(_, _) >> { Path file, String key -> uploaded[key] = file }
             putDirectoryMarker(_) >> { String key -> markers << key }
         }
-        def fs = PipelinesTestSupport.fileSystem(client)
+        def fs = StorageTestSupport.fileSystem(client)
         def target = fs.getPath('/fovus-storage/pipelines/p-1-user/stage/in')
 
         when:
@@ -91,7 +91,7 @@ class PipelinesStorageTest extends Specification {
             listAll("${DIR}/".toString()) >> entries
             downloadFile(_, _) >> { String key, Path file -> downloaded << [key, file] }
         }
-        def fs = PipelinesTestSupport.fileSystem(client)
+        def fs = StorageTestSupport.fileSystem(client)
 
         when:
         fs.provider().download(fs.getPath('/fovus-storage/' + DIR), out)
@@ -107,7 +107,7 @@ class PipelinesStorageTest extends Specification {
 
     def 'a denied delete should warn once, then log at debug level'() {
         given:
-        def logger = LoggerFactory.getLogger(PipelinesStorage) as Logger
+        def logger = LoggerFactory.getLogger(S3Storage) as Logger
         logger.level = Level.DEBUG
         def appender = new ListAppender<ILoggingEvent>()
         appender.start()
@@ -116,7 +116,7 @@ class PipelinesStorageTest extends Specification {
             head(_) >> { String key -> object(key) }
             delete(_) >> { String key -> throw new AccessDeniedException(FovusS3Client.uri(key), null, "Fovus storage credentials don't allow delete on ${key} (write token)") }
         }
-        def fs = PipelinesTestSupport.fileSystem(client)
+        def fs = StorageTestSupport.fileSystem(client)
 
         when:
         ['a', 'b', 'c'].each { Files.delete(fs.getPath("/fovus-storage/pipelines/p-1-user/out/${it}.txt")) }
@@ -137,7 +137,7 @@ class PipelinesStorageTest extends Specification {
             list('pipelines/p-1-user/sample/') >> [folder('pipelines/p-1-user/sample//'),
                                                    object('pipelines/p-1-user/sample/y.txt')]
         }
-        def fs = PipelinesTestSupport.fileSystem(client)
+        def fs = StorageTestSupport.fileSystem(client)
 
         expect:
         names(fs.getPath('/fovus-storage/pipelines/p-1-user/sample')) == ['y.txt']

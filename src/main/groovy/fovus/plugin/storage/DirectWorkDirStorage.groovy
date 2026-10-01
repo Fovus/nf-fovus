@@ -1,7 +1,7 @@
 package fovus.plugin.storage
 
 import fovus.plugin.nio.FovusPath
-import fovus.plugin.nio.PipelinesStorage
+import fovus.plugin.nio.S3Storage
 import fovus.plugin.s3.FovusS3Client
 import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
@@ -59,7 +59,7 @@ class DirectWorkDirStorage implements WorkDirStorage {
     private FovusS3Client connect(String pipelineId) {
         try {
             final client = connector.connect(pipelineId)
-            final pipelineKey = PipelinesStorage.keyOf((FovusPath) workDir.resolve(pipelineId))
+            final pipelineKey = S3Storage.keyOf((FovusPath) workDir.resolve(pipelineId))
             client.hasChildren(pipelineKey + '/')
             client.putDirectoryMarker(pipelineKey + '/fovus-work/')
             return client

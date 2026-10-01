@@ -1,6 +1,6 @@
 package fovus.plugin
 
-import fovus.plugin.nio.PipelinesTestSupport
+import fovus.plugin.nio.StorageTestSupport
 import fovus.plugin.pipeline.FovusPipeline
 import fovus.plugin.pipeline.FovusPipelineClient
 import fovus.plugin.storage.WorkDirStorage
@@ -45,8 +45,8 @@ class FovusExecutorTest extends Specification {
 
         where:
         mode     | workDir                                                             | taskDir
-        'direct' | PipelinesTestSupport.fileSystem().getPath('/fovus-storage/pipelines') | '/fovus-storage/pipelines/p-1-user/fovus-work/ab/cdef'
-        'direct' | PipelinesTestSupport.fileSystem().getPath('/fovus-storage/pipelines') | '$nxf_array_task_dir'
+        'direct' | StorageTestSupport.fileSystem().getPath('/fovus-storage/pipelines') | '/fovus-storage/pipelines/p-1-user/fovus-work/ab/cdef'
+        'direct' | StorageTestSupport.fileSystem().getPath('/fovus-storage/pipelines') | '$nxf_array_task_dir'
         'mount'  | Path.of('/mnt/fovus/pipelines')                                     | '/mnt/fovus/pipelines/p-1-user/fovus-work/ab/cdef'
         'mount'  | Path.of('/mnt/fovus/pipelines')                                     | '$nxf_array_task_dir'
     }

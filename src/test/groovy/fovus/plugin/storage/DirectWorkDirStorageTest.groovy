@@ -1,7 +1,7 @@
 package fovus.plugin.storage
 
 import fovus.plugin.nio.FovusPath
-import fovus.plugin.nio.PipelinesTestSupport
+import fovus.plugin.nio.StorageTestSupport
 import fovus.plugin.s3.FovusS3Client
 import fovus.plugin.s3.FovusStorageCredentialsSource
 import fovus.plugin.s3.S3Entry
@@ -17,7 +17,7 @@ class DirectWorkDirStorageTest extends Specification {
 
     def 'prepare should attach the S3 client for the pipeline'() {
         given:
-        def fs = PipelinesTestSupport.fileSystem()
+        def fs = StorageTestSupport.fileSystem()
         def client = Stub(FovusS3Client) {
             head('pipelines/p-1-user/x') >> new S3Entry('pipelines/p-1-user/x', 3L, null, false)
         }
@@ -34,7 +34,7 @@ class DirectWorkDirStorageTest extends Specification {
 
     def 'a second prepare should keep the attached client and not fetch credentials again'() {
         given:
-        def fs = PipelinesTestSupport.fileSystem()
+        def fs = StorageTestSupport.fileSystem()
         def connector = Mock(S3Connector)
         def root = (FovusPath) fs.getPath('/fovus-storage/pipelines')
 
@@ -49,7 +49,7 @@ class DirectWorkDirStorageTest extends Specification {
 
     def 'prepare should check read and write access at start-up'() {
         given:
-        def fs = PipelinesTestSupport.fileSystem()
+        def fs = StorageTestSupport.fileSystem()
         def client = Mock(FovusS3Client)
         def connector = Stub(S3Connector) { connect('p-1-user') >> client }
 
@@ -67,7 +67,7 @@ class DirectWorkDirStorageTest extends Specification {
 
     def 'a failed start-up check should stop the run with its message and attach nothing'() {
         given:
-        def fs = PipelinesTestSupport.fileSystem()
+        def fs = StorageTestSupport.fileSystem()
         def client = Stub(FovusS3Client) {
             putDirectoryMarker(_) >> { throw new AccessDeniedException('fovus:///fovus-storage/pipelines/p-1-user/fovus-work/', null,
                                                                       "Fovus storage credentials don't allow write on pipelines/p-1-user/fovus-work/ (write token)") }
@@ -89,7 +89,7 @@ class DirectWorkDirStorageTest extends Specification {
         def connector = Stub(S3Connector) {
             connect(_) >> { throw new StorageCredentialsException(FovusStorageCredentialsSource.NOT_SIGNED_IN, false) }
         }
-        def root = (FovusPath) PipelinesTestSupport.fileSystem().getPath('/fovus-storage/pipelines')
+        def root = (FovusPath) StorageTestSupport.fileSystem().getPath('/fovus-storage/pipelines')
 
         when:
         new DirectWorkDirStorage(root, connector).prepare('p-1-user')
@@ -101,7 +101,7 @@ class DirectWorkDirStorageTest extends Specification {
 
     def 'Fovus paths are local to direct mode and are already compute-node paths'() {
         given:
-        def fs = PipelinesTestSupport.fileSystem()
+        def fs = StorageTestSupport.fileSystem()
         def storage = new DirectWorkDirStorage((FovusPath) fs.getPath('/fovus-storage/pipelines'), Stub(S3Connector))
 
         expect:

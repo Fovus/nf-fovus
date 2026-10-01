@@ -1,6 +1,6 @@
 package fovus.plugin
 
-import fovus.plugin.nio.PipelinesTestSupport
+import fovus.plugin.nio.StorageTestSupport
 import fovus.plugin.s3.FovusS3Client
 import fovus.plugin.s3.S3Entry
 import fovus.plugin.s3.StorageCredentialsException
@@ -37,7 +37,7 @@ class ExitStatusReaderTest extends Specification {
             // a closure literal is what makes Spock run it per call; a closure held in a variable would be returned as the value
             getObject(*_) >> { response() }
         }
-        return PipelinesTestSupport.fileSystem(client).getPath('/fovus-storage/pipelines/p-1-user/fovus-work/ab/cdef')
+        return StorageTestSupport.fileSystem(client).getPath('/fovus-storage/pipelines/p-1-user/fovus-work/ab/cdef')
     }
 
     def 'a local exit file should be read as before'() {
@@ -84,7 +84,7 @@ class ExitStatusReaderTest extends Specification {
             new ResponseInputStream<GetObjectResponse>(GetObjectResponse.builder().build(), AbortableInputStream.create(body))
         }
         def client = new FovusS3Client(s3, s3, 'bucket', 'pipelines/p-1-user/', null)
-        def taskDir = PipelinesTestSupport.fileSystem(client).getPath('/fovus-storage/pipelines/p-1-user/fovus-work/ab/cdef')
+        def taskDir = StorageTestSupport.fileSystem(client).getPath('/fovus-storage/pipelines/p-1-user/fovus-work/ab/cdef')
 
         expect:
         reader.read(taskDir.resolve('.exitcode'), taskDir) == null

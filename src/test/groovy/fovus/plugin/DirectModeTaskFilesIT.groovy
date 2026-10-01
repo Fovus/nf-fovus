@@ -1,7 +1,7 @@
 package fovus.plugin
 
 import fovus.plugin.nio.FovusPath
-import fovus.plugin.nio.PipelinesTestSupport
+import fovus.plugin.nio.StorageTestSupport
 import fovus.plugin.s3.MinioSupport
 import nextflow.file.FileHelper
 import nextflow.processor.TaskBean
@@ -37,7 +37,7 @@ class DirectModeTaskFilesIT extends Specification {
     }
 
     def setup() {
-        final fs = PipelinesTestSupport.fileSystem(MinioSupport.fovusClient(s3))
+        final fs = StorageTestSupport.fileSystem(MinioSupport.fovusClient(s3))
         workDir = (FovusPath) fs.getPath("/fovus-storage/pipelines/p-1-user/fovus-work/ab/${UUID.randomUUID()}")
         Files.createDirectories(workDir)
     }
