@@ -18,8 +18,9 @@ import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.spi.FileSystemProvider
 
 /**
- * Staging an input from another file system (https://, ftp://, the user's own s3://) into the pipelines/ area:
- * a source that fails part way must never leave a truncated object behind, since FilePorter would reuse it.
+ * Staging an input from another file system (https://, ftp://, the user's own s3://) into the pipelines/ area, or
+ * publishing one into files/: a source that fails part way must never leave a truncated object behind, since
+ * FilePorter would reuse it.
  */
 class ForeignSourceUploadTest extends Specification {
 

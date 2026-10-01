@@ -27,6 +27,7 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.FileTime
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -34,8 +35,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * {@code pipelines/}), on top of {@link FovusS3Client}, whose guard decides what each area allows: {@code jobs/}
  * is read-only. A path's S3 key is {@link #keyOf}, e.g. {@code pipelines/<pid>/fovus-work/ab/cdef/.command.run}.
  * Folders are key prefixes, with a zero-byte {@code <key>/} marker once created. A copy or move may cross areas
- * (a task output published into {@code files/}). Deleting always succeeds, as for the rest of the provider: a
- * delete S3 denies is left in place with a warning, but one the guard refuses fails.
+ * (a task output published into {@code files/}). Deleting succeeds whether or not the key existed, as for the rest
+ * of the provider, with two exceptions: a delete the guard refuses fails, and one S3 denies (the write credentials
+ * cannot delete) is warned about and left in place, and the next replace of that key is allowed; see
+ * {@link #deniedDeletes}.
  */
 @Slf4j
 @CompileStatic
@@ -43,6 +46,14 @@ class S3Storage {
 
     private final FovusS3Client s3
     private final AtomicBoolean deniedDeleteWarned = new AtomicBoolean()
+    /**
+     * The keys whose delete S3 denied, so the object is still there. Nextflow's {@code publishDir} overwrites a
+     * published file by deleting it and copying again; with a delete that cannot happen, that second copy would
+     * find the target and fail. The write replaces an object atomically anyway, so a target in this set may be
+     * replaced once, without {@code REPLACE_EXISTING}, which gives the caller the effect of the delete it asked
+     * for. Only the writes need this: {@link #exists} and the listings keep showing the object.
+     */
+    private final Set<String> deniedDeletes = ConcurrentHashMap.newKeySet()
 
     S3Storage(FovusS3Client s3) {
         this.s3 = s3
@@ -65,9 +76,7 @@ class S3Storage {
         }
         // Before the existence check below, which would call S3 for a path that cannot be written anyway
         s3.checkWritable(keyOf(path))
-        if (opts.contains(StandardOpenOption.CREATE_NEW) && exists(path)) {
-            throw new FileAlreadyExistsException(path.toString())
-        }
+        if (opts.contains(StandardOpenOption.CREATE_NEW)) checkAbsent(path, false)
         return s3.newOutputStream(keyOf(path))
     }
 
@@ -135,7 +144,10 @@ class S3Storage {
     }
 
     void createDirectory(FovusPath dir) throws IOException {
-        s3.putDirectoryMarker(keyOf(dir))
+        final key = keyOf(dir)
+        s3.putDirectoryMarker(key)
+        // The marker was written again: the denied delete of the old one, if any, is used up
+        deniedDeletes.remove(key + '/')
     }
 
     void delete(FovusPath path) throws IOException {
@@ -144,12 +156,22 @@ class S3Storage {
         // left in place with a warning, so this runs before the try, and before any S3 call
         s3.checkWritable(key)
         try {
-            if (s3.head(key) != null) s3.delete(key)
             // a folder: remove its marker, if it has one
-            else s3.delete(key + '/')
+            deleteRemembering(s3.head(key) != null ? key : key + '/')
         }
         catch (AccessDeniedException e) {
             leftInPlace(e, path.toString())
+        }
+    }
+
+    /** Delete one object; when S3 denies it, the object is still there, and that is remembered: see {@link #deniedDeletes}. */
+    private void deleteRemembering(String key) throws IOException {
+        try {
+            s3.delete(key)
+        }
+        catch (AccessDeniedException e) {
+            deniedDeletes.add(key)
+            throw e
         }
     }
 
@@ -167,9 +189,7 @@ class S3Storage {
     void copy(FovusPath source, FovusPath target, CopyOption... options) throws IOException {
         // The target first: a jobs/ target is refused without a call, and the existence check below is one
         s3.checkWritable(keyOf(target))
-        if (!replaces(options) && exists(target)) {
-            throw new FileAlreadyExistsException(target.toString())
-        }
+        if (!replaces(options)) checkAbsent(target, false)
         final attributes = readAttributes(source)
         if (attributes.isDirectory()) {
             createDirectory(target)
@@ -192,9 +212,9 @@ class S3Storage {
             delete(source)
             return
         }
-        if (!replaces(options) && exists(target)) {
-            throw new FileAlreadyExistsException(target.toString())
-        }
+        // With REPLACE_EXISTING the objects are merged into an existing target folder: S3 has no folders to replace,
+        // and Nextflow's own folder copy merges the same way
+        if (!replaces(options)) checkAbsent(target, true)
         final sourceKey = keyOf(source) + '/'
         final targetKey = keyOf(target) + '/'
         final entries = s3.listAll(sourceKey)
@@ -205,7 +225,7 @@ class S3Storage {
         }
         for (S3Entry entry : entries) {
             try {
-                s3.delete(entry.key)
+                deleteRemembering(entry.key)
             }
             catch (AccessDeniedException e) {
                 // S3 denies every delete the same way: report the folder once rather than ask for each object
@@ -219,13 +239,27 @@ class S3Storage {
         return Arrays.asList(options).contains(StandardCopyOption.REPLACE_EXISTING)
     }
 
+    /**
+     * Throw {@link FileAlreadyExistsException} when {@code target} exists, unless its delete was denied by S3 and
+     * it is replaced now (once; see {@link #deniedDeletes}). A folder was deleted through its marker.
+     */
+    private void checkAbsent(FovusPath target, boolean folder) throws IOException {
+        if (!exists(target)) return
+        final key = folder ? keyOf(target) + '/' : keyOf(target)
+        if (deniedDeletes.remove(key)) {
+            // The folder's files are replaced one by one: their own denied deletes are used up with it
+            if (folder) deniedDeletes.removeIf { String denied -> denied.startsWith(key) }
+            return
+        }
+        throw new FileAlreadyExistsException(target.toString())
+    }
+
     /** Upload a file or folder, from the local disk or from another file system such as https:// or s3://. */
     void upload(Path local, FovusPath target, CopyOption... options) throws IOException {
         s3.checkWritable(keyOf(target))
-        if (!replaces(options) && exists(target)) {
-            throw new FileAlreadyExistsException(target.toString())
-        }
-        if (!Files.isDirectory(local)) {
+        final folder = Files.isDirectory(local)
+        if (!replaces(options)) checkAbsent(target, folder)
+        if (!folder) {
             uploadFile(local, keyOf(target))
             return
         }

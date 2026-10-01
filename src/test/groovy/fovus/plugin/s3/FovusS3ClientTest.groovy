@@ -35,7 +35,9 @@ class FovusS3ClientTest extends Specification {
     /** Keys in the files/ area of Fovus storage, which direct mode reads and writes. */
     static final List<String> FILES_KEYS = ['files/x', 'files/tmp/x', 'files/data/in.txt', 'files/results/']
     /** Keys in the jobs/ area of Fovus storage, which direct mode reads but does not write. */
-    static final List<String> JOBS_KEYS = ['jobs/j-1/x', 'jobs/x', 'jobs/']
+    static final List<String> JOBS_KEYS = ['jobs/j-1/x', 'jobs/x', 'jobs/', 'jobs']
+    /** The writable folders named without their trailing slash, as a path to the folder itself is: they stand for the folder. */
+    static final List<String> BARE_FOLDER_KEYS = ['files', 'pipelines/p-1-user', 'pipelines/tmp', 'pipelines/collect-file']
     /** Keys in the files/ and jobs/ areas, which direct mode reads. */
     static final List<String> AREA_KEYS = ['files/x', 'files/tmp/x', 'files/data/in.txt', 'jobs/j-1/x']
     static final String OUTSIDE_REASON = 'Refusing to write outside pipelines/p-1-user/, the session scratch folders and files/'
@@ -265,8 +267,22 @@ class FovusS3ClientTest extends Specification {
         0 * s3._
 
         where:
-        key << [OTHER_PIPELINE_KEY, 'pipelines/p-1-user2/x', 'pipelines/p-1-user', '', 'pipelines/tmp',
-                'pipelines/collect-file', 'files', 'jobs', 'jobs/./x', 'jobs/j-1/../x'] + DOT_SEGMENT_KEYS + NEAR_SCRATCH_KEYS + NEAR_AREA_KEYS
+        key << [OTHER_PIPELINE_KEY, 'pipelines/p-1-user2/x', '', 'pipelines', 'jobs/./x', 'jobs/j-1/../x'] +
+                DOT_SEGMENT_KEYS + NEAR_SCRATCH_KEYS + NEAR_AREA_KEYS
+    }
+
+    @Unroll
+    def 'the writable folder named #key should be writable as the folder it stands for'() {
+        when:
+        client.checkWritable(key)
+        client.putDirectoryMarker(key)
+
+        then:
+        1 * s3.putObject({ PutObjectRequest r -> r.key() == key + '/' }, _ as RequestBody)
+        noExceptionThrown()
+
+        where:
+        key << BARE_FOLDER_KEYS
     }
 
     @Unroll

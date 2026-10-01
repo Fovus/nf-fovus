@@ -52,9 +52,12 @@ import static java.lang.String.format;
  * considered "implicit" directories. They can be listed, traversed and deleted.
  * <p>
  * Deviations from FileSystem provider API: - Deleting a file or directory
- * always succeeds, regardless of whether the file/directory existed before the
+ * succeeds regardless of whether the file/directory existed before the
  * operation was issued i.e. Files.delete() and Files.deleteIfExists() are
- * equivalent.
+ * equivalent. - A delete that S3 denies (the write credentials cannot delete) does not fail: the object is
+ * left in place, with a warning, and the next copy or write to that key replaces it, which is what
+ * {@code publishDir} overwriting relies on. A delete that the access guard refuses (in {@code jobs/}, or
+ * outside the writable folders) does fail.
  * <p>
  * Direct mode only: every area ({@code files}, {@code jobs}, {@code pipelines}) is read and written through one
  * {@link S3Storage} with the AWS S3 SDK, once the executor has attached an S3 client to this provider. The client's

@@ -70,6 +70,7 @@ class FovusStorageAreasTest extends Specification {
     /** The GetObject, PutObject, CopyObject and DeleteObject requests it received, in order. */
     List<String> calls = []
     ListAppender<ILoggingEvent> storageLog
+    Level storageLevelBefore
 
     def setup() {
         // As in WorkDirStorageFactoryTest: FileHelper.asPath(URI) then resolves fovus:// paths as it does under
@@ -79,7 +80,11 @@ class FovusStorageAreasTest extends Specification {
 
     def cleanup() {
         FileHelper.providersMap.remove('fovus')
-        if (storageLog != null) (LoggerFactory.getLogger(S3Storage) as Logger).detachAppender(storageLog)
+        if (storageLog != null) {
+            final logger = LoggerFactory.getLogger(S3Storage) as Logger
+            logger.detachAppender(storageLog)
+            logger.level = storageLevelBefore
+        }
     }
 
     /** {@code fovus:///fovus-storage/<path>}, resolved the way Nextflow resolves it. */
@@ -154,6 +159,7 @@ class FovusStorageAreasTest extends Specification {
     /** The log of {@link S3Storage}, where a delete that is left in place is reported. */
     private ListAppender<ILoggingEvent> captureStorageLog() {
         final logger = LoggerFactory.getLogger(S3Storage) as Logger
+        storageLevelBefore = logger.level
         logger.level = Level.DEBUG
         storageLog = new ListAppender<ILoggingEvent>()
         storageLog.start()
@@ -555,6 +561,8 @@ class FovusStorageAreasTest extends Specification {
         'move target'                   | { Path inJobs, Path inFiles, Path onDisk -> Files.move(inFiles, inJobs) }
         'move source, which is deleted' | { Path inJobs, Path inFiles, Path onDisk -> Files.move(inJobs, inFiles) }
         'delete'                        | { Path inJobs, Path inFiles, Path onDisk -> Files.delete(inJobs) }
+        'delete of the area root'       | { Path inJobs, Path inFiles, Path onDisk -> Files.delete(inJobs.fileSystem.getPath('/fovus-storage/jobs')) }
+        'move source, the area root'    | { Path inJobs, Path inFiles, Path onDisk -> Files.move(inJobs.fileSystem.getPath('/fovus-storage/jobs'), inFiles) }
     }
 
     def 'checkAccess for WRITE should fail on a jobs path as read-only, and on nothing else'() {
@@ -583,7 +591,6 @@ class FovusStorageAreasTest extends Specification {
         Files.isWritable(fovus('files/x'))
         Files.isWritable(fovus('pipelines/p-1-user/x'))
         Files.isWritable(fovus('files'))
-        Files.isWritable(fovus('pipelines'))
     }
 
     @Unroll
@@ -600,6 +607,183 @@ class FovusStorageAreasTest extends Specification {
         where:
         [kind, area] << [['default', 'https'], AREAS].combinations()
         expected = area != 'jobs'
+    }
+
+    def 'a copy over an existing files/ object should fail, unless the delete that S3 denied came first'() {
+        given:
+        attachClient()
+        bucketWith(['pipelines/p-1-user/out.txt': 'new', 'files/results/out.txt': 'old'])
+        def logged = captureStorageLog()
+        def source = fovus('pipelines/p-1-user/out.txt')
+        def target = fovus('files/results/out.txt')
+
+        when: 'no delete came first'
+        FileHelper.copyPath(source, target)
+
+        then:
+        thrown(FileAlreadyExistsException)
+        objects['files/results/out.txt'] == 'old'
+
+        when: 'as PublishDir overwrites: delete the target (S3 denies it, so it stays), then copy again'
+        FileHelper.deletePath(target)
+        FileHelper.copyPath(source, target)
+
+        then: 'the object stays visible until it is replaced, and then holds the new content'
+        noExceptionThrown()
+        objects['files/results/out.txt'] == 'new'
+        logged.list.findAll { ILoggingEvent event -> event.level == Level.WARN }.size() == 1
+
+        when: 'the denied delete allowed one replacement only'
+        FileHelper.copyPath(source, target)
+
+        then:
+        thrown(FileAlreadyExistsException)
+    }
+
+    def 'the denied delete of an existing object should not hide it'() {
+        given:
+        attachClient()
+        bucketWith(['files/results/out.txt': 'old'])
+
+        when:
+        Files.delete(fovus('files/results/out.txt'))
+
+        then:
+        Files.exists(fovus('files/results/out.txt'))
+        Files.size(fovus('files/results/out.txt')) == 3
+    }
+
+    def 'publishDir overwriting a folder output in files/ should replace every file, as one object after the other'() {
+        given:
+        attachClient()
+        bucketWith(folderOutput() + ['files/results/dir/'            : '',
+                                     'files/results/dir/a.txt'       : 'old a',
+                                     'files/results/dir/sub/'        : '',
+                                     'files/results/dir/sub/b.txt'   : 'old b',
+                                     'files/results/dir/stale.txt'   : 'stale'])
+        def source = fovus('pipelines/p-1-user/out/dir')
+        def target = fovus('files/results/dir')
+
+        when: 'no delete came first'
+        FileHelper.copyPath(source, target)
+
+        then:
+        thrown(FileAlreadyExistsException)
+
+        when: 'as PublishDir overwrites: delete the target folder (S3 denies it), then copy again'
+        FileHelper.deletePath(target)
+        FileHelper.copyPath(source, target)
+
+        then: 'every file holds the new content; one that is not in the output was left in place'
+        noExceptionThrown()
+        objectsUnder('files/') == publishedFolder() + ['files/results/dir/stale.txt': 'stale']
+    }
+
+    def 'a move of a folder over an existing files/ folder should replace it after its denied delete'() {
+        given:
+        attachClient()
+        bucketWith(folderOutput() + ['files/results/dir/old.txt': 'old'])
+        def source = fovus('pipelines/p-1-user/out/dir')
+        def target = fovus('files/results/dir')
+
+        when: 'no delete came first'
+        FileHelper.movePath(source, target)
+
+        then:
+        thrown(FileAlreadyExistsException)
+        objectsUnder('files/') == ['files/results/dir/old.txt': 'old']
+
+        when: 'as PublishDir overwrites: delete the target folder (S3 denies it), then move again'
+        FileHelper.deletePath(target)
+        FileHelper.movePath(source, target)
+
+        then:
+        noExceptionThrown()
+        objectsUnder('files/') == publishedFolder() + ['files/results/dir/old.txt': 'old']
+
+        when: 'the denied delete allowed one replacement only'
+        FileHelper.movePath(source, target)
+
+        then:
+        thrown(FileAlreadyExistsException)
+    }
+
+    def 'an upload and a CREATE_NEW write should replace an object whose delete was denied, and only then'() {
+        given:
+        attachClient()
+        bucketWith(['files/in/x.txt': 'old', 'files/in/y.txt': 'old'])
+        def local = Files.writeString(tempDir.resolve('x.txt'), 'new')
+
+        when: 'no delete came first'
+        provider.upload(local, fovus('files/in/x.txt'))
+
+        then:
+        thrown(FileAlreadyExistsException)
+
+        when:
+        Files.newOutputStream(fovus('files/in/y.txt'), StandardOpenOption.CREATE_NEW)
+
+        then:
+        thrown(FileAlreadyExistsException)
+
+        when:
+        Files.delete(fovus('files/in/x.txt'))
+        Files.delete(fovus('files/in/y.txt'))
+        provider.upload(local, fovus('files/in/x.txt'))
+        Files.newOutputStream(fovus('files/in/y.txt'), StandardOpenOption.CREATE_NEW).withCloseable { OutputStream out -> out.write('newer'.bytes) }
+
+        then:
+        objects == ['files/in/x.txt': 'new', 'files/in/y.txt': 'newer']
+    }
+
+    def 'an upload of a folder should replace the files of a folder whose delete was denied'() {
+        given:
+        attachClient()
+        bucketWith(['files/in/dir/': '', 'files/in/dir/a.txt': 'old'])
+        def local = Files.createDirectories(tempDir.resolve('dir'))
+        Files.writeString(local.resolve('a.txt'), 'new')
+
+        when: 'no delete came first'
+        provider.upload(local, fovus('files/in/dir'))
+
+        then:
+        thrown(FileAlreadyExistsException)
+
+        when:
+        FileHelper.deletePath(fovus('files/in/dir'))
+        provider.upload(local, fovus('files/in/dir'))
+
+        then:
+        objects == ['files/in/dir/': '', 'files/in/dir/a.txt': 'new']
+    }
+
+    def 'a delete S3 allows should leave nothing to replace'() {
+        given:
+        attachClient()
+        bucketWith(['pipelines/p-1-user/out.txt': 'new', 'files/results/out.txt': 'old'], true, true)
+        def target = fovus('files/results/out.txt')
+
+        when: 'the object is deleted for real, and then somebody else writes it again'
+        Files.delete(target)
+        objects['files/results/out.txt'] = 'other'
+        Files.copy(fovus('pipelines/p-1-user/out.txt'), target)
+
+        then: 'that is a plain existing target, not the one whose delete was denied'
+        thrown(FileAlreadyExistsException)
+        objects['files/results/out.txt'] == 'other'
+    }
+
+    def 'the root of a writable folder should be deleted as the folder it is'() {
+        given:
+        attachClient()
+        bucketWith(['files/a.txt': 'a'])
+
+        when: 'the marker delete is denied by S3, and left in place'
+        Files.delete(fovus('files'))
+
+        then:
+        noExceptionThrown()
+        calls == ['DELETE files/']
     }
 
     // The two cases below stand in for the MinIO integration tests (S3StorageIT), which are not run here.

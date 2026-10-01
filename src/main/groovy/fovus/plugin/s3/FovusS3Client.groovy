@@ -73,6 +73,7 @@ class FovusS3Client {
     static final String JOBS_AREA = 'jobs/'
     /** Why a write into {@link #JOBS_AREA} is refused. Explicitly public: the NIO provider, in Java, reads it. */
     public static final String JOBS_READ_ONLY = 'Fovus storage jobs/ is read-only'
+    private static final List<String> JOBS_FOLDERS = List.of(JOBS_AREA)
 
     private final S3Client reader
     private final S3Client writer
@@ -573,12 +574,14 @@ class FovusS3Client {
 
     /** Inside a readable folder, including the folder itself written without its trailing slash. */
     private boolean readable(String key) {
-        return within(key, readableFolders) || (key != null && !hasDotSegment(key) && readableFolders.contains(key + '/'))
+        return inOrIs(key, readableFolders)
     }
 
     /**
-     * Throws, with no S3 call, unless {@code key} may be written. For callers that must tell the guard's refusal
-     * from S3's own denial of the call they make next, such as a delete that is left in place when S3 denies it.
+     * Throws, with no S3 call, unless {@code key} may be written: inside a writable folder, or the folder itself
+     * without its trailing slash, which is how a path to it is spelled. For callers that must tell the guard's
+     * refusal from S3's own denial of the call they make next, such as a delete that is left in place when S3
+     * denies it.
      */
     void checkWritable(String key) throws AccessDeniedException {
         writable(key)
@@ -587,16 +590,21 @@ class FovusS3Client {
     private String writable(String key) throws AccessDeniedException {
         if (inScope(key)) return key
         // Dot segments can lead anywhere, whatever the key starts with: they are refused as outside, even in jobs/
-        if (key != null && !hasDotSegment(key) && key.startsWith(JOBS_AREA)) {
+        if (inOrIs(key, JOBS_FOLDERS)) {
             throw new AccessDeniedException(uri(key), null, JOBS_READ_ONLY)
         }
         throw new AccessDeniedException(uri(key), null,
                 "Refusing to write outside ${prefix}, the session scratch folders and files/".toString())
     }
 
-    /** Under the pipeline prefix, a session scratch folder or the files area: where this client writes. */
+    /** Under the pipeline prefix, a session scratch folder or the files area, or one of them itself: where this client writes. */
     private boolean inScope(String key) {
-        return within(key, allowedFolders)
+        return inOrIs(key, allowedFolders)
+    }
+
+    /** Under one of {@code folders}, or one of them itself named without its trailing {@code /}. */
+    private static boolean inOrIs(String key, List<String> folders) {
+        return within(key, folders) || (key != null && !hasDotSegment(key) && folders.contains(key + '/'))
     }
 
     /** Under one of {@code folders}, with no {@code .} or {@code ..} segment that would lead back out of it. */

@@ -23,6 +23,28 @@ class S3StorageTest extends Specification {
     @TempDir
     Path tempDir
 
+    ListAppender<ILoggingEvent> storageLog
+    Level storageLevelBefore
+
+    def cleanup() {
+        if (storageLog != null) {
+            final logger = LoggerFactory.getLogger(S3Storage) as Logger
+            logger.detachAppender(storageLog)
+            logger.level = storageLevelBefore
+        }
+    }
+
+    /** The log of {@link S3Storage}, where a delete that is left in place is reported; undone after the feature. */
+    private ListAppender<ILoggingEvent> captureStorageLog() {
+        final logger = LoggerFactory.getLogger(S3Storage) as Logger
+        storageLevelBefore = logger.level
+        logger.level = Level.DEBUG
+        storageLog = new ListAppender<ILoggingEvent>()
+        storageLog.start()
+        logger.addAppender(storageLog)
+        return storageLog
+    }
+
     private static List<String> names(Path folder) {
         return Files.list(folder).withCloseable { stream ->
             stream.map { Path p -> p.fileName.toString() }.sorted().collect(Collectors.toList())
@@ -124,11 +146,7 @@ class S3StorageTest extends Specification {
 
     def 'a denied delete should warn once, then log at debug level'() {
         given:
-        def logger = LoggerFactory.getLogger(S3Storage) as Logger
-        logger.level = Level.DEBUG
-        def appender = new ListAppender<ILoggingEvent>()
-        appender.start()
-        logger.addAppender(appender)
+        def appender = captureStorageLog()
         def client = Stub(FovusS3Client) {
             head(_) >> { String key -> object(key) }
             delete(_) >> { String key -> throw new AccessDeniedException(FovusS3Client.uri(key), null, "Fovus storage credentials don't allow delete on ${key} (write token)") }
@@ -143,18 +161,11 @@ class S3StorageTest extends Specification {
         denied*.level == [Level.WARN, Level.DEBUG, Level.DEBUG]
         denied[0].formattedMessage.contains('out/a.txt')
         denied[2].formattedMessage.contains('out/c.txt')
-
-        cleanup:
-        logger.detachAppender(appender)
     }
 
     def 'a delete the guard refuses should fail, not be left in place with a warning'() {
         given:
-        def logger = LoggerFactory.getLogger(S3Storage) as Logger
-        logger.level = Level.DEBUG
-        def appender = new ListAppender<ILoggingEvent>()
-        appender.start()
-        logger.addAppender(appender)
+        def appender = captureStorageLog()
         def client = Stub(FovusS3Client) {
             checkWritable(_) >> { String key -> throw new AccessDeniedException(FovusS3Client.uri(key), null, 'Fovus storage jobs/ is read-only') }
         }
@@ -167,9 +178,6 @@ class S3StorageTest extends Specification {
         def e = thrown(AccessDeniedException)
         e.reason == 'Fovus storage jobs/ is read-only'
         appender.list.findAll { it.formattedMessage.contains('was left in place') } == []
-
-        cleanup:
-        logger.detachAppender(appender)
     }
 
     def 'a folder move should copy every object under it, with its relative key, before deleting any'() {
@@ -220,11 +228,7 @@ class S3StorageTest extends Specification {
 
     def 'a folder move should warn once and stop deleting when the write token cannot delete'() {
         given:
-        def logger = LoggerFactory.getLogger(S3Storage) as Logger
-        logger.level = Level.DEBUG
-        def appender = new ListAppender<ILoggingEvent>()
-        appender.start()
-        logger.addAppender(appender)
+        def appender = captureStorageLog()
         def deleted = []
         def client = Stub(FovusS3Client) {
             head(_) >> null
@@ -246,9 +250,6 @@ class S3StorageTest extends Specification {
         def denied = appender.list.findAll { it.formattedMessage.contains('was left in place') }
         denied*.level == [Level.WARN]
         denied[0].formattedMessage.contains('/fovus-storage/pipelines/p-1-user/out was left in place')
-
-        cleanup:
-        logger.detachAppender(appender)
     }
 
     def 'a folder listing should not return the folder itself for an empty name'() {
