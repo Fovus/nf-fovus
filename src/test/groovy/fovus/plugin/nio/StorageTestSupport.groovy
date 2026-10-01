@@ -6,10 +6,10 @@ class StorageTestSupport {
 
     static final URI AREA = URI.create('fovus:///fovus-storage/pipelines')
 
-    /** A fresh provider's pipelines/ file system, with an S3 client attached when one is given. */
+    /** A fresh provider's pipelines/ file system, with an S3 client attached to the provider when one is given. */
     static FovusFileSystem fileSystem(FovusS3Client client = null) {
-        final fs = (FovusFileSystem) new FovusFileSystemProvider().newFileSystem(AREA, [:])
-        if (client != null) fs.attachS3Client(client)
-        return fs
+        final provider = new FovusFileSystemProvider()
+        if (client != null) provider.attachS3Client(client)
+        return (FovusFileSystem) provider.newFileSystem(AREA, [:])
     }
 }

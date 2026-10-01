@@ -1,5 +1,6 @@
 package fovus.plugin.storage
 
+import fovus.plugin.nio.FovusFileSystemProvider
 import fovus.plugin.nio.FovusPath
 import fovus.plugin.nio.StorageTestSupport
 import fovus.plugin.s3.FovusS3Client
@@ -15,11 +16,14 @@ import java.nio.file.Path
 
 class DirectWorkDirStorageTest extends Specification {
 
-    def 'prepare should attach the S3 client for the pipeline'() {
+    def 'prepare should attach the S3 client to the provider, for every area'() {
         given:
         def fs = StorageTestSupport.fileSystem()
+        def provider = (FovusFileSystemProvider) fs.provider()
+        def files = provider.newFileSystem(URI.create('fovus:///fovus-storage/files'), [:])
         def client = Stub(FovusS3Client) {
             head('pipelines/p-1-user/x') >> new S3Entry('pipelines/p-1-user/x', 3L, null, false)
+            head('files/data/in.txt') >> new S3Entry('files/data/in.txt', 5L, null, false)
         }
         def connector = Mock(S3Connector)
         def storage = new DirectWorkDirStorage((FovusPath) fs.getPath('/fovus-storage/pipelines'), connector)
@@ -27,9 +31,11 @@ class DirectWorkDirStorageTest extends Specification {
         when:
         storage.prepare('p-1-user')
 
-        then:
+        then: 'the work directory and a files/ input, on another file system of the same provider, both read through it'
         1 * connector.connect('p-1-user') >> client
+        provider.hasS3Client()
         Files.size(fs.getPath('/fovus-storage/pipelines/p-1-user/x')) == 3
+        Files.size(files.getPath('/fovus-storage/files/data/in.txt')) == 5
     }
 
     def 'a second prepare should keep the attached client and not fetch credentials again'() {
@@ -44,7 +50,7 @@ class DirectWorkDirStorageTest extends Specification {
 
         then:
         1 * connector.connect('p-1-user') >> Stub(FovusS3Client)
-        fs.hasS3Client()
+        fs.provider().hasS3Client()
     }
 
     def 'prepare should check read and write access at start-up'() {
@@ -62,7 +68,7 @@ class DirectWorkDirStorageTest extends Specification {
         then:
         1 * client.putDirectoryMarker('pipelines/p-1-user/fovus-work/')
         0 * client._
-        fs.hasS3Client()
+        fs.provider().hasS3Client()
     }
 
     def 'a failed start-up check should stop the run with its message and attach nothing'() {
@@ -81,7 +87,7 @@ class DirectWorkDirStorageTest extends Specification {
         def e = thrown(AbortOperationException)
         e.message.startsWith('[FOVUS] ')
         e.message.contains("Fovus storage credentials don't allow write on pipelines/p-1-user/fovus-work/ (write token)")
-        !fs.hasS3Client()
+        !fs.provider().hasS3Client()
     }
 
     def 'a credentials failure should stop the run with its message'() {

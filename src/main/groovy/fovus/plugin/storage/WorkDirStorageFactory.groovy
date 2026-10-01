@@ -36,7 +36,7 @@ class WorkDirStorageFactory {
                     '[FOVUS] Direct mode (a fovus:// workDir) is only for pipelines launched on your own machine; ' +
                     'Fovus-hosted runs use the Fovus storage mount')
         }
-        if (!workDir.isPipelinesAreaRoot()) {
+        if (workDir.fileType != FovusPath.PIPELINES || !workDir.isAreaRoot()) {
             throw new AbortOperationException(
                     "[FOVUS] In direct mode, workDir must be ${DIRECT_MODE_WORK_DIR}. Current work directory: ${workDir.toUri()}".toString())
         }

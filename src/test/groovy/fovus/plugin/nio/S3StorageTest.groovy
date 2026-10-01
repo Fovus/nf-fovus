@@ -15,7 +15,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.stream.Collectors
 
-/** Uploads, downloads and listings of the pipelines/ area against a stubbed S3 client. */
+/** S3 keys, uploads, downloads and listings of Fovus storage against a stubbed S3 client. */
 class S3StorageTest extends Specification {
 
     private static final String DIR = 'pipelines/p-1-user/dl'
@@ -35,6 +35,23 @@ class S3StorageTest extends Specification {
 
     private static S3Entry folder(String key) {
         return new S3Entry(key, 0L, null, true)
+    }
+
+    def 'the S3 key of #path should be #key'() {
+        given:
+        def fs = StorageTestSupport.fileSystem()
+
+        expect: 'the object the mount shows at that path; an area root is the area itself, so its folder is <area>/'
+        S3Storage.keyOf((FovusPath) fs.getPath(path)) == key
+
+        where:
+        path                                         | key
+        '/fovus-storage/files'                       | 'files'
+        '/fovus-storage/jobs/'                       | 'jobs'
+        '/fovus-storage/pipelines'                   | 'pipelines'
+        '/fovus-storage/files/data/in.txt'           | 'files/data/in.txt'
+        '/fovus-storage/jobs/j-1/out.txt'            | 'jobs/j-1/out.txt'
+        '/fovus-storage/pipelines/p-1-user/x/y.txt'  | 'pipelines/p-1-user/x/y.txt'
     }
 
     def 'a local folder reached through a symlink should upload every real file'() {

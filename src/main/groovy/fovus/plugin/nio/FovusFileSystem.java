@@ -31,27 +31,15 @@ import java.util.Set;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 
-import fovus.plugin.job.FovusJobClient;
-import fovus.plugin.s3.FovusS3Client;
-
+/** One area of Fovus storage ({@code files}, {@code jobs} or {@code pipelines}); its provider holds the S3 storage they share. */
 public class FovusFileSystem extends FileSystem {
 
     private final FovusFileSystemProvider provider;
 
-    private final FovusJobClient jobClient;
-
-
     private final String fileType;
 
-    public static final String NOT_ATTACHED_MESSAGE =
-            "Fovus storage pipelines/ paths can only be read or written in direct mode, after the Fovus executor has started";
-
-    /** Direct mode only: set by the executor once storage credentials exist. */
-    private volatile S3Storage pipelinesStorage;
-
-    public FovusFileSystem(FovusFileSystemProvider provider, FovusJobClient client, URI uri) {
+    public FovusFileSystem(FovusFileSystemProvider provider, URI uri) {
         this.provider = provider;
-        this.jobClient = client;
         this.fileType = FovusPath.getFileTypeOfUri(uri);
     }
 
@@ -73,7 +61,7 @@ public class FovusFileSystem extends FileSystem {
 
     @Override
     public boolean isReadOnly() {
-        return !FovusPath.PIPELINES.equals(fileType);
+        return FovusPath.JOBS.equals(fileType);
     }
 
     @Override
@@ -119,27 +107,5 @@ public class FovusFileSystem extends FileSystem {
     @Override
     public WatchService newWatchService() throws IOException {
         throw new UnsupportedOperationException();
-    }
-
-    public FovusJobClient getJobClient() {
-        return jobClient;
-    }
-
-    /** Direct mode: give the pipelines/ file system its S3 client once storage credentials exist. */
-    public void attachS3Client(FovusS3Client client) {
-        this.pipelinesStorage = new S3Storage(client);
-    }
-
-    /** Direct mode: whether an S3 client is already attached (by the trace observer, or the executor). */
-    public boolean hasS3Client() {
-        return pipelinesStorage != null;
-    }
-
-    S3Storage pipelinesStorage() {
-        final S3Storage storage = pipelinesStorage;
-        if (storage == null) {
-            throw new IllegalStateException(NOT_ATTACHED_MESSAGE);
-        }
-        return storage;
     }
 }

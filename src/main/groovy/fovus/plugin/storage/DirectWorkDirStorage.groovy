@@ -1,5 +1,6 @@
 package fovus.plugin.storage
 
+import fovus.plugin.nio.FovusFileSystemProvider
 import fovus.plugin.nio.FovusPath
 import fovus.plugin.nio.S3Storage
 import fovus.plugin.s3.FovusS3Client
@@ -33,12 +34,13 @@ class DirectWorkDirStorage implements WorkDirStorage {
      */
     @Override
     void prepare(String pipelineId) {
-        final fileSystem = workDir.getFileSystem()
-        if (fileSystem.hasS3Client()) {
+        // One client for every area: the provider is shared by the files/, jobs/ and pipelines/ file systems
+        final provider = (FovusFileSystemProvider) workDir.getFileSystem().provider()
+        if (provider.hasS3Client()) {
             log.debug "[FOVUS] Direct mode: Fovus storage is already connected for pipeline ${pipelineId}"
             return
         }
-        fileSystem.attachS3Client(connect(pipelineId))
+        provider.attachS3Client(connect(pipelineId))
         log.debug "[FOVUS] Direct mode: using Fovus storage for pipeline ${pipelineId} without a mount"
     }
 

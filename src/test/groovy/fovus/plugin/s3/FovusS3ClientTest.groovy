@@ -30,8 +30,13 @@ class FovusS3ClientTest extends Specification {
     static final List<String> SCRATCH_KEYS = ['pipelines/tmp/xx/yyy', 'pipelines/collect-file/abc', 'pipelines/tmp/', 'pipelines/collect-file/']
     /** Keys that look like the scratch folders but are not inside them. */
     static final List<String> NEAR_SCRATCH_KEYS = ['pipelines/tmpx/y', 'pipelines/collect-filex/y', 'pipelines/tmp/../p-2-user/x',
-                                                   'pipelines/collect-file/../p-2-user/x', 'pipelines/tmp/./x', 'files/tmp/x',
+                                                   'pipelines/collect-file/../p-2-user/x', 'pipelines/tmp/./x',
                                                    'tmp/x', 'collect-file/x', 'pipelines/p-1-user/../tmp/x']
+    /** Keys in the files/ and jobs/ areas of Fovus storage, which direct mode reads but does not write. */
+    static final List<String> AREA_KEYS = ['files/x', 'files/tmp/x', 'files/data/in.txt', 'jobs/j-1/x']
+    /** Keys that look like the files/ and jobs/ areas but are not inside them. */
+    static final List<String> NEAR_AREA_KEYS = ['filesx/y', 'jobsx/y', 'files/../pipelines/p-2-user/x', 'files/./x',
+                                                'jobs/j-1/../../pipelines/p-2-user/x', 'shared/x']
 
     S3Client s3 = Mock()
     RefreshingStorageCredentials credentials = Mock()
@@ -239,7 +244,8 @@ class FovusS3ClientTest extends Specification {
 
         where:
         dirKey << ['pipelines/p-1-usery', 'pipelines/p-2-user/', 'pipelines', '', PREFIX + '../p-2-user/', PREFIX + '..',
-                   'pipelines/tmpx', 'pipelines/collect-filex/', 'pipelines/tmp/../p-2-user/', 'pipelines/tmp/..']
+                   'pipelines/tmpx', 'pipelines/collect-filex/', 'pipelines/tmp/../p-2-user/', 'pipelines/tmp/..',
+                   'filesx', 'jobsx/', 'files/..', 'jobs/./j-1']
     }
 
     @Unroll
@@ -253,8 +259,8 @@ class FovusS3ClientTest extends Specification {
         0 * s3._
 
         where:
-        key << [OTHER_PIPELINE_KEY, 'pipelines/p-1-user2/x', 'pipelines/p-1-user', '', 'files/x', 'pipelines/tmp',
-                'pipelines/collect-file'] + DOT_SEGMENT_KEYS + NEAR_SCRATCH_KEYS
+        key << [OTHER_PIPELINE_KEY, 'pipelines/p-1-user2/x', 'pipelines/p-1-user', '', 'pipelines/tmp',
+                'pipelines/collect-file'] + AREA_KEYS + DOT_SEGMENT_KEYS + NEAR_SCRATCH_KEYS + NEAR_AREA_KEYS
     }
 
     @Unroll
@@ -295,7 +301,7 @@ class FovusS3ClientTest extends Specification {
     }
 
     @Unroll
-    def 'a read of #key outside the pipeline folder should look like a missing file'() {
+    def 'a read of #key outside the readable folders should look like a missing file'() {
         when:
         def head = client.head(key)
 
@@ -311,7 +317,42 @@ class FovusS3ClientTest extends Specification {
         0 * s3._
 
         where:
-        key << [OTHER_PIPELINE_KEY, 'pipelines/p-1-user2/x', 'files/x', ''] + DOT_SEGMENT_KEYS + NEAR_SCRATCH_KEYS
+        key << [OTHER_PIPELINE_KEY, 'pipelines/p-1-user2/x', ''] + DOT_SEGMENT_KEYS + NEAR_SCRATCH_KEYS + NEAR_AREA_KEYS
+    }
+
+    @Unroll
+    def 'a read of #key in Fovus storage files/ or jobs/ should reach S3'() {
+        when:
+        def found = client.head(key)
+        def text = client.getObject(key).text
+
+        then:
+        1 * s3.headObject({ HeadObjectRequest r -> r.key() == key && r.bucket() == 'bucket' }) >> HeadObjectResponse.builder().contentLength(1L).build()
+        1 * s3.getObject({ GetObjectRequest r -> r.key() == key && r.bucket() == 'bucket' }) >>
+                new ResponseInputStream<GetObjectResponse>(GetObjectResponse.builder().build(), AbortableInputStream.create(new ByteArrayInputStream('x'.bytes)))
+        found.size == 1L
+        text == 'x'
+
+        where:
+        key << AREA_KEYS
+    }
+
+    @Unroll
+    def 'the #area area should be listable from its root'() {
+        given:
+        s3.listObjectsV2Paginator(_ as ListObjectsV2Request) >> { ListObjectsV2Request request -> new ListObjectsV2Iterable(s3, request) }
+
+        when:
+        def found = client.hasChildren(area)
+        client.list(area)
+
+        then:
+        1 * s3.listObjectsV2({ ListObjectsV2Request r -> r.prefix() == area + '/' && r.maxKeys() == 1 }) >> ListObjectsV2Response.builder().keyCount(1).build()
+        1 * s3.listObjectsV2({ ListObjectsV2Request r -> r.prefix() == area + '/' && r.delimiter() == '/' }) >> ListObjectsV2Response.builder().isTruncated(false).build()
+        found
+
+        where:
+        area << ['files', 'jobs']
     }
 
     @Unroll

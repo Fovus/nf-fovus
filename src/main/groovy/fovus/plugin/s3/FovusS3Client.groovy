@@ -40,13 +40,15 @@ import java.util.concurrent.atomic.AtomicInteger
  * Nextflow's session scratch folders next to it, {@code pipelines/tmp/} and {@code pipelines/collect-file/}.
  * Nextflow writes those under its {@code workDir} itself (collectFile without {@code storeDir}, and the list
  * of collected files kept for {@code -resume}); mount mode writes them to the same keys through the mount.
+ * Reads also reach the user's files and job outputs, {@code files/} and {@code jobs/}, the inputs a pipeline
+ * names as {@code fovus://} paths.
  *
  * Reads use the download token and writes the upload token. Neither token is limited to the pipeline: both
- * reach the whole bucket. Every key is therefore checked before any call -- it must be inside the pipeline
- * folder or one of the scratch folders, with no {@code .} or {@code ..} segment -- and this guard is what
- * keeps the plugin there. Writes elsewhere are refused; reads elsewhere look like missing files. S3 errors
- * are reported by code, HTTP status, request ID and key only -- never the S3 error body, which can echo
- * the access key ID.
+ * reach the whole bucket. Every key is therefore checked before any call -- it must be inside one of those
+ * folders (for a write, the pipeline folder or a scratch folder), with no {@code .} or {@code ..} segment --
+ * and this guard is what keeps the plugin there. Writes elsewhere are refused; reads elsewhere look like
+ * missing files. S3 errors are reported by code, HTTP status, request ID and key only -- never the S3 error
+ * body, which can echo the access key ID.
  */
 @Slf4j
 @CompileStatic
@@ -65,6 +67,9 @@ class FovusS3Client {
             ['ExpiredToken', 'ExpiredTokenException', 'InvalidToken', 'TokenRefreshRequired'] as Set<String>
     /** Nextflow's session scratch folders, directly under its {@code workDir} (the pipelines area). */
     static final List<String> SESSION_SCRATCH_FOLDERS = List.of('tmp/', 'collect-file/')
+    /** The user's files, and their jobs' outputs: the other areas of Fovus storage, next to {@code pipelines/}. */
+    static final String FILES_AREA = 'files/'
+    static final String JOBS_AREA = 'jobs/'
 
     private final S3Client reader
     private final S3Client writer
@@ -73,8 +78,10 @@ class FovusS3Client {
     final int partSize
     private final int listPageSize
     private final RefreshingStorageCredentials credentials
-    /** The pipeline folder and the session scratch folders, each ending with {@code /}. */
+    /** The pipeline folder and the session scratch folders, each ending with {@code /}: where this client writes. */
     private final List<String> allowedFolders
+    /** Those, and the files and jobs areas: where this client reads. */
+    private final List<String> readableFolders
     /** The parts of every parallel upload and download of this client; see {@link #newTransferPool()}. */
     private final ThreadPoolExecutor transfers
 
@@ -92,6 +99,7 @@ class FovusS3Client {
         this.partSize = partSize
         this.listPageSize = listPageSize
         this.allowedFolders = allowedFolders(prefix)
+        this.readableFolders = (this.allowedFolders + [FILES_AREA, JOBS_AREA]).asImmutable()
         this.transfers = newTransferPool()
     }
 
@@ -556,9 +564,9 @@ class FovusS3Client {
         return dirKey == null || dirKey.endsWith('/') ? dirKey : dirKey + '/'
     }
 
-    /** Inside the pipeline or a scratch folder, including the folder itself written without its trailing slash. */
+    /** Inside a readable folder, including the folder itself written without its trailing slash. */
     private boolean readable(String key) {
-        return inScope(key) || (key != null && !hasDotSegment(key) && allowedFolders.contains(key + '/'))
+        return within(key, readableFolders) || (key != null && !hasDotSegment(key) && readableFolders.contains(key + '/'))
     }
 
     private String writable(String key) throws AccessDeniedException {
@@ -568,13 +576,15 @@ class FovusS3Client {
         return key
     }
 
-    /**
-     * Under the pipeline prefix or a session scratch folder, with no {@code .} or {@code ..} segment that would
-     * lead back out of it.
-     */
+    /** Under the pipeline prefix or a session scratch folder: where this client writes. */
     private boolean inScope(String key) {
+        return within(key, allowedFolders)
+    }
+
+    /** Under one of {@code folders}, with no {@code .} or {@code ..} segment that would lead back out of it. */
+    private static boolean within(String key, List<String> folders) {
         if (key == null || hasDotSegment(key)) return false
-        for (String folder : allowedFolders) {
+        for (String folder : folders) {
             if (key.startsWith(folder)) return true
         }
         return false

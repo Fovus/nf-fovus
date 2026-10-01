@@ -40,7 +40,7 @@ class FovusTraceObserverDirectModeTest extends Specification {
 
         then:
         1 * connector.connect('p-1-user') >> Stub(FovusS3Client)
-        fs.hasS3Client()
+        fs.provider().hasS3Client()
     }
 
     @Unroll

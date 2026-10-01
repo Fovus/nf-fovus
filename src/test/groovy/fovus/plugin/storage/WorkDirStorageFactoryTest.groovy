@@ -66,16 +66,19 @@ class WorkDirStorageFactoryTest extends Specification {
         spelling << ['fovus://fovus-storage/pipelines', 'fovus://fovus-storage/pipelines/']
     }
 
-    def 'a fovus workDir other than the pipelines area should be rejected'() {
+    def 'a fovus workDir of #workDir, other than the pipelines area, should be rejected'() {
         given:
-        def workDir = StorageTestSupport.fileSystem().getPath('/fovus-storage/pipelines/p-1-user')
+        def path = StorageTestSupport.fileSystem().getPath(workDir)
 
         when:
-        WorkDirStorageFactory.create(workDir, false, CONFIG)
+        WorkDirStorageFactory.create(path, false, CONFIG)
 
         then:
         def e = thrown(AbortOperationException)
         e.message.startsWith('[FOVUS] In direct mode, workDir must be fovus:///fovus-storage/pipelines.')
+
+        where:
+        workDir << ['/fovus-storage/pipelines/p-1-user', '/fovus-storage/files', '/fovus-storage/jobs']
     }
 
     def 'direct mode should be refused on a Fovus-hosted run'() {

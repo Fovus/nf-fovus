@@ -40,6 +40,8 @@ public class FovusPath implements Path {
 
     public static final String PIPELINES = "pipelines";
 
+    public static final String JOBS = "jobs";
+
     /**
      * Parts without fovus-storage prefix and fileType name.
      */
@@ -62,7 +64,7 @@ public class FovusPath implements Path {
     /**
      * Get the file type of this Fovus Path
      *
-     * @return files or jobs.
+     * @return files, jobs or pipelines: the storage area.
      */
     public String getFileType() {
         return fileType;
@@ -151,19 +153,13 @@ public class FovusPath implements Path {
     }
 
     /**
-     * Get the corresponding remote file path of this {@link FovusPath} object relatively to /fovus-storage/
+     * @return true for {@code /fovus-storage/<area>} itself, in any area, such as the work directory of direct
+     * mode: a folder that always exists
      */
-    public String toRemoteFilePath() {
-        return getFileType() + PATH_SEPARATOR + getKey();
+    public boolean isAreaRoot() {
+        return fileType != null && parts.isEmpty();
     }
 
-    /**
-     * @return true for {@code /fovus-storage/pipelines} itself: the work directory of direct mode
-     */
-    public boolean isPipelinesAreaRoot() {
-        return PIPELINES.equals(fileType) && parts.isEmpty();
-    }
-    
     @Override
     public FovusFileSystem getFileSystem() {
         return this.fileSystem;
@@ -512,7 +508,7 @@ public class FovusPath implements Path {
 
     /**
      * This method returns the cached {@link FovusFileMetadata} instance if this path has been created
-     * while iterating a directory structures by the {@link FovusPathIterator}.
+     * while listing a folder, by {@link S3Storage#newDirectoryStream}.
      * <br>
      * After calling this method the cached object is reset, so any following method invocation will return {@code null}.
      * This is necessary to discard the object meta-data and force to reload file attributes when required.

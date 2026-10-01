@@ -30,10 +30,11 @@ import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * NIO operations for the {@code pipelines/} area of Fovus storage in direct mode, on top of
- * {@link FovusS3Client}. A path's S3 key is its {@link FovusPath#toRemoteFilePath()}, e.g.
- * {@code pipelines/<pid>/fovus-work/ab/cdef/.command.run}. Folders are key prefixes, with a zero-byte
- * {@code <key>/} marker once created. Deleting always succeeds, as for the rest of the provider.
+ * NIO operations for every area of Fovus storage in direct mode ({@code files/}, {@code jobs/} and
+ * {@code pipelines/}), on top of {@link FovusS3Client}, whose guard decides what each area allows: {@code jobs/}
+ * is read-only. A path's S3 key is {@link #keyOf}, e.g. {@code pipelines/<pid>/fovus-work/ab/cdef/.command.run}.
+ * Folders are key prefixes, with a zero-byte {@code <key>/} marker once created. Deleting always succeeds, as for
+ * the rest of the provider.
  */
 @Slf4j
 @CompileStatic
@@ -46,8 +47,10 @@ class S3Storage {
         this.s3 = s3
     }
 
+    /** The S3 key of a path: {@code <area>} for an area root, else {@code <area>/<key>}, the object the mount shows at {@code /fovus-storage/<area>/<key>}. */
     static String keyOf(FovusPath path) {
-        return path.toRemoteFilePath()
+        final key = path.getKey()
+        return key.isEmpty() ? path.getFileType() : path.getFileType() + '/' + key
     }
 
     InputStream newInputStream(FovusPath path) throws IOException {
