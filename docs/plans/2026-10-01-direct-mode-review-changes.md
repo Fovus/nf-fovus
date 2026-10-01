@@ -6,7 +6,7 @@
 
 **Architecture:** `PipelinesStorage` becomes the area-agnostic `S3Storage`, attached once to the `fovus://` filesystem provider and used for `pipelines`, `files` and `jobs`. The CLI-backed `files`/`jobs` filesystem is deleted. `FovusS3Client` keeps its sync clients for metadata and small objects and its access guard (now per area), and delegates file transfers and streamed writes to a new `S3Transfers` seam implemented with `S3TransferManager` on the multipart-enabled Java async client (Netty).
 
-**Tech Stack:** Groovy 4 `@CompileStatic` + Java (joint compilation in `src/main/groovy`), Nextflow 25.10.0 plugin, AWS SDK for Java v2 2.31.0 (`s3`, `s3-transfer-manager`, `url-connection-client`, `netty-nio-client`), Spock 2.3, Gradle 8.14.
+**Tech Stack:** Groovy 4 `@CompileStatic` + Java (joint compilation in `src/main/groovy`), Nextflow 25.10.0 plugin, AWS SDK for Java v2 2.55.9 (`s3`, `s3-transfer-manager`, `url-connection-client`, `netty-nio-client`; written for 2.31.0, superseded during execution, see Task 3), Spock 2.3, Gradle 8.14.
 
 **Spec:** `docs/specs/2026-09-30-direct-storage-mode-design.md` (D9–D11, §6.3, §6.4, §9 `publishDir`, §10, §11). The earlier plan `docs/plans/2026-09-30-direct-mode-nf-fovus.md` built what this plan changes.
 
@@ -142,6 +142,8 @@
   `git commit -m "Write into Fovus storage files/ in direct mode and copy across storage areas"` (+ trailer)
 
 ### Task 3: File transfers and streamed writes through the S3 Transfer Manager
+
+> **Superseded during execution.** The execution ruling replaced parts of this task as written: the SDK is 2.55.9, not 2.31.0; a streamed write is a `BlockingOutputStreamAsyncRequestBody` of unknown length wrapped in a `BufferedSplittableAsyncRequestBody` with `bufferBeforeSend`, not `AsyncRequestBody.forBlockingOutputStream(null)`; downloads are one retried `GetObject` on a reader client that is not multipart, not a multipart `downloadFile`; an upload has at most 4 parts in flight, and a request waits up to 5 minutes for a free connection. Spec §6.4 is current; where the steps below disagree with it, the spec wins.
 
 **Files:**
 - Modify: `build.gradle`

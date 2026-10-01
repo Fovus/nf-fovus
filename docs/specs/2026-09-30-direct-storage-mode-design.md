@@ -397,9 +397,12 @@ the plugin calling the Fovus API itself (duplicates CLI sign-in and needs its to
 The plugin never enables AWS SDK request logging.
 
 The SDK's Netty client logs wire dumps of every request and response, including the signed headers
-and the session token, at DEBUG under `io.netty`. Nextflow's default log levels never enable it.
-Users must not turn on `-trace io.netty`, or DEBUG for `io.netty`, in direct mode. The plugin's
-tests keep `io.netty` and the SDK at INFO for the same reason.
+and the session token, at DEBUG under `io.netty`. The SDK's request signer (`DefaultV4RequestSigner`,
+"AWS4 Canonical Request") logs each canonical request it signs, `x-amz-security-token` header
+included, at DEBUG under `software.amazon`, for the sync and the async clients alike. Nextflow's
+default log levels never enable either. Users must not turn on debug or trace logging for
+`io.netty` or `software.amazon` (e.g. `-trace io.netty`, `-debug software.amazon`) in direct mode.
+The plugin's tests keep `io.netty` and the SDK at INFO for the same reason.
 
 ### Limits of this design
 
@@ -482,10 +485,11 @@ strongly consistent, so reads after that point see the final objects.
 - `symlink` / `link` / `rellink` modes: Nextflow switches remote work directories to `copy` with a
   warning; an unset mode becomes `copy` too.
 - `move` mode: the copy succeeds, but the source objects stay in Fovus storage, since the write
-  token cannot delete; the plugin warns once and logs further ones at debug level.
+  token cannot delete; the plugin warns once per storage area and logs further ones at debug level.
 - Fovus storage `files/` target (`publishDir 'fovus:///fovus-storage/files/results'`, D10): copied
-  inside the bucket, `CopyObject` when allowed, else streamed. With `overwrite` (the default) the
-  old object cannot be deleted first (warned once); the new object replaces it. With `mode 'move'`
+  inside the bucket, `CopyObject` when allowed, else streamed; after the first denied `CopyObject`,
+  every later copy streams without trying it. With `overwrite` (the default) the old object cannot
+  be deleted first (warned once for `files/`); the new object replaces it. With `mode 'move'`
   the source stays in place, as for a local target. A `jobs/` target fails as read-only.
 
 ### `-resume`
@@ -537,7 +541,7 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 | 5xx, `SlowDown`, timeouts | SDK standard retries, up to 10 attempts |
 | `NoSuchKey` / 404 | `NoSuchFileException` |
 | `AccessDenied` (not expiry) | no retry; "Fovus storage credentials don't allow `<op>` on `<key>` (read/write token)" |
-| `AccessDenied` on delete (only `publishDir` with `mode: 'move'` deletes) | warning only; the file is published and the source is left in place |
+| `AccessDenied` on delete (`publishDir` with `mode: 'move'`, or overwriting in `files/`) | warning only, once per storage area, then at debug level; the object stays in place, and the next write to that path replaces it |
 | Write outside `pipelines/<pid>/`, the scratch folders and `files/` | refused before calling S3 |
 | Write into `jobs/` | refused before calling S3: "Fovus storage jobs/ is read-only" |
 | Read outside `pipelines/<pid>/`, the scratch folders, `files/` and `jobs/` | `NoSuchFileException` |

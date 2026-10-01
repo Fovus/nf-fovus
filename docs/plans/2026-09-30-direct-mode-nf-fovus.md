@@ -4999,9 +4999,9 @@ Check FUSE really is unavailable: `fovus storage mount` must fail.
 ./nextflow run main.nf -plugins nf-fovus -w fovus:///fovus-storage/pipelines --samplesheet fovus:///fovus-storage/files/e2e/samplesheet.csv --fromJob fovus:///fovus-storage/jobs/<jobId>/results.txt
 ```
 
-Do not add `-trace io.netty` to any run in these steps: its output includes the signed request headers and the session token.
+Do not add debug or trace logging for `io.netty` or `software.amazon` (e.g. `-trace io.netty`, `-debug software.amazon`) to any run in these steps: their output includes the signed request headers and the session token.
 
-Expected: the run completes; `results/out/size.txt` contains `125829120`; `results/out/header.txt` is the CSV's first line; `FLAKY` prints `recovered` after one retry; `ARRAYED` runs as one array job and prints three paths; `REMOTE` prints the size of the `https://` file (compare with `curl -s <url> | wc -c`); `moved/folder/a.txt` and `moved/folder/sub/b.txt` exist locally, `.nextflow.log` has exactly one WARN saying files were left in place, and the folder is still under the task's folder in Fovus storage; both `collectFile`s print `x` and `y` (the one without `storeDir` from `fovus:///fovus-storage/pipelines/tmp/…`, the other from the local `collected/stored.txt`).
+Expected: the run completes; `results/out/size.txt` contains `125829120`; `results/out/header.txt` is the CSV's first line; `FLAKY` prints `recovered` after one retry; `ARRAYED` runs as one array job and prints three paths; `REMOTE` prints the size of the `https://` file (compare with `curl -s <url> | wc -c`); `moved/folder/a.txt` and `moved/folder/sub/b.txt` exist locally, `.nextflow.log` has exactly one WARN saying the folder stays in Fovus storage, and the folder is still under the task's folder in Fovus storage; both `collectFile`s print `x` and `y` (the one without `storeDir` from `fovus:///fovus-storage/pipelines/tmp/…`, the other from the local `collected/stored.txt`).
 
 Publishing and reading Fovus storage:
 

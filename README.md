@@ -197,9 +197,12 @@ files at `/fovus-storage/pipelines/...` as in mount mode.
   - As for any remote work directory, the `symlink`, `link` and `rellink` modes, and an unset mode,
     become `copy`.
   - `overwrite` (the default) replaces an existing object in `files/` with the new one. The credentials
-    cannot delete the old one first, so the plugin warns about it once.
+    cannot delete the old one first: the plugin warns that it stays in Fovus storage until the new one
+    replaces it.
   - `mode: 'move'` copies and leaves the source files in the pipeline's work directory in Fovus storage,
     with a warning, because the direct-mode credentials cannot delete.
+  - Each of these warnings is logged once per storage area (`files/`, `pipelines/`), and further ones at
+    debug level.
 - `fovus://` paths work only in direct mode. In a run with a mount they fail with this message, and you
   use the mounted path instead:
 
@@ -210,14 +213,18 @@ files at `/fovus-storage/pipelines/...` as in mount mode.
   A download is one request, retried as a whole, into a temporary file that is moved into place once it is
   complete. Data the plugin streams without knowing its size in advance, such as a remote input or a
   publish into `files/`, is limited to about 156 GiB. Uploading a local file is not.
+- When an upload in parts fails or is cancelled, the AWS SDK may log a WARN "Failed to abort previous
+  multipart upload": the direct-mode credentials cannot abort uploads. It is harmless: the parts already
+  sent never become a file, and stay invisible until the bucket's lifecycle rule removes them.
 - `cleanup = true` has no effect, as for any remote work directory in Nextflow.
 - Switching a pipeline between mount and direct mode re-runs its tasks on `-resume`.
 - The short-lived credentials can reach your whole Fovus storage bucket. The plugin keeps itself to the
   pipeline's own folder, Nextflow's scratch folders (`pipelines/tmp/`, `pipelines/collect-file/`), `files/`
   and, for reading only, `jobs/`.
-- Do not turn on debug or trace logging for `io.netty` (for example `-trace io.netty`) in direct mode. Its
-  output includes the signed request headers and the session token, which would end up in `.nextflow.log`.
-  Nextflow's default log levels do not enable it.
+- Do not turn on debug or trace logging for `io.netty` or `software.amazon` (for example `-trace io.netty`
+  or `-debug software.amazon`) in direct mode. Their output includes the signed request headers and the
+  session token (Netty's dumps of each request, and the SDK's request signer logging each request it
+  signs), which would end up in `.nextflow.log`. Nextflow's default log levels do not enable it.
 - Your own AWS credentials are neither used nor changed: `s3://` inputs from your buckets keep using them.
   Your AWS configuration, such as a custom endpoint URL, does not apply to Fovus storage either.
 
