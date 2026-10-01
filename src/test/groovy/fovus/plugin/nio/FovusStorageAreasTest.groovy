@@ -4,11 +4,18 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import com.esotericsoftware.kryo.Kryo
+import com.esotericsoftware.kryo.io.Input
+import com.esotericsoftware.kryo.io.Output
 import fovus.plugin.s3.FovusS3Client
 import fovus.plugin.s3.FovusS3ClientTest
 import fovus.plugin.s3.RecordingUploadStream
 import fovus.plugin.s3.S3Entry
 import fovus.plugin.s3.S3Transfers
+import fovus.plugin.s3.S3UploadStream
+import fovus.plugin.util.FovusPathFactory
+import fovus.plugin.util.FovusPathSerializer
+import nextflow.extension.FilesEx
 import nextflow.file.FileHelper
 import org.slf4j.LoggerFactory
 import software.amazon.awssdk.core.ResponseInputStream
@@ -42,6 +49,7 @@ import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.NotDirectoryException
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.stream.Collectors
@@ -60,6 +68,9 @@ class FovusStorageAreasTest extends Specification {
     ]
 
     static final String JOBS_READ_ONLY = 'Fovus storage jobs/ is read-only'
+
+    /** Names a user may give a folder or file that a URI cannot hold as they are. */
+    static final List<String> AWKWARD_NAMES = ['out.txt', 'x[1].txt', 'a#b.txt', '100%.txt', 'p%20q.txt', 'what?.txt', 'é ü.txt']
 
     @TempDir
     Path tempDir
@@ -93,9 +104,12 @@ class FovusStorageAreasTest extends Specification {
         }
     }
 
-    /** {@code fovus:///fovus-storage/<path>}, resolved the way Nextflow resolves it. */
+    /**
+     * {@code fovus:///fovus-storage/<path>}, resolved the way Nextflow resolves it: the text as a pipeline names it
+     * (spaces and all) made a URI as {@code FileHelper.toPathURI} does, then {@code FileHelper.asPath(URI)}.
+     */
     private static Path fovus(String path) {
-        return FileHelper.asPath(URI.create("fovus:///fovus-storage/${path}"))
+        return FileHelper.asPath(new URI(null, null, "fovus:///fovus-storage/${path}".toString(), null, null))
     }
 
     /** What direct mode does once credentials exist: one client for the pipeline, attached to the provider. */
@@ -230,6 +244,40 @@ class FovusStorageAreasTest extends Specification {
         path.toUri().toString() == 'fovus:///fovus-storage/pipelines/p-1-user/fovus-work/ab/cdef'
         path.parent.toString() == '/fovus-storage/pipelines/p-1-user/fovus-work/ab'
         !fs.isReadOnly()
+    }
+
+    def 'a URI should encode what a URI cannot hold, and decode back to the name'() {
+        expect:
+        fovus('files/My Results/x[1].txt').toUri().toString() == 'fovus:///fovus-storage/files/My%20Results/x%5B1%5D.txt'
+        fovus('files/a#b%20c?.txt').toUri().toString() == 'fovus:///fovus-storage/files/a%23b%2520c%3F.txt'
+        fovus('files/My Results/x[1].txt').toUri().path == '/fovus-storage/files/My Results/x[1].txt'
+        fovus('files').toUri().toString() == 'fovus:///fovus-storage/files/'
+    }
+
+    @Unroll
+    def 'a path with #name in it should come back equal from each form Nextflow keeps it in'() {
+        given:
+        def path = fovus("files/My Results/${name}")
+        def kryo = new Kryo()
+        def serialized = new Output(1024, -1)
+        new FovusPathSerializer().write(kryo, serialized, (FovusPath) path)
+
+        expect: 'its URI, and that URI as text'
+        path.toUri().path == "/fovus-storage/files/My Results/${name}".toString()
+        FovusPath.getFileTypeOfUri(path.toUri()) == 'files'
+        FileHelper.asPath(path.toUri()) == path
+        FileHelper.asPath(URI.create(path.toUri().toString())) == path
+
+        and: 'the URI string of the plugin path factory, which FilesEx.toUriString returns, parsed back by FileHelper.asPath'
+        new FovusPathFactory().toUriString(path) == "fovus://fovus-storage/files/My Results/${name}".toString()
+        FilesEx.toUriString(path) == new FovusPathFactory().toUriString(path)
+        FileHelper.asPath(FilesEx.toUriString(path)) == path
+
+        and: 'the -resume cache entry the plugin serializer writes'
+        new FovusPathSerializer().read(kryo, new Input(serialized.toBytes()), FovusPath) == path
+
+        where:
+        name << AWKWARD_NAMES
     }
 
     def 'an area root should be /fovus-storage/<area> itself, in every area'() {
@@ -429,6 +477,60 @@ class FovusStorageAreasTest extends Specification {
         objects['pipelines/p-1-user/fovus-work/ab/cdef/out.txt'] == 'hello'
     }
 
+    @Unroll
+    def 'a missing files/ path with #name in a folder with a space should not exist, and its attributes should be missing'() {
+        given:
+        attachClient()
+        bucketWith([:])
+        def missing = fovus("files/My Results/${name}")
+
+        expect:
+        !Files.exists(missing)
+
+        when:
+        Files.readAttributes(missing, BasicFileAttributes)
+
+        then: 'the message names the path as the pipeline spells it'
+        def e = thrown(NoSuchFileException)
+        e.file == "fovus:///fovus-storage/files/My Results/${name}".toString()
+
+        when:
+        Files.newDirectoryStream(missing)
+
+        then:
+        def listing = thrown(NoSuchFileException)
+        listing.file == "fovus:///fovus-storage/files/My Results/${name}".toString()
+
+        where:
+        name << AWKWARD_NAMES
+    }
+
+    def 'publishDir into a files/ folder with a space in its name should copy the output'() {
+        given:
+        attachClient()
+        bucketWith(['pipelines/p-1-user/fovus-work/ab/cdef/out.txt': 'hello'])
+        def folder = fovus('files/My Results')
+
+        when: 'as publishDir does it: the target resolved against the publish folder, then copied through the provider'
+        FileHelper.copyPath(fovus('pipelines/p-1-user/fovus-work/ab/cdef/out.txt'), folder.resolve('out [1].txt'))
+
+        then:
+        objects['files/My Results/out [1].txt'] == 'hello'
+    }
+
+    def 'a write check on a jobs/ path with a space should fail as read-only'() {
+        given:
+        attachClient()
+
+        when:
+        provider.checkAccess(fovus('jobs/j 1/out [1].txt'), AccessMode.WRITE)
+
+        then:
+        def e = thrown(AccessDeniedException)
+        e.reason == JOBS_READ_ONLY
+        e.file == 'fovus:///fovus-storage/jobs/j 1/out [1].txt'
+    }
+
     def 'publishDir into files/ should copy with CopyObject when it is allowed'() {
         given:
         attachClient()
@@ -470,7 +572,7 @@ class FovusStorageAreasTest extends Specification {
         objectsUnder('pipelines/') == folderOutput()
         def warnings = logged.list.findAll { ILoggingEvent event -> event.level == Level.WARN }
         warnings.size() == 1
-        warnings[0].formattedMessage.contains('/fovus-storage/pipelines/p-1-user/out/dir was left in place')
+        warnings[0].formattedMessage.contains('fovus:///fovus-storage/pipelines/p-1-user/out/dir stays in Fovus storage')
         calls.findAll { String call -> call.startsWith('DELETE') }.size() == 1
         !warnings[0].formattedMessage.contains('SECRET-BODY')
     }
@@ -772,6 +874,101 @@ class FovusStorageAreasTest extends Specification {
 
         then:
         objects == ['files/in/dir/': '', 'files/in/dir/a.txt': 'new']
+    }
+
+    @Unroll
+    def 'a write that replaces an object whose delete was denied should use up that denial: #write'() {
+        given:
+        attachClient()
+        bucketWith(['pipelines/p-1-user/out.txt': 'new', 'files/results/out.txt': 'old'])
+        def source = fovus('pipelines/p-1-user/out.txt')
+        def target = fovus('files/results/out.txt')
+        def local = Files.writeString(tempDir.resolve('out.txt'), 'new')
+
+        when: 'the delete is denied, then the object is written again by a write that replaces whatever is there'
+        Files.delete(target)
+        action.call(source, target, local)
+
+        then:
+        objects['files/results/out.txt'] == 'new'
+
+        when: 'a later copy that must not replace an existing object'
+        Files.copy(source, target)
+
+        then: 'it finds the object written since, not the one whose delete was denied'
+        thrown(FileAlreadyExistsException)
+
+        where:
+        write                          | action
+        'copy with REPLACE_EXISTING'   | { Path s, Path t, Path l -> Files.copy(s, t, StandardCopyOption.REPLACE_EXISTING) }
+        'move with REPLACE_EXISTING'   | { Path s, Path t, Path l -> Files.move(s, t, StandardCopyOption.REPLACE_EXISTING) }
+        'upload with REPLACE_EXISTING' | { Path s, Path t, Path l -> t.fileSystem.provider().upload(l, t, StandardCopyOption.REPLACE_EXISTING) }
+        'newOutputStream'              | { Path s, Path t, Path l -> Files.newOutputStream(t).withCloseable { OutputStream out -> out.write('new'.bytes) } }
+        'newByteChannel'               | { Path s, Path t, Path l -> Files.write(t, 'new'.bytes) }
+    }
+
+    def 'an abandoned write should keep the denial of the delete it did not replace'() {
+        given:
+        attachClient()
+        bucketWith(['pipelines/p-1-user/out.txt': 'new', 'files/results/out.txt': 'old'])
+        def target = fovus('files/results/out.txt')
+
+        when: 'the delete is denied, then a write starts but is abandoned, so the old object is still there'
+        Files.delete(target)
+        def out = (S3UploadStream) Files.newOutputStream(target)
+        out.write('partial'.bytes)
+        out.abort()
+        out.close()
+        Files.copy(fovus('pipelines/p-1-user/out.txt'), target)
+
+        then: 'the copy replaces the old object, as the delete asked'
+        objects['files/results/out.txt'] == 'new'
+    }
+
+    def 'a folder upload that replaces a folder whose delete was denied should use up that denial'() {
+        given:
+        attachClient()
+        bucketWith(['files/in/dir/': '', 'files/in/dir/a.txt': 'old'])
+        def local = Files.createDirectories(tempDir.resolve('dir'))
+        Files.writeString(local.resolve('a.txt'), 'new')
+
+        when: 'the folder delete is denied, then the folder is uploaded again with REPLACE_EXISTING'
+        FileHelper.deletePath(fovus('files/in/dir'))
+        provider.upload(local, fovus('files/in/dir'), StandardCopyOption.REPLACE_EXISTING)
+
+        then:
+        objects == ['files/in/dir/': '', 'files/in/dir/a.txt': 'new']
+
+        when: 'a later upload that must not replace it'
+        provider.upload(local, fovus('files/in/dir'))
+
+        then:
+        thrown(FileAlreadyExistsException)
+    }
+
+    def 'a denied delete should be warned about once per area, and further ones at debug level'() {
+        given:
+        attachClient()
+        bucketWith(['pipelines/p-1-user/a.txt': 'a', 'pipelines/p-1-user/b.txt': 'b', 'files/x.txt': 'x', 'files/y.txt': 'y'])
+        def logged = captureStorageLog()
+
+        when: 'the source deletes of a move, in pipelines/, and the deletes before an overwrite, in files/'
+        ['pipelines/p-1-user/a.txt', 'pipelines/p-1-user/b.txt', 'files/x.txt', 'files/y.txt'].each { String key -> Files.delete(fovus(key)) }
+
+        then:
+        def warnings = logged.list.findAll { ILoggingEvent event -> event.level == Level.WARN }*.formattedMessage
+        warnings == ["[FOVUS] Fovus storage credentials don't allow delete on pipelines/p-1-user/a.txt (write token) -- " +
+                             "fovus:///fovus-storage/pipelines/p-1-user/a.txt stays in Fovus storage: the direct-mode credentials cannot delete. " +
+                             "A later write to the same path replaces it. (Further ones in pipelines/ are logged at debug level.)",
+                     "[FOVUS] Fovus storage credentials don't allow delete on files/x.txt (write token) -- " +
+                             "fovus:///fovus-storage/files/x.txt stays in Fovus storage: the direct-mode credentials cannot delete. " +
+                             "A later write to the same path replaces it. (Further ones in files/ are logged at debug level.)"]
+        def debug = logged.list.findAll { ILoggingEvent event -> event.level == Level.DEBUG }*.formattedMessage
+        debug.contains("[FOVUS] Fovus storage credentials don't allow delete on pipelines/p-1-user/b.txt (write token) -- " +
+                               "fovus:///fovus-storage/pipelines/p-1-user/b.txt stays in Fovus storage")
+        debug.contains("[FOVUS] Fovus storage credentials don't allow delete on files/y.txt (write token) -- " +
+                               "fovus:///fovus-storage/files/y.txt stays in Fovus storage")
+        !logged.list.any { ILoggingEvent event -> event.formattedMessage.contains('SECRET-BODY') }
     }
 
     def 'a delete S3 allows should leave nothing to replace'() {

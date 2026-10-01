@@ -25,6 +25,7 @@ import javax.annotation.Nullable;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.file.*;
 import java.util.*;
 import java.util.Objects;
@@ -402,18 +403,21 @@ public class FovusPath implements Path {
         return new FovusPath(fileSystem, null, resultParts);
     }
 
+    /**
+     * {@code fovus:///fovus-storage/{fileType}/{key}}, with what a URI cannot hold as it is (a space, {@code [},
+     * {@code #}, {@code %}...) percent-encoded, as Nextflow's own {@code FileHelper.toPathURI} encodes a path:
+     * {@link URI#getPath()} gives the names back as they are.
+     */
     @Override
     public URI toUri() {
-        StringBuilder builder = new StringBuilder();
-        builder.append("fovus://");
-        builder.append(FOVUS_PATH_PREFIX);
-        builder.append(PATH_SEPARATOR);
-        builder.append(fileType);
-        builder.append(PATH_SEPARATOR);
-        builder.append(Joiner.on(PATH_SEPARATOR).join(parts));
-
-        // Eg: fovus:///fovus-storage/{fileType}/{key}
-        return URI.create(builder.toString());
+        final String path = FOVUS_PATH_PREFIX + PATH_SEPARATOR + fileType + PATH_SEPARATOR + Joiner.on(PATH_SEPARATOR).join(parts);
+        try {
+            // The empty authority keeps the three slashes
+            return new URI("fovus", "", path, null, null);
+        } catch (URISyntaxException e) {
+            // Every character of the path is encoded as needed, so this cannot happen
+            throw new IllegalStateException("Fovus path cannot be made a URI: " + this, e);
+        }
     }
 
     @Override

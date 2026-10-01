@@ -144,7 +144,7 @@ class S3StorageTest extends Specification {
         names(out) == ['sub']
     }
 
-    def 'a denied delete should warn once, then log at debug level'() {
+    def 'a denied delete should warn once in an area, then log at debug level'() {
         given:
         def appender = captureStorageLog()
         def client = Stub(FovusS3Client) {
@@ -157,7 +157,7 @@ class S3StorageTest extends Specification {
         ['a', 'b', 'c'].each { Files.delete(fs.getPath("/fovus-storage/pipelines/p-1-user/out/${it}.txt")) }
 
         then:
-        def denied = appender.list.findAll { it.formattedMessage.contains('was left in place') }
+        def denied = appender.list.findAll { it.formattedMessage.contains('stays in Fovus storage') }
         denied*.level == [Level.WARN, Level.DEBUG, Level.DEBUG]
         denied[0].formattedMessage.contains('out/a.txt')
         denied[2].formattedMessage.contains('out/c.txt')
@@ -177,7 +177,7 @@ class S3StorageTest extends Specification {
         then:
         def e = thrown(AccessDeniedException)
         e.reason == 'Fovus storage jobs/ is read-only'
-        appender.list.findAll { it.formattedMessage.contains('was left in place') } == []
+        appender.list.findAll { it.formattedMessage.contains('stays in Fovus storage') } == []
     }
 
     def 'a folder move should copy every object under it, with its relative key, before deleting any'() {
@@ -247,9 +247,9 @@ class S3StorageTest extends Specification {
         then:
         noExceptionThrown()
         deleted == ['pipelines/p-1-user/out/a.txt']
-        def denied = appender.list.findAll { it.formattedMessage.contains('was left in place') }
+        def denied = appender.list.findAll { it.formattedMessage.contains('stays in Fovus storage') }
         denied*.level == [Level.WARN]
-        denied[0].formattedMessage.contains('/fovus-storage/pipelines/p-1-user/out was left in place')
+        denied[0].formattedMessage.contains('fovus:///fovus-storage/pipelines/p-1-user/out stays in Fovus storage')
     }
 
     def 'a folder listing should not return the folder itself for an empty name'() {

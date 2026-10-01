@@ -123,6 +123,42 @@ class S3TransferFailureTest extends Specification {
         upload.text == 'hello'
     }
 
+    def 'once CopyObject was denied, later copies should stream without asking again'() {
+        given:
+        def first = new RecordingUploadStream()
+        def second = new RecordingUploadStream()
+
+        when:
+        client.copy(SOURCE, KEY, 5L)
+        client.copy(SOURCE, 'files/results/out.bin', 5L)
+
+        then: 'one CopyObject, for the first copy only'
+        1 * s3.copyObject(_ as CopyObjectRequest) >> { throw FovusS3ClientTest.s3Error(403, 'AccessDenied') }
+        2 * s3.getObject({ GetObjectRequest r -> r.key() == SOURCE }) >>> [responseStream(new ByteArrayInputStream('hello'.bytes)),
+                                                                          responseStream(new ByteArrayInputStream('again'.bytes))]
+        1 * transfers.newUploadStream(KEY) >> first
+        1 * transfers.newUploadStream('files/results/out.bin') >> second
+        first.text == 'hello'
+        second.text == 'again'
+        second.published
+    }
+
+    def 'a CopyObject failure other than access denied should not stop later copies from asking'() {
+        when:
+        client.copy(SOURCE, KEY, 5L)
+
+        then:
+        thrown(IOException)
+        1 * s3.copyObject(_ as CopyObjectRequest) >> { throw FovusS3ClientTest.s3Error(500, 'InternalError') }
+
+        when:
+        client.copy(SOURCE, KEY, 5L)
+
+        then:
+        1 * s3.copyObject(_ as CopyObjectRequest) >> CopyObjectResponse.builder().build()
+        0 * transfers._
+    }
+
     def 'a CopyObject failure other than access denied should not fall back'() {
         when:
         client.copy(SOURCE, KEY, 5L)

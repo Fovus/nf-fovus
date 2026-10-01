@@ -3,6 +3,7 @@ package fovus.plugin.nio
 import fovus.plugin.s3.FovusS3Client
 import fovus.plugin.s3.S3Entry
 import fovus.plugin.s3.S3ReadChannel
+import fovus.plugin.s3.S3UploadStream
 import fovus.plugin.s3.S3WriteChannel
 import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
@@ -28,7 +29,6 @@ import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.FileTime
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * NIO operations for every area of Fovus storage in direct mode ({@code files/}, {@code jobs/} and
@@ -37,21 +37,26 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Folders are key prefixes, with a zero-byte {@code <key>/} marker once created. A copy or move may cross areas
  * (a task output published into {@code files/}). Deleting succeeds whether or not the key existed, as for the rest
  * of the provider, with two exceptions: a delete the guard refuses fails, and one S3 denies (the write credentials
- * cannot delete) is warned about and left in place, and the next replace of that key is allowed; see
- * {@link #deniedDeletes}.
+ * cannot delete) is warned about, once per area, and left in place, and the next replace of that key is allowed;
+ * see {@link #deniedDeletes}.
  */
 @Slf4j
 @CompileStatic
 class S3Storage {
 
     private final FovusS3Client s3
-    private final AtomicBoolean deniedDeleteWarned = new AtomicBoolean()
+    /**
+     * The areas whose denied delete was warned about. Once per area: the source deletes of a move ({@code pipelines})
+     * and the deletes before an overwrite ({@code files}) are different events, so neither hides the other.
+     */
+    private final Set<String> deniedDeleteWarned = ConcurrentHashMap.newKeySet()
     /**
      * The keys whose delete S3 denied, so the object is still there. Nextflow's {@code publishDir} overwrites a
      * published file by deleting it and copying again; with a delete that cannot happen, that second copy would
      * find the target and fail. The write replaces an object atomically anyway, so a target in this set may be
      * replaced once, without {@code REPLACE_EXISTING}, which gives the caller the effect of the delete it asked
-     * for. Only the writes need this: {@link #exists} and the listings keep showing the object.
+     * for. Only the writes need this: {@link #exists} and the listings keep showing the object. Any write of the
+     * key that succeeds, replacing or not, uses the entry up (see {@link #written}): the object is a new one then.
      */
     private final Set<String> deniedDeletes = ConcurrentHashMap.newKeySet()
 
@@ -63,6 +68,14 @@ class S3Storage {
     static String keyOf(FovusPath path) {
         final key = path.getKey()
         return key.isEmpty() ? path.getFileType() : path.getFileType() + '/' + key
+    }
+
+    /**
+     * A path for a message: {@code fovus:///fovus-storage/<area>/<key>} as the pipeline spells it, not encoded as
+     * {@link FovusPath#toUri} is, and as {@link FovusS3Client} names the keys in its own errors.
+     */
+    static String uriOf(FovusPath path) {
+        return FovusS3Client.uri(keyOf(path))
     }
 
     InputStream newInputStream(FovusPath path) throws IOException {
@@ -77,7 +90,7 @@ class S3Storage {
         // Before the existence check below, which would call S3 for a path that cannot be written anyway
         s3.checkWritable(keyOf(path))
         if (opts.contains(StandardOpenOption.CREATE_NEW)) checkAbsent(path, false)
-        return s3.newOutputStream(keyOf(path))
+        return new WriteStream(keyOf(path), s3.newOutputStream(keyOf(path)))
     }
 
     SeekableByteChannel newByteChannel(FovusPath path, Set<? extends OpenOption> options) throws IOException {
@@ -96,7 +109,7 @@ class S3Storage {
             // An area root always exists, as a folder, even while nothing is under it
             if (dir.isAreaRoot()) return new ListedDirectoryStream([])
             if (s3.head(keyOf(dir)) != null) throw new NotDirectoryException(dir.toString())
-            throw new NoSuchFileException(dir.toUri().toString())
+            throw new NoSuchFileException(uriOf(dir))
         }
 
         final List<Path> children = []
@@ -130,7 +143,7 @@ class S3Storage {
         final entry = s3.head(key)
         if (entry != null) return file(key, entry.size, entry.lastModified)
         if (s3.hasChildren(key + '/')) return directory(key + '/')
-        throw new NoSuchFileException(path.toUri().toString())
+        throw new NoSuchFileException(uriOf(path))
     }
 
     boolean exists(FovusPath path) throws IOException {
@@ -146,8 +159,7 @@ class S3Storage {
     void createDirectory(FovusPath dir) throws IOException {
         final key = keyOf(dir)
         s3.putDirectoryMarker(key)
-        // The marker was written again: the denied delete of the old one, if any, is used up
-        deniedDeletes.remove(key + '/')
+        written(key + '/')
     }
 
     void delete(FovusPath path) throws IOException {
@@ -160,7 +172,7 @@ class S3Storage {
             deleteRemembering(s3.head(key) != null ? key : key + '/')
         }
         catch (AccessDeniedException e) {
-            leftInPlace(e, path.toString())
+            leftInPlace(e, path)
         }
     }
 
@@ -175,13 +187,26 @@ class S3Storage {
         }
     }
 
-    /** Every delete is denied the same way (the write credentials cannot delete): say so once, not per file. */
-    private void leftInPlace(AccessDeniedException denied, String what) {
-        if (deniedDeleteWarned.compareAndSet(false, true)) {
-            log.warn "[FOVUS] ${denied.reason ?: denied.message} -- ${what} was left in place (further files left in place are logged at debug level)"
+    /**
+     * The object at {@code key} was written: whatever a denied delete left there is gone, so that delete no longer
+     * lets a write replace the key (see {@link #deniedDeletes}).
+     */
+    private void written(String key) {
+        deniedDeletes.remove(key)
+    }
+
+    /**
+     * Every delete is denied the same way (the write credentials cannot delete): say so once per area, not per file.
+     * The reason is the client's, which names the key and the token, never the S3 error body.
+     */
+    private void leftInPlace(AccessDeniedException denied, FovusPath path) {
+        final area = path.getFileType()
+        final stays = "[FOVUS] ${denied.reason ?: denied.message} -- ${uriOf(path)} stays in Fovus storage"
+        if (deniedDeleteWarned.add(area)) {
+            log.warn "${stays}: the direct-mode credentials cannot delete. A later write to the same path replaces it. (Further ones in ${area}/ are logged at debug level.)"
         }
         else {
-            log.debug "[FOVUS] ${denied.reason ?: denied.message} -- ${what} was left in place"
+            log.debug stays
         }
     }
 
@@ -196,6 +221,7 @@ class S3Storage {
             return
         }
         s3.copy(keyOf(source), keyOf(target), attributes.size())
+        written(keyOf(target))
     }
 
     /**
@@ -222,6 +248,7 @@ class S3Storage {
             final destination = targetKey + entry.key.substring(sourceKey.length())
             if (entry.directory) s3.putDirectoryMarker(destination)
             else s3.copy(entry.key, destination, entry.size)
+            written(destination)
         }
         for (S3Entry entry : entries) {
             try {
@@ -229,7 +256,7 @@ class S3Storage {
             }
             catch (AccessDeniedException e) {
                 // S3 denies every delete the same way: report the folder once rather than ask for each object
-                leftInPlace(e, source.toString())
+                leftInPlace(e, source)
                 return
             }
         }
@@ -263,13 +290,12 @@ class S3Storage {
             uploadFile(local, keyOf(target))
             return
         }
-        final FovusS3Client client = s3
         final S3Storage storage = this
         // Follow links, like Files.isDirectory above: a symlinked folder, or a symlinked sub-folder, is uploaded as a folder
         Files.walkFileTree(local, EnumSet.of(FileVisitOption.FOLLOW_LINKS), Integer.MAX_VALUE, new SimpleFileVisitor<Path>() {
             @Override
             FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
-                client.putDirectoryMarker(keyOf(within(target, local, dir)))
+                storage.createDirectory(within(target, local, dir))
                 return FileVisitResult.CONTINUE
             }
 
@@ -289,6 +315,7 @@ class S3Storage {
     private void uploadFile(Path source, String key) throws IOException {
         if (source.getFileSystem() == FileSystems.getDefault()) {
             s3.uploadFile(source, key)
+            written(key)
             return
         }
         final long expected = knownSize(source)
@@ -301,6 +328,7 @@ class S3Storage {
             }
             out.close()
             complete = true
+            written(key)
         }
         finally {
             // A no-op once close() has run, whether or not it succeeded; otherwise it discards the partial upload
@@ -376,6 +404,43 @@ class S3Storage {
 
     private static FovusFileAttributes file(String key, long size, Instant lastModified) {
         return new FovusFileAttributes(key, lastModified == null ? null : FileTime.from(lastModified), size, false, true)
+    }
+
+    /** A write of {@link #newOutputStream}: once it is published, the key is {@link #written}. */
+    @CompileStatic
+    private final class WriteStream extends S3UploadStream {
+
+        private final String key
+        private final S3UploadStream upload
+        /** A close after an abort publishes nothing: the upload's close is a no-op then. */
+        private boolean aborted
+
+        WriteStream(String key, S3UploadStream upload) {
+            this.key = key
+            this.upload = upload
+        }
+
+        @Override
+        void write(int b) throws IOException {
+            upload.write(b)
+        }
+
+        @Override
+        void write(byte[] bytes, int offset, int length) throws IOException {
+            upload.write(bytes, offset, length)
+        }
+
+        @Override
+        void close() throws IOException {
+            upload.close()
+            if (!aborted) written(key)
+        }
+
+        @Override
+        void abort() {
+            aborted = true
+            upload.abort()
+        }
     }
 
     @CompileStatic

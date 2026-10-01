@@ -245,7 +245,7 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
                 "path must be absolute: %s", fovusPath);
         // The whole area is read-only, its root included
         if (FovusPath.JOBS.equals(fovusPath.getFileType()) && Arrays.asList(modes).contains(AccessMode.WRITE)) {
-            throw new AccessDeniedException(fovusPath.toUri().toString(), null, FovusS3Client.JOBS_READ_ONLY);
+            throw new AccessDeniedException(S3Storage.uriOf(fovusPath), null, FovusS3Client.JOBS_READ_ONLY);
         }
         if (!fovusPath.isAreaRoot()) {
             // throws NoSuchFileException when the path does not exist

@@ -24,6 +24,7 @@ import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * S3 access to Fovus storage in direct mode: the work directory, {@code pipelines/<pid>/} in the user's Fovus
@@ -73,6 +74,8 @@ class FovusS3Client implements Closeable {
     private final List<String> allowedFolders
     /** Those, and the jobs area: where this client reads. */
     private final List<String> readableFolders
+    /** Set once S3 denied a CopyObject: the credentials do not allow it, so {@link #copy} streams from then on. */
+    private final AtomicBoolean copyObjectDenied = new AtomicBoolean()
 
     FovusS3Client(S3Client reader, S3Client writer, S3Transfers transfers, String bucket, String prefix,
                   RefreshingStorageCredentials credentials, int listPageSize = DEFAULT_LIST_PAGE_SIZE) {
@@ -267,12 +270,13 @@ class FovusS3Client implements Closeable {
 
     /**
      * Copy a readable key to a writable one, in any area (a task output into {@code files/}, for {@code publishDir}):
-     * CopyObject when allowed, otherwise a streamed download and upload.
+     * CopyObject when allowed, otherwise a streamed download and upload. The write token is expected to deny
+     * CopyObject: once it has, every later copy streams without asking again.
      */
     void copy(String sourceKey, String targetKey, long size) throws IOException {
         writable(targetKey)
         if (!readable(sourceKey)) throw new NoSuchFileException(uri(sourceKey))
-        if (size <= MAX_COPY_OBJECT_SIZE) {
+        if (size <= MAX_COPY_OBJECT_SIZE && !copyObjectDenied.get()) {
             final request = CopyObjectRequest.builder()
                     .sourceBucket(bucket).sourceKey(sourceKey)
                     .destinationBucket(bucket).destinationKey(targetKey)
@@ -282,7 +286,8 @@ class FovusS3Client implements Closeable {
                 return
             }
             catch (AccessDeniedException ignored) {
-                log.debug "[FOVUS] CopyObject is not allowed for ${sourceKey}; copying it through a download instead"
+                copyObjectDenied.set(true)
+                log.debug "[FOVUS] CopyObject is not allowed for ${sourceKey}; copying it, and every later file, through a download instead"
             }
         }
         final out = newOutputStream(targetKey)
