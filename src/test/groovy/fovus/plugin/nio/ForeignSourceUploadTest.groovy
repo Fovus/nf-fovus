@@ -11,6 +11,7 @@ import spock.lang.TempDir
 import spock.lang.Unroll
 
 import java.nio.file.FileSystem
+import java.nio.file.FileSystemNotFoundException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
@@ -55,6 +56,19 @@ class ForeignSourceUploadTest extends Specification {
         sourceProvider.newInputStream(source, *_) >> { content.call() }
     }
 
+    /** A path in another area of the provider that {@link #fs} belongs to. */
+    private Path inArea(String area, String key) {
+        final uri = URI.create("fovus:///fovus-storage/${area}")
+        FileSystem areaFileSystem
+        try {
+            areaFileSystem = fs.provider().getFileSystem(uri)
+        }
+        catch (FileSystemNotFoundException ignored) {
+            areaFileSystem = fs.provider().newFileSystem(uri, [:])
+        }
+        return areaFileSystem.getPath("/fovus-storage/${area}/${key}")
+    }
+
     private Path foreignFile(long size, Closure<InputStream> stream) {
         reportedSize = size
         content = stream
@@ -86,17 +100,48 @@ class ForeignSourceUploadTest extends Specification {
         }
     }
 
-    def 'the pipelines area should take uploads from any file system; files/ keeps its current rule'() {
+    def 'the pipelines and files areas should take uploads from any file system, and jobs none'() {
         given:
         def foreign = foreignFile(1L) { new ByteArrayInputStream(new byte[1]) }
         def local = Files.writeString(tempDir.resolve('in.txt'), 'x')
-        def files = fs.getPath('/fovus-storage/files/x')
+
+        and: 'the other areas of the same provider'
+        def provider = fs.provider()
+        def filesTarget = inArea('files', 'x')
+        def jobsTarget = inArea('jobs', 'x')
 
         expect:
-        fs.provider().canUpload(foreign, target)
-        fs.provider().canUpload(local, target)
-        !fs.provider().canUpload(foreign, files)
-        fs.provider().canUpload(local, files)
+        provider.canUpload(foreign, target)
+        provider.canUpload(local, target)
+        provider.canUpload(foreign, filesTarget)
+        provider.canUpload(local, filesTarget)
+        !provider.canUpload(foreign, jobsTarget)
+        !provider.canUpload(local, jobsTarget)
+    }
+
+    def 'a complete remote source should be uploaded into files/ too'() {
+        given:
+        def source = foreignFile(1000L) { failingAfter(1000, null) }
+
+        when:
+        FileHelper.copyPath(source, inArea('files', 'in/in.bin'))
+
+        then:
+        1 * s3.putObject({ PutObjectRequest r -> r.key() == 'files/in/in.bin' }, { RequestBody b -> b.contentLength() == 1000L })
+    }
+
+    def 'a remote source failing into files/ should publish nothing'() {
+        given:
+        def source = foreignFile(2000L) { failingAfter(1000, new IOException('connection reset')) }
+
+        when:
+        FileHelper.copyPath(source, inArea('files', 'in/in.bin'))
+
+        then:
+        def e = thrown(IOException)
+        e.message == 'connection reset'
+        0 * s3.putObject(_, _)
+        0 * s3.completeMultipartUpload(_)
     }
 
     @Unroll

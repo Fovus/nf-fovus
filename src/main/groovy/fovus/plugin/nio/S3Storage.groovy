@@ -33,8 +33,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * NIO operations for every area of Fovus storage in direct mode ({@code files/}, {@code jobs/} and
  * {@code pipelines/}), on top of {@link FovusS3Client}, whose guard decides what each area allows: {@code jobs/}
  * is read-only. A path's S3 key is {@link #keyOf}, e.g. {@code pipelines/<pid>/fovus-work/ab/cdef/.command.run}.
- * Folders are key prefixes, with a zero-byte {@code <key>/} marker once created. Deleting always succeeds, as for
- * the rest of the provider.
+ * Folders are key prefixes, with a zero-byte {@code <key>/} marker once created. A copy or move may cross areas
+ * (a task output published into {@code files/}). Deleting always succeeds, as for the rest of the provider: a
+ * delete S3 denies is left in place with a warning, but one the guard refuses fails.
  */
 @Slf4j
 @CompileStatic
@@ -62,6 +63,8 @@ class S3Storage {
         if (opts.contains(StandardOpenOption.APPEND)) {
             throw new UnsupportedOperationException('Appending to a file in Fovus storage is not supported')
         }
+        // Before the existence check below, which would call S3 for a path that cannot be written anyway
+        s3.checkWritable(keyOf(path))
         if (opts.contains(StandardOpenOption.CREATE_NEW) && exists(path)) {
             throw new FileAlreadyExistsException(path.toString())
         }
@@ -81,6 +84,8 @@ class S3Storage {
         final dirKey = keyOf(dir) + '/'
         final entries = s3.list(dirKey)
         if (entries.isEmpty()) {
+            // An area root always exists, as a folder, even while nothing is under it
+            if (dir.isAreaRoot()) return new ListedDirectoryStream([])
             if (s3.head(keyOf(dir)) != null) throw new NotDirectoryException(dir.toString())
             throw new NoSuchFileException(dir.toUri().toString())
         }
@@ -135,28 +140,37 @@ class S3Storage {
 
     void delete(FovusPath path) throws IOException {
         final key = keyOf(path)
+        // A refusal by the guard (jobs/, outside the writable folders) is an error. Only S3's denial of the delete is
+        // left in place with a warning, so this runs before the try, and before any S3 call
+        s3.checkWritable(key)
         try {
             if (s3.head(key) != null) s3.delete(key)
             // a folder: remove its marker, if it has one
             else s3.delete(key + '/')
         }
         catch (AccessDeniedException e) {
-            // Every delete is denied the same way (the write credentials cannot delete): say so once, not per file
-            if (deniedDeleteWarned.compareAndSet(false, true)) {
-                log.warn "[FOVUS] ${e.reason ?: e.message} -- ${path} was left in place (further files left in place are logged at debug level)"
-            }
-            else {
-                log.debug "[FOVUS] ${e.reason ?: e.message} -- ${path} was left in place"
-            }
+            leftInPlace(e, path.toString())
         }
     }
 
+    /** Every delete is denied the same way (the write credentials cannot delete): say so once, not per file. */
+    private void leftInPlace(AccessDeniedException denied, String what) {
+        if (deniedDeleteWarned.compareAndSet(false, true)) {
+            log.warn "[FOVUS] ${denied.reason ?: denied.message} -- ${what} was left in place (further files left in place are logged at debug level)"
+        }
+        else {
+            log.debug "[FOVUS] ${denied.reason ?: denied.message} -- ${what} was left in place"
+        }
+    }
+
+    /** Copy a file. A folder is only created at the target: Nextflow copies a folder's content itself, one file at a time. */
     void copy(FovusPath source, FovusPath target, CopyOption... options) throws IOException {
-        if (!Arrays.asList(options).contains(StandardCopyOption.REPLACE_EXISTING) && exists(target)) {
+        // The target first: a jobs/ target is refused without a call, and the existence check below is one
+        s3.checkWritable(keyOf(target))
+        if (!replaces(options) && exists(target)) {
             throw new FileAlreadyExistsException(target.toString())
         }
         final attributes = readAttributes(source)
-        // Nextflow copies a folder's content itself, one file at a time
         if (attributes.isDirectory()) {
             createDirectory(target)
             return
@@ -164,17 +178,51 @@ class S3Storage {
         s3.copy(keyOf(source), keyOf(target), attributes.size())
     }
 
+    /**
+     * A file is copied, then deleted. A folder is copied object by object, with the relative keys and markers it
+     * has, and only once every object is copied are the source objects deleted. Either way the source is left in
+     * place, with a warning, when S3 denies the delete.
+     */
     void move(FovusPath source, FovusPath target, CopyOption... options) throws IOException {
-        if (readAttributes(source).isDirectory()) {
-            throw new IOException("Moving a folder within Fovus storage is not supported: ${source}".toString())
+        // The source is deleted at the end, so one that cannot be is refused before anything is copied
+        s3.checkWritable(keyOf(source))
+        s3.checkWritable(keyOf(target))
+        if (!readAttributes(source).isDirectory()) {
+            copy(source, target, options)
+            delete(source)
+            return
         }
-        copy(source, target, options)
-        delete(source)
+        if (!replaces(options) && exists(target)) {
+            throw new FileAlreadyExistsException(target.toString())
+        }
+        final sourceKey = keyOf(source) + '/'
+        final targetKey = keyOf(target) + '/'
+        final entries = s3.listAll(sourceKey)
+        for (S3Entry entry : entries) {
+            final destination = targetKey + entry.key.substring(sourceKey.length())
+            if (entry.directory) s3.putDirectoryMarker(destination)
+            else s3.copy(entry.key, destination, entry.size)
+        }
+        for (S3Entry entry : entries) {
+            try {
+                s3.delete(entry.key)
+            }
+            catch (AccessDeniedException e) {
+                // S3 denies every delete the same way: report the folder once rather than ask for each object
+                leftInPlace(e, source.toString())
+                return
+            }
+        }
+    }
+
+    private static boolean replaces(CopyOption... options) {
+        return Arrays.asList(options).contains(StandardCopyOption.REPLACE_EXISTING)
     }
 
     /** Upload a file or folder, from the local disk or from another file system such as https:// or s3://. */
     void upload(Path local, FovusPath target, CopyOption... options) throws IOException {
-        if (!Arrays.asList(options).contains(StandardCopyOption.REPLACE_EXISTING) && exists(target)) {
+        s3.checkWritable(keyOf(target))
+        if (!replaces(options) && exists(target)) {
             throw new FileAlreadyExistsException(target.toString())
         }
         if (!Files.isDirectory(local)) {

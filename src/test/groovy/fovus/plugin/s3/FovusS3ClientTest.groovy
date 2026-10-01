@@ -32,8 +32,14 @@ class FovusS3ClientTest extends Specification {
     static final List<String> NEAR_SCRATCH_KEYS = ['pipelines/tmpx/y', 'pipelines/collect-filex/y', 'pipelines/tmp/../p-2-user/x',
                                                    'pipelines/collect-file/../p-2-user/x', 'pipelines/tmp/./x',
                                                    'tmp/x', 'collect-file/x', 'pipelines/p-1-user/../tmp/x']
-    /** Keys in the files/ and jobs/ areas of Fovus storage, which direct mode reads but does not write. */
+    /** Keys in the files/ area of Fovus storage, which direct mode reads and writes. */
+    static final List<String> FILES_KEYS = ['files/x', 'files/tmp/x', 'files/data/in.txt', 'files/results/']
+    /** Keys in the jobs/ area of Fovus storage, which direct mode reads but does not write. */
+    static final List<String> JOBS_KEYS = ['jobs/j-1/x', 'jobs/x', 'jobs/']
+    /** Keys in the files/ and jobs/ areas, which direct mode reads. */
     static final List<String> AREA_KEYS = ['files/x', 'files/tmp/x', 'files/data/in.txt', 'jobs/j-1/x']
+    static final String OUTSIDE_REASON = 'Refusing to write outside pipelines/p-1-user/, the session scratch folders and files/'
+    static final String JOBS_REASON = 'Fovus storage jobs/ is read-only'
     /** Keys that look like the files/ and jobs/ areas but are not inside them. */
     static final List<String> NEAR_AREA_KEYS = ['filesx/y', 'jobsx/y', 'files/../pipelines/p-2-user/x', 'files/./x',
                                                 'jobs/j-1/../../pipelines/p-2-user/x', 'shared/x']
@@ -52,13 +58,13 @@ class FovusS3ClientTest extends Specification {
                 .build()
     }
 
-    def 'writes outside the pipeline prefix should be refused before calling S3'() {
+    def 'writes outside the writable folders should be refused before calling S3'() {
         when:
         client.putObject('pipelines/p-2-user/x', new byte[0])
 
         then:
         def e = thrown(AccessDeniedException)
-        e.reason == 'Refusing to write outside pipelines/p-1-user/'
+        e.reason == OUTSIDE_REASON
         0 * s3._
     }
 
@@ -249,18 +255,86 @@ class FovusS3ClientTest extends Specification {
     }
 
     @Unroll
-    def 'a write of #key outside the pipeline folder should be refused before calling S3'() {
+    def 'a write of #key outside the writable folders should be refused before calling S3'() {
         when:
         client.putObject(key, new byte[0])
 
         then:
         def e = thrown(AccessDeniedException)
-        e.reason == 'Refusing to write outside pipelines/p-1-user/'
+        e.reason == OUTSIDE_REASON
         0 * s3._
 
         where:
         key << [OTHER_PIPELINE_KEY, 'pipelines/p-1-user2/x', 'pipelines/p-1-user', '', 'pipelines/tmp',
-                'pipelines/collect-file'] + AREA_KEYS + DOT_SEGMENT_KEYS + NEAR_SCRATCH_KEYS + NEAR_AREA_KEYS
+                'pipelines/collect-file', 'files', 'jobs', 'jobs/./x', 'jobs/j-1/../x'] + DOT_SEGMENT_KEYS + NEAR_SCRATCH_KEYS + NEAR_AREA_KEYS
+    }
+
+    @Unroll
+    def 'a write of #key into files/ should reach S3, as one into the pipeline folder does'() {
+        when:
+        client.putObject(key, 'x'.bytes)
+        client.delete(key)
+        client.copy(PREFIX + 'a', key, 1L)
+        client.abortMultipart(key, 'upload-1')
+        client.checkWritable(key)
+
+        then:
+        1 * s3.putObject({ PutObjectRequest r -> r.key() == key && r.bucket() == 'bucket' }, _ as RequestBody)
+        1 * s3.deleteObject({ DeleteObjectRequest r -> r.key() == key })
+        1 * s3.copyObject({ CopyObjectRequest r -> r.sourceKey() == PREFIX + 'a' && r.destinationKey() == key })
+        1 * s3.abortMultipartUpload({ AbortMultipartUploadRequest r -> r.key() == key })
+        noExceptionThrown()
+
+        where:
+        key << FILES_KEYS
+    }
+
+    @Unroll
+    def 'a write of #key into jobs/ should be refused as read-only before calling S3'() {
+        when:
+        action.call(client, key)
+
+        then:
+        def e = thrown(AccessDeniedException)
+        e.reason == JOBS_REASON
+        0 * s3._
+
+        where:
+        [key, action] << [JOBS_KEYS, [
+                { FovusS3Client c, String k -> c.putObject(k, new byte[0]) },
+                { FovusS3Client c, String k -> c.putDirectoryMarker(k) },
+                { FovusS3Client c, String k -> c.delete(k) },
+                { FovusS3Client c, String k -> c.createMultipart(k) },
+                { FovusS3Client c, String k -> c.uploadPart(k, 'upload-1', 1, new byte[0]) },
+                { FovusS3Client c, String k -> c.completeMultipart(k, 'upload-1', []) },
+                { FovusS3Client c, String k -> c.newOutputStream(k) },
+                { FovusS3Client c, String k -> c.uploadFile(java.nio.file.Path.of('missing'), k) },
+                { FovusS3Client c, String k -> c.copy(PREFIX + 'a', k, 1L) },
+                { FovusS3Client c, String k -> c.checkWritable(k) },
+        ]].combinations()
+    }
+
+    def 'a copy out of jobs/ and files/ into the pipeline folder or files/ should reach S3'() {
+        when:
+        client.copy(source, target, 1L)
+
+        then:
+        1 * s3.copyObject({ CopyObjectRequest r -> r.sourceKey() == source && r.destinationKey() == target })
+
+        where:
+        source          | target
+        'jobs/j-1/x'    | 'files/results/x'
+        'files/data/x'  | PREFIX + 'x'
+        PREFIX + 'x'    | 'files/results/x'
+    }
+
+    def 'a copy from outside the readable folders should look like a missing file'() {
+        when:
+        client.copy(OTHER_PIPELINE_KEY, 'files/results/x', 1L)
+
+        then:
+        thrown(NoSuchFileException)
+        0 * s3._
     }
 
     @Unroll
@@ -356,17 +430,18 @@ class FovusS3ClientTest extends Specification {
     }
 
     @Unroll
-    def '#operation outside the pipeline prefix should be refused before calling S3'() {
+    def '#operation outside the writable folders should be refused before calling S3'() {
         when:
         action.call(client)
 
         then:
         def e = thrown(AccessDeniedException)
-        e.reason == 'Refusing to write outside pipelines/p-1-user/'
+        e.reason == OUTSIDE_REASON
         0 * s3._
 
         where:
         operation           | action
+        'checkWritable'     | { FovusS3Client c -> c.checkWritable(OTHER_PIPELINE_KEY) }
         'delete'            | { FovusS3Client c -> c.delete(OTHER_PIPELINE_KEY) }
         'createMultipart'   | { FovusS3Client c -> c.createMultipart(OTHER_PIPELINE_KEY) }
         'uploadPart'        | { FovusS3Client c -> c.uploadPart(OTHER_PIPELINE_KEY, 'upload-1', 1, new byte[0]) }
@@ -375,10 +450,11 @@ class FovusS3ClientTest extends Specification {
         'uploadPart (..)'   | { FovusS3Client c -> c.uploadPart(PREFIX + '../p-2-user/x', 'upload-1', 1, new byte[0]) }
     }
 
-    def 'abortMultipart outside the pipeline prefix should do nothing and not throw'() {
+    def 'abortMultipart outside the writable folders should do nothing and not throw'() {
         when:
         client.abortMultipart(OTHER_PIPELINE_KEY, 'upload-1')
         client.abortMultipart(PREFIX + '../p-2-user/x', 'upload-1')
+        client.abortMultipart('jobs/j-1/x', 'upload-1')
 
         then:
         noExceptionThrown()

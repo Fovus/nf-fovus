@@ -58,7 +58,8 @@ import static java.lang.String.format;
  * <p>
  * Direct mode only: every area ({@code files}, {@code jobs}, {@code pipelines}) is read and written through one
  * {@link S3Storage} with the AWS S3 SDK, once the executor has attached an S3 client to this provider. The client's
- * guard decides what each area allows. Until then, only the area roots can be used: they always exist.
+ * guard decides what each area allows. Until then, an area root exists and reads as a folder without the client;
+ * listing it, or anything else, needs it.
  */
 public class FovusFileSystemProvider extends FileSystemProvider implements FileSystemTransferAware {
 
@@ -147,16 +148,14 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
 
 
     /**
-     * The pipelines area takes a source from any file system: {@link S3Storage#upload} streams a remote one
-     * (https://, s3://) and publishes it only once it was read in full. Nextflow's own fallback copies through
-     * {@code newOutputStream}, which would publish whatever was read before a failure.
+     * Every writable area (pipelines, files) takes a source from any file system: {@link S3Storage#upload}
+     * streams a remote one (https://, s3://) and publishes it only once it was read in full. Nextflow's own
+     * fallback copies through {@code newOutputStream}, which would publish whatever was read before a failure.
+     * Jobs is read-only.
      */
     @Override
     public boolean canUpload(Path source, Path target) {
-        if (isPipelines(target)) {
-            return true;
-        }
-        return FileSystems.getDefault().equals(source.getFileSystem()) && target instanceof FovusPath;
+        return target instanceof FovusPath && !FovusPath.JOBS.equals(((FovusPath) target).getFileType());
     }
 
     @Override
@@ -204,21 +203,19 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
         storage().delete(fovus(path));
     }
 
+    /**
+     * Between any two areas, such as pipelines to files for {@code publishDir}: Nextflow calls this for every pair of
+     * paths that share the provider. The client's guard requires the source to be readable and the target writable.
+     */
     @Override
     public void copy(Path source, Path target, CopyOption... options)
             throws IOException {
-        if (!sameArea(source, target)) {
-            throw new UnsupportedOperationException("Fovus Storage is read-only. copy is not supported");
-        }
         storage().copy(fovus(source), fovus(target), options);
     }
 
 
     @Override
     public void move(Path source, Path target, CopyOption... options) throws IOException {
-        if (!sameArea(source, target)) {
-            throw new UnsupportedOperationException("Fovus Storage is read-only. move is not supported");
-        }
         storage().move(fovus(source), fovus(target), options);
     }
 
@@ -243,6 +240,10 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
         FovusPath fovusPath = fovus(path);
         Preconditions.checkArgument(fovusPath.isAbsolute(),
                 "path must be absolute: %s", fovusPath);
+        // The whole area is read-only, its root included
+        if (FovusPath.JOBS.equals(fovusPath.getFileType()) && Arrays.asList(modes).contains(AccessMode.WRITE)) {
+            throw new AccessDeniedException(fovusPath.toUri().toString(), null, FovusS3Client.JOBS_READ_ONLY);
+        }
         if (!fovusPath.isAreaRoot()) {
             // throws NoSuchFileException when the path does not exist
             storage().readAttributes(fovusPath);
@@ -317,13 +318,5 @@ public class FovusFileSystemProvider extends FileSystemProvider implements FileS
     private static FovusPath fovus(Path path) {
         Preconditions.checkArgument(path instanceof FovusPath, "path must be an instance of %s", FovusPath.class.getName());
         return (FovusPath) path;
-    }
-
-    private static boolean isPipelines(Path path) {
-        return path instanceof FovusPath && FovusPath.PIPELINES.equals(((FovusPath) path).getFileType());
-    }
-
-    private static boolean sameArea(Path source, Path target) {
-        return Objects.equals(fovus(source).getFileType(), fovus(target).getFileType());
     }
 }

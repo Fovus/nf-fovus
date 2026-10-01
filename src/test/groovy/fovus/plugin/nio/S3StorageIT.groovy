@@ -184,6 +184,32 @@ class S3StorageIT extends Specification {
         dir.resolve('c.txt').text == 'a'
     }
 
+    def 'a file and a folder copied from the pipeline into files/ should read back'() {
+        given: 'a results folder in files/, which every area of the provider reaches through the same S3 client'
+        def filesFs = dir.fileSystem.provider().newFileSystem(URI.create('fovus:///fovus-storage/files'), [:])
+        def results = filesFs.getPath("/fovus-storage/files/results-${UUID.randomUUID()}")
+        Files.writeString(dir.resolve('out.txt'), 'out')
+        Files.writeString(dir.resolve('folder/a.txt'), 'a')
+        Files.writeString(dir.resolve('folder/sub/b.txt'), 'b')
+
+        when: 'as publishDir does it with mode: copy'
+        Files.createDirectories(results)
+        FileHelper.copyPath(dir.resolve('out.txt'), results.resolve('out.txt'))
+        FileHelper.copyPath(dir.resolve('folder'), results.resolve('folder'))
+
+        then:
+        results.resolve('out.txt').text == 'out'
+        results.resolve('folder/a.txt').text == 'a'
+        results.resolve('folder/sub/b.txt').text == 'b'
+        names(results.resolve('folder')) == ['a.txt', 'sub']
+        dir.resolve('folder/a.txt').text == 'a'
+
+        and: 'a folder moved there leaves only the target (MinIO, unlike the Fovus write token, may delete)'
+        FileHelper.movePath(dir.resolve('folder'), results.resolve('moved'))
+        results.resolve('moved/sub/b.txt').text == 'b'
+        !Files.exists(dir.resolve('folder'))
+    }
+
     def 'local files and folders should upload and download the way Nextflow copies them'() {
         given:
         def input = Files.writeString(tempDir.resolve('input.txt'), 'hello')

@@ -36,19 +36,20 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * S3 access to the direct-mode work directory: {@code pipelines/<pid>/} in the user's Fovus bucket, plus
- * Nextflow's session scratch folders next to it, {@code pipelines/tmp/} and {@code pipelines/collect-file/}.
- * Nextflow writes those under its {@code workDir} itself (collectFile without {@code storeDir}, and the list
- * of collected files kept for {@code -resume}); mount mode writes them to the same keys through the mount.
- * Reads also reach the user's files and job outputs, {@code files/} and {@code jobs/}, the inputs a pipeline
- * names as {@code fovus://} paths.
+ * S3 access to Fovus storage in direct mode: the work directory, {@code pipelines/<pid>/} in the user's Fovus
+ * bucket, and Nextflow's session scratch folders next to it, {@code pipelines/tmp/} and
+ * {@code pipelines/collect-file/}. Nextflow writes those under its {@code workDir} itself (collectFile without
+ * {@code storeDir}, and the list of collected files kept for {@code -resume}); mount mode writes them to the same
+ * keys through the mount. The user's files, {@code files/}, are read and written too: a pipeline names inputs
+ * there as {@code fovus://} paths, and {@code publishDir} can publish into it. The jobs' outputs, {@code jobs/},
+ * are read only.
  *
  * Reads use the download token and writes the upload token. Neither token is limited to the pipeline: both
  * reach the whole bucket. Every key is therefore checked before any call -- it must be inside one of those
- * folders (for a write, the pipeline folder or a scratch folder), with no {@code .} or {@code ..} segment --
- * and this guard is what keeps the plugin there. Writes elsewhere are refused; reads elsewhere look like
- * missing files. S3 errors are reported by code, HTTP status, request ID and key only -- never the S3 error
- * body, which can echo the access key ID.
+ * folders (for a write, any but {@code jobs/}), with no {@code .} or {@code ..} segment -- and this guard is
+ * what keeps the plugin there. Writes into {@code jobs/} fail as read-only, writes elsewhere are refused, and
+ * reads elsewhere look like missing files. S3 errors are reported by code, HTTP status, request ID and key
+ * only -- never the S3 error body, which can echo the access key ID.
  */
 @Slf4j
 @CompileStatic
@@ -70,6 +71,8 @@ class FovusS3Client {
     /** The user's files, and their jobs' outputs: the other areas of Fovus storage, next to {@code pipelines/}. */
     static final String FILES_AREA = 'files/'
     static final String JOBS_AREA = 'jobs/'
+    /** Why a write into {@link #JOBS_AREA} is refused. Explicitly public: the NIO provider, in Java, reads it. */
+    public static final String JOBS_READ_ONLY = 'Fovus storage jobs/ is read-only'
 
     private final S3Client reader
     private final S3Client writer
@@ -78,9 +81,9 @@ class FovusS3Client {
     final int partSize
     private final int listPageSize
     private final RefreshingStorageCredentials credentials
-    /** The pipeline folder and the session scratch folders, each ending with {@code /}: where this client writes. */
+    /** The pipeline folder, the session scratch folders and the files area, each ending with {@code /}: where this client writes. */
     private final List<String> allowedFolders
-    /** Those, and the files and jobs areas: where this client reads. */
+    /** Those, and the jobs area: where this client reads. */
     private final List<String> readableFolders
     /** The parts of every parallel upload and download of this client; see {@link #newTransferPool()}. */
     private final ThreadPoolExecutor transfers
@@ -99,7 +102,7 @@ class FovusS3Client {
         this.partSize = partSize
         this.listPageSize = listPageSize
         this.allowedFolders = allowedFolders(prefix)
-        this.readableFolders = (this.allowedFolders + [FILES_AREA, JOBS_AREA]).asImmutable()
+        this.readableFolders = (this.allowedFolders + [JOBS_AREA]).asImmutable()
         this.transfers = newTransferPool()
     }
 
@@ -127,11 +130,12 @@ class FovusS3Client {
         transfers.shutdownNow()
     }
 
-    /** The pipeline folder, and the scratch folders in the pipelines area it belongs to (the prefix's first segment). */
+    /** The pipeline folder, the scratch folders in the pipelines area it belongs to (the prefix's first segment), and the files area. */
     private static List<String> allowedFolders(String prefix) {
         final area = prefix.substring(0, prefix.indexOf('/') + 1)
         final List<String> folders = [prefix]
         for (String scratch : SESSION_SCRATCH_FOLDERS) folders.add(area + scratch)
+        folders.add(FILES_AREA)
         return folders.asImmutable()
     }
 
@@ -188,7 +192,7 @@ class FovusS3Client {
 
     // -- reads
 
-    /** Size and time of an object, or {@code null} when it does not exist or is outside the pipeline. */
+    /** Size and time of an object, or {@code null} when it does not exist or is outside the readable folders. */
     S3Entry head(String key) throws IOException {
         if (!readable(key)) return null
         final request = HeadObjectRequest.builder().bucket(bucket).key(key).build()
@@ -276,7 +280,7 @@ class FovusS3Client {
     /** Best effort: an upload that cannot be aborted stays invisible until the bucket's lifecycle rule removes it. */
     void abortMultipart(String key, String uploadId) {
         if (!inScope(key)) {
-            log.debug "[FOVUS] Not aborting a multipart upload outside the pipeline and scratch folders: ${key}"
+            log.debug "[FOVUS] Not aborting a multipart upload outside the writable folders: ${key}"
             return
         }
         try {
@@ -380,7 +384,10 @@ class FovusS3Client {
         }
     }
 
-    /** Copy inside the pipeline: CopyObject when allowed, otherwise a streamed download and upload. */
+    /**
+     * Copy a readable key to a writable one, in any area (a task output into {@code files/}, for {@code publishDir}):
+     * CopyObject when allowed, otherwise a streamed download and upload.
+     */
     void copy(String sourceKey, String targetKey, long size) throws IOException {
         writable(targetKey)
         if (!readable(sourceKey)) throw new NoSuchFileException(uri(sourceKey))
@@ -569,14 +576,25 @@ class FovusS3Client {
         return within(key, readableFolders) || (key != null && !hasDotSegment(key) && readableFolders.contains(key + '/'))
     }
 
-    private String writable(String key) throws AccessDeniedException {
-        if (!inScope(key)) {
-            throw new AccessDeniedException(uri(key), null, "Refusing to write outside ${prefix}".toString())
-        }
-        return key
+    /**
+     * Throws, with no S3 call, unless {@code key} may be written. For callers that must tell the guard's refusal
+     * from S3's own denial of the call they make next, such as a delete that is left in place when S3 denies it.
+     */
+    void checkWritable(String key) throws AccessDeniedException {
+        writable(key)
     }
 
-    /** Under the pipeline prefix or a session scratch folder: where this client writes. */
+    private String writable(String key) throws AccessDeniedException {
+        if (inScope(key)) return key
+        // Dot segments can lead anywhere, whatever the key starts with: they are refused as outside, even in jobs/
+        if (key != null && !hasDotSegment(key) && key.startsWith(JOBS_AREA)) {
+            throw new AccessDeniedException(uri(key), null, JOBS_READ_ONLY)
+        }
+        throw new AccessDeniedException(uri(key), null,
+                "Refusing to write outside ${prefix}, the session scratch folders and files/".toString())
+    }
+
+    /** Under the pipeline prefix, a session scratch folder or the files area: where this client writes. */
     private boolean inScope(String key) {
         return within(key, allowedFolders)
     }

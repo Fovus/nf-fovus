@@ -148,6 +148,109 @@ class S3StorageTest extends Specification {
         logger.detachAppender(appender)
     }
 
+    def 'a delete the guard refuses should fail, not be left in place with a warning'() {
+        given:
+        def logger = LoggerFactory.getLogger(S3Storage) as Logger
+        logger.level = Level.DEBUG
+        def appender = new ListAppender<ILoggingEvent>()
+        appender.start()
+        logger.addAppender(appender)
+        def client = Stub(FovusS3Client) {
+            checkWritable(_) >> { String key -> throw new AccessDeniedException(FovusS3Client.uri(key), null, 'Fovus storage jobs/ is read-only') }
+        }
+        def fs = StorageTestSupport.fileSystem(client)
+
+        when:
+        Files.delete(fs.getPath('/fovus-storage/jobs/j-1/out.txt'))
+
+        then:
+        def e = thrown(AccessDeniedException)
+        e.reason == 'Fovus storage jobs/ is read-only'
+        appender.list.findAll { it.formattedMessage.contains('was left in place') } == []
+
+        cleanup:
+        logger.detachAppender(appender)
+    }
+
+    def 'a folder move should copy every object under it, with its relative key, before deleting any'() {
+        given:
+        def client = Mock(FovusS3Client)
+        def fs = StorageTestSupport.fileSystem(client)
+        def source = fs.getPath('/fovus-storage/pipelines/p-1-user/out')
+        def target = fs.getPath('/fovus-storage/pipelines/p-1-user/moved')
+
+        when:
+        Files.move(source, target)
+
+        then: 'the source is a folder and the target is free'
+        client.hasChildren('pipelines/p-1-user/out/') >> true
+        client.hasChildren('pipelines/p-1-user/moved/') >> false
+        client.listAll('pipelines/p-1-user/out/') >> [folder('pipelines/p-1-user/out/'), object('pipelines/p-1-user/out/a.txt'),
+                                                      folder('pipelines/p-1-user/out/sub/'), object('pipelines/p-1-user/out/sub/b.txt')]
+
+        then:
+        1 * client.putDirectoryMarker('pipelines/p-1-user/moved/')
+        1 * client.copy('pipelines/p-1-user/out/a.txt', 'pipelines/p-1-user/moved/a.txt', 1L)
+        1 * client.putDirectoryMarker('pipelines/p-1-user/moved/sub/')
+        1 * client.copy('pipelines/p-1-user/out/sub/b.txt', 'pipelines/p-1-user/moved/sub/b.txt', 1L)
+
+        then:
+        1 * client.delete('pipelines/p-1-user/out/')
+        1 * client.delete('pipelines/p-1-user/out/a.txt')
+        1 * client.delete('pipelines/p-1-user/out/sub/')
+        1 * client.delete('pipelines/p-1-user/out/sub/b.txt')
+    }
+
+    def 'a folder move that fails while copying should delete nothing'() {
+        given:
+        def client = Mock(FovusS3Client)
+        def fs = StorageTestSupport.fileSystem(client)
+
+        when:
+        Files.move(fs.getPath('/fovus-storage/pipelines/p-1-user/out'), fs.getPath('/fovus-storage/pipelines/p-1-user/moved'))
+
+        then:
+        client.hasChildren('pipelines/p-1-user/out/') >> true
+        client.listAll('pipelines/p-1-user/out/') >> [object('pipelines/p-1-user/out/a.txt'), object('pipelines/p-1-user/out/b.txt')]
+        client.copy('pipelines/p-1-user/out/b.txt', _, _) >> { throw new IOException('S3 read failed') }
+        def e = thrown(IOException)
+        e.message == 'S3 read failed'
+        0 * client.delete(_)
+    }
+
+    def 'a folder move should warn once and stop deleting when the write token cannot delete'() {
+        given:
+        def logger = LoggerFactory.getLogger(S3Storage) as Logger
+        logger.level = Level.DEBUG
+        def appender = new ListAppender<ILoggingEvent>()
+        appender.start()
+        logger.addAppender(appender)
+        def deleted = []
+        def client = Stub(FovusS3Client) {
+            head(_) >> null
+            hasChildren('pipelines/p-1-user/out/') >> true
+            listAll('pipelines/p-1-user/out/') >> [object('pipelines/p-1-user/out/a.txt'), object('pipelines/p-1-user/out/b.txt')]
+            delete(_) >> { String key ->
+                deleted << key
+                throw new AccessDeniedException(FovusS3Client.uri(key), null, "Fovus storage credentials don't allow delete on ${key} (write token)")
+            }
+        }
+        def fs = StorageTestSupport.fileSystem(client)
+
+        when:
+        Files.move(fs.getPath('/fovus-storage/pipelines/p-1-user/out'), fs.getPath('/fovus-storage/pipelines/p-1-user/moved'))
+
+        then:
+        noExceptionThrown()
+        deleted == ['pipelines/p-1-user/out/a.txt']
+        def denied = appender.list.findAll { it.formattedMessage.contains('was left in place') }
+        denied*.level == [Level.WARN]
+        denied[0].formattedMessage.contains('/fovus-storage/pipelines/p-1-user/out was left in place')
+
+        cleanup:
+        logger.detachAppender(appender)
+    }
+
     def 'a folder listing should not return the folder itself for an empty name'() {
         given:
         def client = Stub(FovusS3Client) {
