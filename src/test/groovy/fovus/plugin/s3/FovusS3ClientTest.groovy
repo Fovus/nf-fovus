@@ -36,7 +36,7 @@ class FovusS3ClientTest extends Specification {
     static final List<String> FILES_KEYS = ['files/x', 'files/tmp/x', 'files/data/in.txt', 'files/results/']
     /** Keys in the jobs/ area of Fovus storage, which direct mode reads but does not write. */
     static final List<String> JOBS_KEYS = ['jobs/j-1/x', 'jobs/x', 'jobs/', 'jobs']
-    /** The writable folders named without their trailing slash, as a path to the folder itself is: they stand for the folder. */
+    /** The writable folders named without their trailing slash, as a path to the folder itself is: for a delete or move they stand for the folder, but an object of that name is not written. */
     static final List<String> BARE_FOLDER_KEYS = ['files', 'pipelines/p-1-user', 'pipelines/tmp', 'pipelines/collect-file']
     /** Keys in the files/ and jobs/ areas, which direct mode reads. */
     static final List<String> AREA_KEYS = ['files/x', 'files/tmp/x', 'files/data/in.txt', 'jobs/j-1/x']
@@ -268,11 +268,11 @@ class FovusS3ClientTest extends Specification {
 
         where:
         key << [OTHER_PIPELINE_KEY, 'pipelines/p-1-user2/x', '', 'pipelines', 'jobs/./x', 'jobs/j-1/../x'] +
-                DOT_SEGMENT_KEYS + NEAR_SCRATCH_KEYS + NEAR_AREA_KEYS
+                BARE_FOLDER_KEYS + DOT_SEGMENT_KEYS + NEAR_SCRATCH_KEYS + NEAR_AREA_KEYS
     }
 
     @Unroll
-    def 'the writable folder named #key should be writable as the folder it stands for'() {
+    def 'the writable folder named #key should pass checkWritable and take a folder marker, as the folder it stands for'() {
         when:
         client.checkWritable(key)
         client.putDirectoryMarker(key)
@@ -283,6 +283,29 @@ class FovusS3ClientTest extends Specification {
 
         where:
         key << BARE_FOLDER_KEYS
+    }
+
+    @Unroll
+    def 'an object named as the writable folder #key should not be written, whatever the call'() {
+        when:
+        action.call(client, key)
+
+        then:
+        def e = thrown(AccessDeniedException)
+        e.reason == OUTSIDE_REASON
+        0 * s3._
+
+        where:
+        [key, action] << [BARE_FOLDER_KEYS, [
+                { FovusS3Client c, String k -> c.putObject(k, new byte[0]) },
+                { FovusS3Client c, String k -> c.delete(k) },
+                { FovusS3Client c, String k -> c.createMultipart(k) },
+                { FovusS3Client c, String k -> c.uploadPart(k, 'upload-1', 1, new byte[0]) },
+                { FovusS3Client c, String k -> c.completeMultipart(k, 'upload-1', []) },
+                { FovusS3Client c, String k -> c.newOutputStream(k) },
+                { FovusS3Client c, String k -> c.uploadFile(java.nio.file.Path.of('missing'), k) },
+                { FovusS3Client c, String k -> c.copy(PREFIX + 'a', k, 1L) },
+        ]].combinations()
     }
 
     @Unroll
@@ -471,6 +494,7 @@ class FovusS3ClientTest extends Specification {
         client.abortMultipart(OTHER_PIPELINE_KEY, 'upload-1')
         client.abortMultipart(PREFIX + '../p-2-user/x', 'upload-1')
         client.abortMultipart('jobs/j-1/x', 'upload-1')
+        client.abortMultipart('files', 'upload-1')
 
         then:
         noExceptionThrown()

@@ -578,12 +578,14 @@ class FovusS3Client {
     }
 
     /**
-     * Throws, with no S3 call, unless {@code key} may be written: inside a writable folder, or the folder itself
-     * without its trailing slash, which is how a path to it is spelled. For callers that must tell the guard's
-     * refusal from S3's own denial of the call they make next, such as a delete that is left in place when S3
-     * denies it.
+     * Throws, with no S3 call, unless a path with this key may be written to or removed: inside a writable folder,
+     * or one of them itself without its trailing slash, which is how a path to the folder is spelled. For callers
+     * that must tell the guard's refusal from S3's own denial of the call they make next, such as a delete that is
+     * left in place when S3 denies it. The calls that write an object are stricter: an object named as a folder
+     * (without the slash) would sit next to it, and is refused.
      */
     void checkWritable(String key) throws AccessDeniedException {
+        if (inOrIs(key, allowedFolders)) return
         writable(key)
     }
 
@@ -597,9 +599,9 @@ class FovusS3Client {
                 "Refusing to write outside ${prefix}, the session scratch folders and files/".toString())
     }
 
-    /** Under the pipeline prefix, a session scratch folder or the files area, or one of them itself: where this client writes. */
+    /** Under the pipeline prefix, a session scratch folder or the files area: where this client writes objects. */
     private boolean inScope(String key) {
-        return inOrIs(key, allowedFolders)
+        return within(key, allowedFolders)
     }
 
     /** Under one of {@code folders}, or one of them itself named without its trailing {@code /}. */
