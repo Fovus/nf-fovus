@@ -47,8 +47,9 @@ class FovusS3ClientTest extends Specification {
                                                 'jobs/j-1/../../pipelines/p-2-user/x', 'shared/x']
 
     S3Client s3 = Mock()
+    S3Transfers transfers = Mock()
     RefreshingStorageCredentials credentials = Mock()
-    FovusS3Client client = new FovusS3Client(s3, s3, 'bucket', PREFIX, credentials)
+    FovusS3Client client = new FovusS3Client(s3, s3, transfers, 'bucket', PREFIX, credentials)
 
     /** An S3 error whose body text must never reach a message. */
     static S3Exception s3Error(int status, String code) {
@@ -294,14 +295,12 @@ class FovusS3ClientTest extends Specification {
         def e = thrown(AccessDeniedException)
         e.reason == OUTSIDE_REASON
         0 * s3._
+        0 * transfers._
 
         where:
         [key, action] << [BARE_FOLDER_KEYS, [
                 { FovusS3Client c, String k -> c.putObject(k, new byte[0]) },
                 { FovusS3Client c, String k -> c.delete(k) },
-                { FovusS3Client c, String k -> c.createMultipart(k) },
-                { FovusS3Client c, String k -> c.uploadPart(k, 'upload-1', 1, new byte[0]) },
-                { FovusS3Client c, String k -> c.completeMultipart(k, 'upload-1', []) },
                 { FovusS3Client c, String k -> c.newOutputStream(k) },
                 { FovusS3Client c, String k -> c.uploadFile(java.nio.file.Path.of('missing'), k) },
                 { FovusS3Client c, String k -> c.copy(PREFIX + 'a', k, 1L) },
@@ -314,14 +313,14 @@ class FovusS3ClientTest extends Specification {
         client.putObject(key, 'x'.bytes)
         client.delete(key)
         client.copy(PREFIX + 'a', key, 1L)
-        client.abortMultipart(key, 'upload-1')
+        client.newOutputStream(key)
         client.checkWritable(key)
 
         then:
         1 * s3.putObject({ PutObjectRequest r -> r.key() == key && r.bucket() == 'bucket' }, _ as RequestBody)
         1 * s3.deleteObject({ DeleteObjectRequest r -> r.key() == key })
         1 * s3.copyObject({ CopyObjectRequest r -> r.sourceKey() == PREFIX + 'a' && r.destinationKey() == key })
-        1 * s3.abortMultipartUpload({ AbortMultipartUploadRequest r -> r.key() == key })
+        1 * transfers.newUploadStream(key)
         noExceptionThrown()
 
         where:
@@ -337,15 +336,13 @@ class FovusS3ClientTest extends Specification {
         def e = thrown(AccessDeniedException)
         e.reason == JOBS_REASON
         0 * s3._
+        0 * transfers._
 
         where:
         [key, action] << [JOBS_KEYS, [
                 { FovusS3Client c, String k -> c.putObject(k, new byte[0]) },
                 { FovusS3Client c, String k -> c.putDirectoryMarker(k) },
                 { FovusS3Client c, String k -> c.delete(k) },
-                { FovusS3Client c, String k -> c.createMultipart(k) },
-                { FovusS3Client c, String k -> c.uploadPart(k, 'upload-1', 1, new byte[0]) },
-                { FovusS3Client c, String k -> c.completeMultipart(k, 'upload-1', []) },
                 { FovusS3Client c, String k -> c.newOutputStream(k) },
                 { FovusS3Client c, String k -> c.uploadFile(java.nio.file.Path.of('missing'), k) },
                 { FovusS3Client c, String k -> c.copy(PREFIX + 'a', k, 1L) },
@@ -382,12 +379,11 @@ class FovusS3ClientTest extends Specification {
         client.putObject(key, new byte[0])
         def found = client.head(key)
         def stream = client.newOutputStream(key)
-        client.abortMultipart(key, 'upload-1')
 
         then:
         1 * s3.putObject({ PutObjectRequest r -> r.key() == key }, _ as RequestBody)
         1 * s3.headObject({ HeadObjectRequest r -> r.key() == key }) >> HeadObjectResponse.builder().contentLength(0L).build()
-        1 * s3.abortMultipartUpload({ AbortMultipartUploadRequest r -> r.key() == key })
+        1 * transfers.newUploadStream(key) >> new RecordingUploadStream()
         found != null
         stream != null
 
@@ -477,37 +473,16 @@ class FovusS3ClientTest extends Specification {
         def e = thrown(AccessDeniedException)
         e.reason == OUTSIDE_REASON
         0 * s3._
+        0 * transfers._
 
         where:
-        operation           | action
-        'checkWritable'     | { FovusS3Client c -> c.checkWritable(OTHER_PIPELINE_KEY) }
-        'delete'            | { FovusS3Client c -> c.delete(OTHER_PIPELINE_KEY) }
-        'createMultipart'   | { FovusS3Client c -> c.createMultipart(OTHER_PIPELINE_KEY) }
-        'uploadPart'        | { FovusS3Client c -> c.uploadPart(OTHER_PIPELINE_KEY, 'upload-1', 1, new byte[0]) }
-        'completeMultipart' | { FovusS3Client c -> c.completeMultipart(OTHER_PIPELINE_KEY, 'upload-1', []) }
-        'delete (..)'       | { FovusS3Client c -> c.delete(PREFIX + '../p-2-user/x') }
-        'uploadPart (..)'   | { FovusS3Client c -> c.uploadPart(PREFIX + '../p-2-user/x', 'upload-1', 1, new byte[0]) }
-    }
-
-    def 'abortMultipart outside the writable folders should do nothing and not throw'() {
-        when:
-        client.abortMultipart(OTHER_PIPELINE_KEY, 'upload-1')
-        client.abortMultipart(PREFIX + '../p-2-user/x', 'upload-1')
-        client.abortMultipart('jobs/j-1/x', 'upload-1')
-        client.abortMultipart('files', 'upload-1')
-
-        then:
-        noExceptionThrown()
-        0 * s3._
-    }
-
-    def 'abortMultipart inside the pipeline prefix should call S3 and swallow its failure'() {
-        when:
-        client.abortMultipart(KEY, 'upload-1')
-
-        then:
-        1 * s3.abortMultipartUpload({ AbortMultipartUploadRequest r -> r.key() == KEY && r.uploadId() == 'upload-1' }) >> { throw s3Error(500, 'InternalError') }
-        noExceptionThrown()
+        operation               | action
+        'checkWritable'         | { FovusS3Client c -> c.checkWritable(OTHER_PIPELINE_KEY) }
+        'delete'                | { FovusS3Client c -> c.delete(OTHER_PIPELINE_KEY) }
+        'newOutputStream'       | { FovusS3Client c -> c.newOutputStream(OTHER_PIPELINE_KEY) }
+        'uploadFile'            | { FovusS3Client c -> c.uploadFile(java.nio.file.Path.of('missing'), OTHER_PIPELINE_KEY) }
+        'delete (..)'           | { FovusS3Client c -> c.delete(PREFIX + '../p-2-user/x') }
+        'newOutputStream (..)'  | { FovusS3Client c -> c.newOutputStream(PREFIX + '../p-2-user/x') }
     }
 
     @Unroll
@@ -574,7 +549,7 @@ class FovusS3ClientTest extends Specification {
     @Unroll
     def 'a pipeline prefix of #prefix should be rejected'() {
         when:
-        new FovusS3Client(s3, s3, 'bucket', prefix, credentials)
+        new FovusS3Client(s3, s3, transfers, 'bucket', prefix, credentials)
 
         then:
         thrown(IllegalArgumentException)
@@ -604,5 +579,8 @@ class FovusS3ClientTest extends Specification {
         def e = thrown(StorageCredentialsException)
         e.message == 'down'
         calls.get() == 1
+
+        cleanup:
+        real?.close()
     }
 }

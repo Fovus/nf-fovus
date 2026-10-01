@@ -14,26 +14,16 @@ import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient
 import software.amazon.awssdk.profiles.ProfileFile
 import software.amazon.awssdk.regions.Region
+import software.amazon.awssdk.services.s3.S3BaseClientBuilder
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.*
 
-import java.nio.ByteBuffer
-import java.nio.channels.FileChannel
 import java.nio.file.AccessDeniedException
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
-import java.nio.file.StandardOpenOption
 import java.time.Duration
-import java.util.concurrent.Callable
-import java.util.concurrent.ExecutionException
-import java.util.concurrent.Future
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.ThreadFactory
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * S3 access to Fovus storage in direct mode: the work directory, {@code pipelines/<pid>/} in the user's Fovus
@@ -50,20 +40,17 @@ import java.util.concurrent.atomic.AtomicInteger
  * what keeps the plugin there. Writes into {@code jobs/} fail as read-only, writes elsewhere are refused, and
  * reads elsewhere look like missing files. S3 errors are reported by code, HTTP status, request ID and key
  * only -- never the S3 error body, which can echo the access key ID.
+ *
+ * Two sync clients serve metadata, listings, reads and small writes; file transfers and streamed writes go
+ * through {@link S3Transfers}, the SDK's Transfer Manager. Both are behind the same guard and error mapping.
  */
 @Slf4j
 @CompileStatic
-class FovusS3Client {
+class FovusS3Client implements Closeable {
 
-    static final int DEFAULT_PART_SIZE = 16 * 1024 * 1024
-    static final int MIN_PART_SIZE = 5 * 1024 * 1024
     static final int DEFAULT_LIST_PAGE_SIZE = 1000
     static final int MAX_ATTEMPTS = 10
-    static final int TRANSFER_THREADS = 4
-    /** S3's limit on the parts of one multipart upload. */
-    static final int MAX_PARTS = 10000
     static final long MAX_COPY_OBJECT_SIZE = 5L * 1024 * 1024 * 1024
-    private static final int COPY_BUFFER_SIZE = 64 * 1024
     static final Set<String> EXPIRED_TOKEN_CODES =
             ['ExpiredToken', 'ExpiredTokenException', 'InvalidToken', 'TokenRefreshRequired'] as Set<String>
     /** Nextflow's session scratch folders, directly under its {@code workDir} (the pipelines area). */
@@ -77,58 +64,31 @@ class FovusS3Client {
 
     private final S3Client reader
     private final S3Client writer
+    private final S3Transfers transfers
     final String bucket
     final String prefix
-    final int partSize
     private final int listPageSize
     private final RefreshingStorageCredentials credentials
     /** The pipeline folder, the session scratch folders and the files area, each ending with {@code /}: where this client writes. */
     private final List<String> allowedFolders
     /** Those, and the jobs area: where this client reads. */
     private final List<String> readableFolders
-    /** The parts of every parallel upload and download of this client; see {@link #newTransferPool()}. */
-    private final ThreadPoolExecutor transfers
 
-    FovusS3Client(S3Client reader, S3Client writer, String bucket, String prefix, RefreshingStorageCredentials credentials,
-                  int partSize = DEFAULT_PART_SIZE, int listPageSize = DEFAULT_LIST_PAGE_SIZE) {
+    FovusS3Client(S3Client reader, S3Client writer, S3Transfers transfers, String bucket, String prefix,
+                  RefreshingStorageCredentials credentials, int listPageSize = DEFAULT_LIST_PAGE_SIZE) {
         // The guard treats the prefix as a folder: without the trailing slash it would also admit sibling pipelines
         if (!prefix || !prefix.endsWith('/')) {
             throw new IllegalArgumentException("The pipeline prefix must end with '/': ${prefix}".toString())
         }
         this.reader = reader
         this.writer = writer
+        this.transfers = transfers
         this.bucket = bucket
         this.prefix = prefix
         this.credentials = credentials
-        this.partSize = partSize
         this.listPageSize = listPageSize
         this.allowedFolders = allowedFolders(prefix)
         this.readableFolders = (this.allowedFolders + [JOBS_AREA]).asImmutable()
-        this.transfers = newTransferPool()
-    }
-
-    /**
-     * One bounded pool per client, so at most {@link #TRANSFER_THREADS} parts are in flight however many files
-     * Nextflow stages or publishes at once. Callers wait on their own parts, and parts never submit work, so
-     * waiting cannot deadlock. The threads are daemons and end after a minute without work.
-     */
-    private static ThreadPoolExecutor newTransferPool() {
-        final counter = new AtomicInteger()
-        final factory = { Runnable task ->
-            final thread = new Thread(task, "fovus-s3-transfer-${counter.incrementAndGet()}".toString())
-            thread.daemon = true
-            return thread
-        } as ThreadFactory
-        final pool = new ThreadPoolExecutor(TRANSFER_THREADS, TRANSFER_THREADS, 60L, TimeUnit.SECONDS,
-                new LinkedBlockingQueue<Runnable>(), factory)
-        pool.allowCoreThreadTimeOut(true)
-        return pool
-    }
-
-    /** Stop the transfer threads now. Tests only: in a run they are daemons that end on their own when idle. */
-    @PackageScope
-    void shutdownTransfers() {
-        transfers.shutdownNow()
     }
 
     /** The pipeline folder, the scratch folders in the pipelines area it belongs to (the prefix's first segment), and the files area. */
@@ -150,38 +110,47 @@ class FovusS3Client {
     static FovusS3Client createWithInterceptors(RefreshingStorageCredentials credentials, List<ExecutionInterceptor> interceptors)
             throws StorageCredentialsException {
         final first = credentials.get()
+        final transfers = TransferManagerTransfers.create(first.bucket, first.region, credentials.readProvider(),
+                                                          credentials.writeProvider(), interceptors)
         return new FovusS3Client(buildClient(first.region, credentials.readProvider(), interceptors),
                                  buildClient(first.region, credentials.writeProvider(), interceptors),
-                                 first.bucket, first.prefix, credentials)
+                                 transfers, first.bucket, first.prefix, credentials)
+    }
+
+    private static S3Client buildClient(String region, AwsCredentialsProvider provider, List<ExecutionInterceptor> interceptors) {
+        return withFovusSettings(S3Client.builder(), region, provider, interceptors)
+                .httpClientBuilder(UrlConnectionHttpClient.builder()
+                        .connectionTimeout(Duration.ofSeconds(30))
+                        .socketTimeout(Duration.ofMinutes(5)))
+                .build()
     }
 
     /**
-     * The user's own AWS configuration must not reach these clients: an explicit endpoint, so neither
-     * {@code AWS_ENDPOINT_URL(_S3)}, {@code aws.endpointUrl(S3)} nor a profile's {@code endpoint_url} can send
-     * Fovus-signed requests elsewhere, and an empty profile file, so {@code ~/.aws/config} and
-     * {@code ~/.aws/credentials} are not read at all. FIPS and dual-stack are switched off explicitly: the SDK
-     * refuses either one next to an explicit endpoint, so a user's {@code AWS_USE_FIPS_ENDPOINT} would
-     * otherwise fail every request.
+     * The settings of every client of Fovus storage, sync or async, so that they cannot drift apart. The user's own
+     * AWS configuration must not reach these clients: an explicit endpoint, so neither {@code AWS_ENDPOINT_URL(_S3)},
+     * {@code aws.endpointUrl(S3)} nor a profile's {@code endpoint_url} can send Fovus-signed requests elsewhere, and
+     * an empty profile file, so {@code ~/.aws/config} and {@code ~/.aws/credentials} are not read at all. FIPS and
+     * dual-stack are switched off explicitly: the SDK refuses either one next to an explicit endpoint, so a user's
+     * {@code AWS_USE_FIPS_ENDPOINT} would otherwise fail every request. Standard retries, up to {@link #MAX_ATTEMPTS}
+     * attempts, and checksums only where S3 requires them (TLS protects the transfer).
      */
-    private static S3Client buildClient(String region, AwsCredentialsProvider provider, List<ExecutionInterceptor> interceptors) {
+    @PackageScope
+    static <B extends S3BaseClientBuilder<B, ?>> B withFovusSettings(B builder, String region, AwsCredentialsProvider provider,
+                                                                     List<ExecutionInterceptor> interceptors) {
         final retries = AwsRetryStrategy.standardRetryStrategy().toBuilder().maxAttempts(MAX_ATTEMPTS).build()
         final overrides = ClientOverrideConfiguration.builder()
                 .retryStrategy(retries)
                 .defaultProfileFile(emptyProfileFile())
         for (ExecutionInterceptor interceptor : interceptors) overrides.addExecutionInterceptor(interceptor)
-        return S3Client.builder()
+        return builder
                 .region(Region.of(region))
                 .endpointOverride(URI.create("https://s3.${region}.amazonaws.com".toString()))
                 .fipsEnabled(false)
                 .dualstackEnabled(false)
                 .credentialsProvider(provider)
-                .httpClientBuilder(UrlConnectionHttpClient.builder()
-                        .connectionTimeout(Duration.ofSeconds(30))
-                        .socketTimeout(Duration.ofMinutes(5)))
                 .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
                 .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
                 .overrideConfiguration(overrides.build())
-                .build()
     }
 
     private static ProfileFile emptyProfileFile() {
@@ -257,110 +226,26 @@ class FovusS3Client {
         call('delete', key) { writer.deleteObject(request) }
     }
 
-    String createMultipart(String key) throws IOException {
-        writable(key)
-        final request = CreateMultipartUploadRequest.builder().bucket(bucket).key(key).build()
-        return call('write', key) { writer.createMultipartUpload(request).uploadId() }
-    }
-
-    CompletedPart uploadPart(String key, String uploadId, int partNumber, byte[] bytes) throws IOException {
-        writable(key)
-        final request = UploadPartRequest.builder().bucket(bucket).key(key).uploadId(uploadId).partNumber(partNumber).build()
-        final response = call('write', key) { writer.uploadPart(request, RequestBody.fromBytes(bytes)) }
-        return CompletedPart.builder().partNumber(partNumber).eTag(response.eTag()).build()
-    }
-
-    void completeMultipart(String key, String uploadId, List<CompletedPart> parts) throws IOException {
-        writable(key)
-        final request = CompleteMultipartUploadRequest.builder().bucket(bucket).key(key).uploadId(uploadId)
-                .multipartUpload(CompletedMultipartUpload.builder().parts(parts).build())
-                .build()
-        call('write', key) { writer.completeMultipartUpload(request) }
-    }
-
-    /** Best effort: an upload that cannot be aborted stays invisible until the bucket's lifecycle rule removes it. */
-    void abortMultipart(String key, String uploadId) {
-        if (!inScope(key)) {
-            log.debug "[FOVUS] Not aborting a multipart upload outside the writable folders: ${key}"
-            return
-        }
-        try {
-            writer.abortMultipartUpload(AbortMultipartUploadRequest.builder().bucket(bucket).key(key).uploadId(uploadId).build())
-        }
-        catch (Exception e) {
-            log.debug "[FOVUS] Could not abort the multipart upload of ${key}: ${e.class.simpleName}"
-        }
-    }
-
     // -- transfers
 
-    /** A stream that uploads to {@code key}; see {@link S3MultipartOutputStream}. */
-    S3MultipartOutputStream newOutputStream(String key) throws IOException {
-        return new S3MultipartOutputStream(this, writable(key))
+    /** A stream whose bytes become the object at {@code key} once it is closed; see {@link S3Transfers#newUploadStream}. */
+    S3UploadStream newOutputStream(String key) throws IOException {
+        writable(key)
+        return new MappedUploadStream(key, call('write', key) { transfers.newUploadStream(key) })
     }
 
     /**
-     * Upload a local file: one PutObject up to one part, otherwise parts in parallel on this client's transfer
-     * pool, each read from its slice of the file as it is sent. Parts are larger than {@link #partSize} only when
-     * the file would otherwise need more than {@link #MAX_PARTS}.
+     * Upload a local file, in parallel parts above the transfers' part size. An expired token refreshes the
+     * credentials and uploads the whole file again, once.
      */
     void uploadFile(Path file, String key) throws IOException {
         writable(key)
-        final long size = Files.size(file)
-        final long part = uploadPartSize(size, partSize)
-        if (size <= part) {
-            final request = PutObjectRequest.builder().bucket(bucket).key(key).build()
-            call('write', key) { writer.putObject(request, RequestBody.fromFile(file)) }
-            return
-        }
-
-        final uploadId = createMultipart(key)
-        final List<Future<CompletedPart>> futures = []
-        boolean completed = false
-        try {
-            int partNumber = 1
-            for (long offset = 0; offset < size; offset += part) {
-                final long start = offset
-                final long length = Math.min(part, size - offset)
-                final int number = partNumber++
-                futures.add(transfers.submit({ -> uploadFilePart(key, uploadId, number, file, start, length) } as Callable<CompletedPart>))
-            }
-            final List<CompletedPart> parts = []
-            for (Future<CompletedPart> future : futures) parts.add(await(future))
-            completeMultipart(key, uploadId, parts)
-            completed = true
-        }
-        finally {
-            cancel(futures)
-            if (!completed) abortMultipart(key, uploadId)
-        }
-    }
-
-    /** The part size for a file upload: {@code partSize}, or more when that would take over {@link #MAX_PARTS} parts. */
-    @PackageScope
-    static long uploadPartSize(long size, int partSize) {
-        return Math.max((long) partSize, Math.floorDiv(size + MAX_PARTS - 1, (long) MAX_PARTS))
-    }
-
-    private CompletedPart uploadFilePart(String key, String uploadId, int partNumber, Path file, long start, long length)
-            throws IOException {
-        writable(key)
-        final request = UploadPartRequest.builder().bucket(bucket).key(key).uploadId(uploadId).partNumber(partNumber).build()
-        final body = new FileSliceProvider(file, start, length)
-        try {
-            final response = call('write', key) {
-                writer.uploadPart(request, RequestBody.fromContentProvider(body, length, 'application/octet-stream'))
-            }
-            return CompletedPart.builder().partNumber(partNumber).eTag(response.eTag()).build()
-        }
-        finally {
-            body.close()
-        }
+        call('write', key) { transfers.uploadFile(file, key) }
     }
 
     /**
-     * Download an object to a local file: one GET up to one part, otherwise parallel ranged GETs. The data
-     * goes to a temporary file next to {@code target}, moved into place only on success.
+     * Download an object to a local file. The data goes to a temporary file next to {@code target}, moved into
+     * place only on success, and deleted on any failure.
      */
     void downloadFile(String key, Path target) throws IOException {
         final entry = head(key)
@@ -371,12 +256,7 @@ class FovusS3Client {
         final temp = Files.createFile(directory.resolve(".${target.fileName}.${UUID.randomUUID()}.part".toString()))
         boolean moved = false
         try {
-            if (entry.size <= partSize) {
-                getObject(key).withCloseable { InputStream input -> Files.copy(input, temp, StandardCopyOption.REPLACE_EXISTING) }
-            }
-            else {
-                downloadRanges(key, entry.size, temp)
-            }
+            call('read', key) { transfers.downloadFile(key, temp) }
             Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
             moved = true
         }
@@ -425,60 +305,10 @@ class FovusS3Client {
         }
     }
 
-    private void downloadRanges(String key, long size, Path temp) throws IOException {
-        FileChannel.open(temp, StandardOpenOption.WRITE).withCloseable { FileChannel channel ->
-            final List<Future<Object>> futures = []
-            try {
-                for (long start = 0; start < size; start += partSize) {
-                    final long from = start
-                    final long to = Math.min(start + partSize, size) - 1
-                    futures.add(transfers.submit({ -> readRange(key, from, to, channel); return null } as Callable<Object>))
-                }
-                for (Future<Object> future : futures) await(future)
-            }
-            finally {
-                cancel(futures)
-            }
-        }
-    }
-
-    /** One ranged GET, streamed straight into the file at its offset. */
-    private void readRange(String key, long from, long to, FileChannel channel) throws IOException {
-        final request = GetObjectRequest.builder().bucket(bucket).key(key).range("bytes=${from}-${to}".toString()).build()
-        final body = new S3BodyStream(call('read', key) { reader.getObject(request) }, key)
-        body.withCloseable { InputStream input ->
-            final buffer = new byte[COPY_BUFFER_SIZE]
-            long position = from
-            int count
-            while ((count = input.read(buffer)) >= 0) {
-                final chunk = ByteBuffer.wrap(buffer, 0, count)
-                while (chunk.hasRemaining()) position += channel.write(chunk, position)
-            }
-            if (position != to + 1) {
-                throw new IOException("S3 read failed on ${key}: the range ended at byte ${position} instead of ${to + 1}".toString())
-            }
-        }
-    }
-
-    /** Stop the parts of a transfer that is over, most usefully one that failed; a no-op for finished parts. */
-    private static void cancel(List<? extends Future> futures) {
-        for (Future future : futures) future.cancel(true)
-    }
-
-    private static <T> T await(Future<T> future) throws IOException {
-        try {
-            return future.get()
-        }
-        catch (ExecutionException e) {
-            final cause = e.cause
-            if (cause instanceof IOException) throw (IOException) cause
-            throw new IOException(cause?.message ?: 'S3 transfer failed', cause)
-        }
-        catch (InterruptedException ignored) {
-            // Keep the flag for the caller, and fail as an I/O error so the transfer's own cleanup still runs
-            Thread.currentThread().interrupt()
-            throw new InterruptedIOException('Interrupted while waiting for an S3 transfer')
-        }
+    /** Close the transfers and their clients. For tests: in a run, Nextflow ends the JVM, and the SDK's threads are daemons. */
+    @Override
+    void close() throws IOException {
+        transfers.close()
     }
 
     // -- helpers
@@ -623,5 +453,55 @@ class FovusS3Client {
             if (segment == '.' || segment == '..') return true
         }
         return false
+    }
+
+    /**
+     * The upload stream of the transfers, with its failures reported as those of every other call are, by
+     * {@link #mapError}: an I/O error with the S3 error code, status and request ID, never the SDK's exception.
+     */
+    private final class MappedUploadStream extends S3UploadStream {
+
+        private final String key
+        private final S3UploadStream upload
+
+        MappedUploadStream(String key, S3UploadStream upload) {
+            this.key = key
+            this.upload = upload
+        }
+
+        @Override
+        void write(int b) throws IOException {
+            try {
+                upload.write(b)
+            }
+            catch (Exception e) {
+                throw mapError('write', key, e)
+            }
+        }
+
+        @Override
+        void write(byte[] bytes, int offset, int length) throws IOException {
+            try {
+                upload.write(bytes, offset, length)
+            }
+            catch (Exception e) {
+                throw mapError('write', key, e)
+            }
+        }
+
+        @Override
+        void close() throws IOException {
+            try {
+                upload.close()
+            }
+            catch (Exception e) {
+                throw mapError('write', key, e)
+            }
+        }
+
+        @Override
+        void abort() {
+            upload.abort()
+        }
     }
 }

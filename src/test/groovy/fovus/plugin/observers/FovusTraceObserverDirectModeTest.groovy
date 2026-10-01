@@ -5,6 +5,7 @@ import fovus.plugin.nio.S3Storage
 import fovus.plugin.nio.StorageTestSupport
 import fovus.plugin.s3.FovusS3Client
 import fovus.plugin.s3.FovusS3ClientTest
+import fovus.plugin.s3.S3Transfers
 import fovus.plugin.storage.DirectWorkDirStorage
 import fovus.plugin.storage.S3Connector
 import fovus.plugin.storage.WorkDirStorage
@@ -77,7 +78,7 @@ class FovusTraceObserverDirectModeTest extends Specification {
     def "collectFile's scratch folders should be writable before the first process starts the executor"() {
         given:
         def s3 = Mock(S3Client)
-        def client = new FovusS3Client(s3, s3, 'bucket', 'pipelines/p-1-user/', null)
+        def client = new FovusS3Client(s3, s3, Mock(S3Transfers), 'bucket', 'pipelines/p-1-user/', null)
         def fs = StorageTestSupport.fileSystem()
         def root = fs.getPath('/fovus-storage/pipelines')
         def connector = Stub(S3Connector) { connect('p-1-user') >> client }

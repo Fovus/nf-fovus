@@ -1,9 +1,7 @@
 package fovus.plugin.s3
 
 import software.amazon.awssdk.core.ResponseInputStream
-import software.amazon.awssdk.core.exception.AbortedException
 import software.amazon.awssdk.core.exception.SdkClientException
-import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.http.AbortableInputStream
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.*
@@ -28,89 +26,101 @@ class S3TransferFailureTest extends Specification {
     Path tempDir
 
     S3Client s3 = Mock()
-    FovusS3Client client = new FovusS3Client(s3, s3, 'bucket', 'pipelines/p-1-user/', null, FovusS3Client.MIN_PART_SIZE)
+    S3Transfers transfers = Mock()
+    FovusS3Client client = new FovusS3Client(s3, s3, transfers, 'bucket', 'pipelines/p-1-user/', null)
 
-    def 'a failed part upload should abort the upload and publish nothing'() {
+    def 'a failed download should leave no file and no temp file behind'() {
         given:
-        def out = client.newOutputStream(KEY)
-        def part = new byte[FovusS3Client.MIN_PART_SIZE]
-
-        when:
-        out.write(part)
-        try {
-            out.write(part)
-        }
-        catch (IOException ignored) {
-        }
-        out.close()
-
-        then:
-        1 * s3.createMultipartUpload(_ as CreateMultipartUploadRequest) >> CreateMultipartUploadResponse.builder().uploadId('u-1').build()
-        1 * s3.uploadPart(_ as UploadPartRequest, _ as RequestBody) >> UploadPartResponse.builder().eTag('e1').build()
-        1 * s3.uploadPart(_ as UploadPartRequest, _ as RequestBody) >> { throw FovusS3ClientTest.s3Error(500, 'InternalError') }
-        1 * s3.abortMultipartUpload({ AbortMultipartUploadRequest r -> r.uploadId() == 'u-1' })
-        0 * s3.completeMultipartUpload(_)
-        0 * s3.putObject(_, _)
-    }
-
-    def 'a failed ranged download should leave no file behind'() {
-        given:
-        def target = tempDir.resolve('out.bin')
-        s3.headObject(_ as HeadObjectRequest) >> HeadObjectResponse.builder().contentLength(3L * FovusS3Client.MIN_PART_SIZE).build()
-        s3.getObject(_ as GetObjectRequest) >> { throw FovusS3ClientTest.s3Error(500, 'InternalError') }
+        def directory = tempDir.resolve('downloads')
+        def target = directory.resolve('out.bin')
+        s3.headObject(_ as HeadObjectRequest) >> HeadObjectResponse.builder().contentLength(10L).build()
 
         when:
         client.downloadFile(KEY, target)
 
         then:
+        1 * transfers.downloadFile(KEY, _ as Path) >> { String key, Path destination ->
+            Files.write(destination, 'part'.bytes)
+            throw FovusS3ClientTest.s3Error(500, 'InternalError')
+        }
         def e = thrown(IOException)
         e.message == "S3 read failed on ${KEY}: InternalError (HTTP 500, request req-1)".toString()
+        e.cause == null
         !Files.exists(target)
-        Files.list(tempDir).withCloseable { it.count() } == 0
+        Files.list(directory).withCloseable { it.count() } == 0
     }
 
-    def 'a failed part of a file upload should abort the upload and publish nothing'() {
+    def 'an interrupted download should leave no file behind'() {
         given:
-        def file = Files.write(tempDir.resolve('big.bin'), new byte[FovusS3Client.MIN_PART_SIZE + 1])
+        def directory = tempDir.resolve('downloads')
+        def target = directory.resolve('out.bin')
+        s3.headObject(_ as HeadObjectRequest) >> HeadObjectResponse.builder().contentLength(10L).build()
 
         when:
-        client.uploadFile(file, KEY)
-
-        then:
-        thrown(IOException)
-        1 * s3.createMultipartUpload(_ as CreateMultipartUploadRequest) >> CreateMultipartUploadResponse.builder().uploadId('u-1').build()
-        1 * s3.uploadPart(_ as UploadPartRequest, _ as RequestBody) >> UploadPartResponse.builder().eTag('e1').build()
-        1 * s3.uploadPart(_ as UploadPartRequest, _ as RequestBody) >> { throw FovusS3ClientTest.s3Error(500, 'InternalError') }
-        1 * s3.abortMultipartUpload({ AbortMultipartUploadRequest r -> r.uploadId() == 'u-1' })
-        0 * s3.completeMultipartUpload(_)
-    }
-
-    def 'an interrupted ranged download should leave no file behind'() {
-        given:
-        def target = tempDir.resolve('out.bin')
-        s3.headObject(_ as HeadObjectRequest) >> HeadObjectResponse.builder().contentLength(3L * FovusS3Client.MIN_PART_SIZE).build()
-        s3.getObject(_ as GetObjectRequest) >> { Thread.sleep(200); throw FovusS3ClientTest.s3Error(500, 'InternalError') }
-
-        when:
-        Thread.currentThread().interrupt()
         client.downloadFile(KEY, target)
 
-        then:
+        then: 'as the transfers report an interrupted wait: the flag kept, an InterruptedIOException thrown'
+        1 * transfers.downloadFile(KEY, _ as Path) >> { String key, Path destination ->
+            Files.write(destination, 'part'.bytes)
+            Thread.currentThread().interrupt()
+            throw new InterruptedIOException('Interrupted while waiting for the S3 read of ' + key)
+        }
         thrown(InterruptedIOException)
         Thread.interrupted()
         !Files.exists(target)
-        Files.list(tempDir).withCloseable { it.count() } == 0
+        Files.list(directory).withCloseable { it.count() } == 0
+    }
+
+    def 'a download of a missing object should fail as missing, with no temp file and no transfer'() {
+        given:
+        def directory = tempDir.resolve('downloads')
+        s3.headObject(_ as HeadObjectRequest) >> { throw FovusS3ClientTest.s3Error(404, 'NotFound') }
+
+        when:
+        client.downloadFile(KEY, directory.resolve('out.bin'))
+
+        then:
+        thrown(NoSuchFileException)
+        0 * transfers._
+        !Files.exists(directory)
+    }
+
+    @Requires({ FileSystems.default.supportedFileAttributeViews().contains('posix') })
+    def 'a #kind download should get the default permissions rather than the owner-only mode of a temp file'() {
+        given:
+        def target = tempDir.resolve('out.bin')
+        def reference = Files.createFile(tempDir.resolve('reference.bin'))
+        s3.headObject(_ as HeadObjectRequest) >> HeadObjectResponse.builder().contentLength(size).build()
+        // the SDK writes into the destination it is given, which the client created
+        transfers.downloadFile(KEY, _ as Path) >> { String key, Path destination -> if (size > 0) Files.write(destination, new byte[(int) size]) }
+
+        when:
+        client.downloadFile(KEY, target)
+
+        then:
+        Files.size(target) == size
+        Files.getPosixFilePermissions(target) == Files.getPosixFilePermissions(reference)
+
+        where:
+        kind    | size
+        'small' | 5L
+        'empty' | 0L
     }
 
     def 'a denied CopyObject should fall back to a streamed copy'() {
+        given:
+        def upload = new RecordingUploadStream()
+
         when:
         client.copy(SOURCE, KEY, 5L)
 
         then:
         1 * s3.copyObject(_ as CopyObjectRequest) >> { throw FovusS3ClientTest.s3Error(403, 'AccessDenied') }
         1 * s3.getObject({ GetObjectRequest r -> r.key() == SOURCE }) >> responseStream(new ByteArrayInputStream('hello'.bytes))
-        1 * s3.putObject({ PutObjectRequest r -> r.key() == KEY }, { RequestBody b -> b.contentLength() == 5L })
-        0 * s3.abortMultipartUpload(_)
+        1 * transfers.newUploadStream(KEY) >> upload
+        upload.published
+        !upload.aborted
+        upload.text == 'hello'
     }
 
     def 'a CopyObject failure other than access denied should not fall back'() {
@@ -121,10 +131,25 @@ class S3TransferFailureTest extends Specification {
         thrown(IOException)
         1 * s3.copyObject(_ as CopyObjectRequest) >> { throw FovusS3ClientTest.s3Error(500, 'InternalError') }
         0 * s3.getObject(_)
-        0 * s3.putObject(_, _)
+        0 * transfers._
     }
 
-    def 'a streamed copy whose source fails part way with #failure.class.simpleName should abort the upload and publish nothing'() {
+    def 'an object too large for CopyObject should be copied as a stream'() {
+        given:
+        def upload = new RecordingUploadStream()
+
+        when:
+        client.copy(SOURCE, KEY, FovusS3Client.MAX_COPY_OBJECT_SIZE + 1)
+
+        then:
+        0 * s3.copyObject(_)
+        1 * s3.getObject({ GetObjectRequest r -> r.key() == SOURCE }) >> responseStream(new ByteArrayInputStream('hello'.bytes))
+        1 * transfers.newUploadStream(KEY) >> upload
+        upload.text == 'hello'
+        upload.published
+    }
+
+    def 'a streamed copy whose source fails part way with #failure.class.simpleName should abort the upload'() {
         given:
         def error = failure
         def failing = new InputStream() {
@@ -137,12 +162,13 @@ class S3TransferFailureTest extends Specification {
 
             @Override
             int read(byte[] bytes, int offset, int length) {
-                if (served >= FovusS3Client.MIN_PART_SIZE) throw error
-                final count = Math.min(length, FovusS3Client.MIN_PART_SIZE - served)
+                if (served >= 1000) throw error
+                final count = Math.min(length, 1000 - served)
                 served += count
                 return count
             }
         }
+        S3UploadStream upload = Mock()
 
         when:
         client.copy(SOURCE, KEY, FovusS3Client.MAX_COPY_OBJECT_SIZE + 1)
@@ -151,80 +177,16 @@ class S3TransferFailureTest extends Specification {
         def thrown = thrown(IOException)
         thrown.message == expectedMessage
         thrown.cause == null
-        0 * s3.copyObject(_)
         1 * s3.getObject(_ as GetObjectRequest) >> responseStream(failing)
-        1 * s3.createMultipartUpload(_ as CreateMultipartUploadRequest) >> CreateMultipartUploadResponse.builder().uploadId('u-1').build()
-        1 * s3.uploadPart(_ as UploadPartRequest, _ as RequestBody) >> UploadPartResponse.builder().eTag('e1').build()
-        1 * s3.abortMultipartUpload({ AbortMultipartUploadRequest r -> r.uploadId() == 'u-1' })
-        0 * s3.completeMultipartUpload(_)
-        0 * s3.putObject(_, _)
+        1 * transfers.newUploadStream(KEY) >> upload
+        (1.._) * upload.write(_, _, _)
+        1 * upload.abort()
+        0 * upload.close()
 
         where:
         failure                                                                   | expectedMessage
         new IOException('connection reset')                                       | 'connection reset'
         SdkClientException.create('Unable to execute HTTP request: timed out')    | "S3 read failed on ${SOURCE}: SdkClientException".toString()
-    }
-
-    def 'a single-GET download that fails part way with #failure.class.simpleName should leave no file behind'() {
-        given:
-        def directory = tempDir.resolve('downloads')
-        def target = directory.resolve('out.bin')
-        def error = failure
-        def failing = new InputStream() {
-            int served = 0
-
-            @Override
-            int read() {
-                throw new UnsupportedOperationException()
-            }
-
-            @Override
-            int read(byte[] bytes, int offset, int length) {
-                if (served >= 4) throw error
-                served += 4
-                return 4
-            }
-        }
-        s3.headObject(_ as HeadObjectRequest) >> HeadObjectResponse.builder().contentLength(10L).build()
-        s3.getObject(_ as GetObjectRequest) >> responseStream(failing)
-
-        when:
-        client.downloadFile(KEY, target)
-
-        then:
-        def thrown = thrown(IOException)
-        thrown.message == "S3 read failed on ${KEY}: ${failure.class.simpleName}".toString()
-        thrown.cause == null
-        !Files.exists(target)
-        Files.list(directory).withCloseable { it.count() } == 0
-
-        where:
-        failure << [SdkClientException.create('Unable to execute HTTP request: timed out SECRET-BODY'),
-                    AbortedException.create('Thread was interrupted SECRET-BODY')]
-    }
-
-    @Requires({ FileSystems.default.supportedFileAttributeViews().contains('posix') })
-    def 'a #kind download should get the default permissions rather than the owner-only mode of a temp file'() {
-        given:
-        def target = tempDir.resolve('out.bin')
-        def reference = Files.createFile(tempDir.resolve('reference.bin'))
-        s3.headObject(_ as HeadObjectRequest) >> HeadObjectResponse.builder().contentLength(size).build()
-        // a single GET asks for the whole object, a ranged one for one part
-        s3.getObject(_ as GetObjectRequest) >> { GetObjectRequest r ->
-            responseStream(new ByteArrayInputStream(new byte[r.range() ? FovusS3Client.MIN_PART_SIZE : (int) size]))
-        }
-
-        when:
-        client.downloadFile(KEY, target)
-
-        then:
-        Files.size(target) == size
-        Files.getPosixFilePermissions(target) == Files.getPosixFilePermissions(reference)
-
-        where:
-        kind     | size
-        'single' | 5L
-        'ranged' | 3L * FovusS3Client.MIN_PART_SIZE
     }
 
     def 'newOutputStream should refuse #key outside the pipeline before calling S3'() {
@@ -234,6 +196,7 @@ class S3TransferFailureTest extends Specification {
         then:
         thrown(AccessDeniedException)
         0 * s3._
+        0 * transfers._
 
         where:
         key << OUTSIDE_KEYS
@@ -249,6 +212,7 @@ class S3TransferFailureTest extends Specification {
         then:
         thrown(AccessDeniedException)
         0 * s3._
+        0 * transfers._
 
         where:
         key << OUTSIDE_KEYS
@@ -261,6 +225,7 @@ class S3TransferFailureTest extends Specification {
         then:
         thrown(AccessDeniedException)
         0 * s3._
+        0 * transfers._
 
         where:
         key << OUTSIDE_KEYS
@@ -273,6 +238,7 @@ class S3TransferFailureTest extends Specification {
         then:
         thrown(NoSuchFileException)
         0 * s3._
+        0 * transfers._
 
         where:
         key << OUTSIDE_KEYS
@@ -288,6 +254,7 @@ class S3TransferFailureTest extends Specification {
         then:
         thrown(NoSuchFileException)
         0 * s3._
+        0 * transfers._
         !Files.exists(target.parent)
 
         where:

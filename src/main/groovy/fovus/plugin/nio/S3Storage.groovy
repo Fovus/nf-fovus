@@ -282,9 +282,9 @@ class S3Storage {
     }
 
     /**
-     * A local file is uploaded in parallel parts. A file on another file system is streamed, and published only
-     * once it was read in full: any failure while reading it, or fewer bytes than its known size, discards the
-     * upload, so FilePorter never finds a truncated input to reuse.
+     * A local file is uploaded by the Transfer Manager, in parallel parts when large. A file on another file system
+     * is streamed, and published only once it was read in full: any failure while reading it, or fewer bytes than
+     * its known size, discards the upload, so FilePorter never finds a truncated input to reuse.
      */
     private void uploadFile(Path source, String key) throws IOException {
         if (source.getFileSystem() == FileSystems.getDefault()) {

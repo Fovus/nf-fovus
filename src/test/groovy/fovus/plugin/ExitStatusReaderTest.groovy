@@ -3,6 +3,7 @@ package fovus.plugin
 import fovus.plugin.nio.StorageTestSupport
 import fovus.plugin.s3.FovusS3Client
 import fovus.plugin.s3.S3Entry
+import fovus.plugin.s3.S3Transfers
 import fovus.plugin.s3.StorageCredentialsException
 import software.amazon.awssdk.core.ResponseInputStream
 import software.amazon.awssdk.core.exception.SdkClientException
@@ -83,7 +84,7 @@ class ExitStatusReaderTest extends Specification {
             }
             new ResponseInputStream<GetObjectResponse>(GetObjectResponse.builder().build(), AbortableInputStream.create(body))
         }
-        def client = new FovusS3Client(s3, s3, 'bucket', 'pipelines/p-1-user/', null)
+        def client = new FovusS3Client(s3, s3, Mock(S3Transfers), 'bucket', 'pipelines/p-1-user/', null)
         def taskDir = StorageTestSupport.fileSystem(client).getPath('/fovus-storage/pipelines/p-1-user/fovus-work/ab/cdef')
 
         expect:

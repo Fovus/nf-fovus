@@ -6,7 +6,9 @@ import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import fovus.plugin.s3.FovusS3Client
 import fovus.plugin.s3.FovusS3ClientTest
+import fovus.plugin.s3.RecordingUploadStream
 import fovus.plugin.s3.S3Entry
+import fovus.plugin.s3.S3Transfers
 import nextflow.file.FileHelper
 import org.slf4j.LoggerFactory
 import software.amazon.awssdk.core.ResponseInputStream
@@ -63,11 +65,15 @@ class FovusStorageAreasTest extends Specification {
     Path tempDir
 
     S3Client s3 = Mock()
+    S3Transfers transfers = Mock()
     FovusFileSystemProvider provider = new FovusFileSystemProvider()
 
     /** The bucket behind {@link #bucketWith}: key to text. */
     Map<String, String> objects = new TreeMap<>()
-    /** The GetObject, PutObject, CopyObject and DeleteObject requests it received, in order. */
+    /**
+     * The requests it received, in order: GetObject, CopyObject and DeleteObject, and a PutObject for each folder marker,
+     * file upload and streamed write (the last two through the transfers, as the Transfer Manager sends them).
+     */
     List<String> calls = []
     ListAppender<ILoggingEvent> storageLog
     Level storageLevelBefore
@@ -94,7 +100,7 @@ class FovusStorageAreasTest extends Specification {
 
     /** What direct mode does once credentials exist: one client for the pipeline, attached to the provider. */
     private void attachClient() {
-        provider.attachS3Client(new FovusS3Client(s3, s3, 'bucket', 'pipelines/p-1-user/', null))
+        provider.attachS3Client(new FovusS3Client(s3, s3, transfers, 'bucket', 'pipelines/p-1-user/', null))
     }
 
     private void listingsArePaginated() {
@@ -122,6 +128,16 @@ class FovusStorageAreasTest extends Specification {
             calls << "PUT ${request.key()}".toString()
             objects[request.key()] = body.contentStreamProvider().newStream().withCloseable { InputStream stream -> stream.text }
             PutObjectResponse.builder().build()
+        }
+        transfers.uploadFile(_ as Path, _ as String) >> { Path file, String key ->
+            calls << "PUT ${key}".toString()
+            objects[key] = file.text
+        }
+        transfers.newUploadStream(_ as String) >> { String key ->
+            new RecordingUploadStream({ byte[] bytes ->
+                calls << "PUT ${key}".toString()
+                objects[key] = new String(bytes)
+            })
         }
         s3.copyObject(_ as CopyObjectRequest) >> { CopyObjectRequest request ->
             calls << "COPY ${request.sourceKey()} -> ${request.destinationKey()}".toString()
@@ -550,6 +566,7 @@ class FovusStorageAreasTest extends Specification {
         def e = thrown(AccessDeniedException)
         e.message.contains(JOBS_READ_ONLY)
         0 * s3._
+        0 * transfers._
 
         where:
         operation                       | action

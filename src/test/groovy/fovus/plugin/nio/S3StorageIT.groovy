@@ -1,8 +1,8 @@
 package fovus.plugin.nio
 
 import fovus.plugin.s3.CountingInterceptor
-import fovus.plugin.s3.FovusS3Client
 import fovus.plugin.s3.MinioSupport
+import fovus.plugin.s3.TransferManagerTransfers
 import nextflow.extension.FilesEx
 import nextflow.file.FileHelper
 import org.testcontainers.containers.MinIOContainer
@@ -23,6 +23,7 @@ class S3StorageIT extends Specification {
 
     @Shared MinIOContainer minio
     @Shared S3Client s3
+    @Shared TransferManagerTransfers transfers
     @Shared CountingInterceptor requests = new CountingInterceptor()
 
     @TempDir
@@ -33,16 +34,18 @@ class S3StorageIT extends Specification {
     def setupSpec() {
         minio = MinioSupport.start()
         s3 = MinioSupport.s3Client(minio, requests)
+        transfers = MinioSupport.transfers(minio, TransferManagerTransfers.MIN_PART_SIZE, requests)
     }
 
     def cleanupSpec() {
+        transfers?.close()
         s3?.close()
         minio?.stop()
     }
 
     def setup() {
         // a page size of 2 makes every listing below span several pages
-        final fs = StorageTestSupport.fileSystem(MinioSupport.fovusClient(s3, FovusS3Client.MIN_PART_SIZE, 2))
+        final fs = StorageTestSupport.fileSystem(MinioSupport.fovusClient(s3, transfers, 2))
         dir = (FovusPath) fs.getPath("/fovus-storage/pipelines/p-1-user/${UUID.randomUUID()}")
         Files.createDirectories(dir)
         requests.reset()

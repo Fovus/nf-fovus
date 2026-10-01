@@ -7,7 +7,7 @@ import java.nio.channels.ClosedChannelException
 import java.nio.channels.NonReadableChannelException
 import java.nio.channels.SeekableByteChannel
 
-/** A write-only, sequential channel over an {@link S3MultipartOutputStream}. */
+/** A write-only, sequential channel over an upload stream ({@link S3UploadStream}). */
 @CompileStatic
 class S3WriteChannel implements SeekableByteChannel {
 

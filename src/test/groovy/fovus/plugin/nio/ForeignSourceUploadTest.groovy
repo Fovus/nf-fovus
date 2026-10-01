@@ -2,8 +2,9 @@ package fovus.plugin.nio
 
 import fovus.plugin.s3.FovusS3Client
 import fovus.plugin.s3.FovusS3ClientTest
+import fovus.plugin.s3.RecordingUploadStream
+import fovus.plugin.s3.S3Transfers
 import nextflow.file.FileHelper
-import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.*
 import spock.lang.Specification
@@ -25,13 +26,15 @@ import java.nio.file.spi.FileSystemProvider
 class ForeignSourceUploadTest extends Specification {
 
     static final String KEY = 'pipelines/p-1-user/fovus-work/stage-1/ab/cdef/in.bin'
-    static final int PART = FovusS3Client.MIN_PART_SIZE
 
     @TempDir
     Path tempDir
 
     S3Client s3 = Mock()
-    FovusS3Client client = new FovusS3Client(s3, s3, 'bucket', 'pipelines/p-1-user/', null, PART)
+    S3Transfers transfers = Mock()
+    /** The upload of the staged or published file: published on close, discarded on abort. */
+    RecordingUploadStream upload = new RecordingUploadStream()
+    FovusS3Client client = new FovusS3Client(s3, s3, transfers, 'bucket', 'pipelines/p-1-user/', null)
     FovusFileSystem fs = StorageTestSupport.fileSystem(client)
     Path target = fs.getPath('/fovus-storage/' + KEY)
 
@@ -128,7 +131,9 @@ class ForeignSourceUploadTest extends Specification {
         FileHelper.copyPath(source, inArea('files', 'in/in.bin'))
 
         then:
-        1 * s3.putObject({ PutObjectRequest r -> r.key() == 'files/in/in.bin' }, { RequestBody b -> b.contentLength() == 1000L })
+        1 * transfers.newUploadStream('files/in/in.bin') >> upload
+        upload.published
+        upload.bytes.size() == 1000
     }
 
     def 'a remote source failing into files/ should publish nothing'() {
@@ -141,14 +146,15 @@ class ForeignSourceUploadTest extends Specification {
         then:
         def e = thrown(IOException)
         e.message == 'connection reset'
-        0 * s3.putObject(_, _)
-        0 * s3.completeMultipartUpload(_)
+        1 * transfers.newUploadStream('files/in/in.bin') >> upload
+        upload.aborted
+        !upload.published
     }
 
     @Unroll
-    def 'a remote source failing after #served bytes should publish nothing, abort any multipart upload and fail'() {
+    def 'a remote source failing after #served bytes should publish nothing, discard the upload and fail'() {
         given:
-        def source = foreignFile(2L * PART + 10) { failingAfter(served, new IOException('connection reset')) }
+        def source = foreignFile(2L * served + 10) { failingAfter(served, new IOException('connection reset')) }
 
         when:
         FileHelper.copyPath(source, target)
@@ -156,16 +162,13 @@ class ForeignSourceUploadTest extends Specification {
         then:
         def e = thrown(IOException)
         e.message == 'connection reset'
-        multipart * s3.createMultipartUpload(_ as CreateMultipartUploadRequest) >> CreateMultipartUploadResponse.builder().uploadId('u-1').build()
-        (served.intdiv(PART)) * s3.uploadPart(_ as UploadPartRequest, _ as RequestBody) >> UploadPartResponse.builder().eTag('e').build()
-        multipart * s3.abortMultipartUpload({ AbortMultipartUploadRequest r -> r.uploadId() == 'u-1' && r.key() == KEY })
-        0 * s3.putObject(_, _)
-        0 * s3.completeMultipartUpload(_)
+        1 * transfers.newUploadStream(KEY) >> upload
+        upload.aborted
+        !upload.published
+        upload.bytes.size() == served
 
         where:
-        served       | multipart
-        1000         | 0
-        PART + 1000  | 1
+        served << [0, 1000, 3 * 1024 * 1024]
     }
 
     def 'a runtime failure of the remote source should also publish nothing'() {
@@ -177,8 +180,9 @@ class ForeignSourceUploadTest extends Specification {
 
         then:
         thrown(IllegalStateException)
-        0 * s3.putObject(_, _)
-        0 * s3.completeMultipartUpload(_)
+        1 * transfers.newUploadStream(KEY) >> upload
+        upload.aborted
+        !upload.published
     }
 
     def 'a remote source that ends before its known size should publish nothing and fail'() {
@@ -191,8 +195,9 @@ class ForeignSourceUploadTest extends Specification {
         then:
         def e = thrown(IOException)
         e.message.contains('1000 of 2000 bytes')
-        0 * s3.putObject(_, _)
-        0 * s3.completeMultipartUpload(_)
+        1 * transfers.newUploadStream(KEY) >> upload
+        upload.aborted
+        !upload.published
     }
 
     @Unroll
@@ -204,8 +209,10 @@ class ForeignSourceUploadTest extends Specification {
         FileHelper.copyPath(source, target)
 
         then:
-        1 * s3.putObject({ PutObjectRequest r -> r.key() == KEY }, { RequestBody b -> b.contentLength() == 1000L })
-        0 * s3.abortMultipartUpload(_)
+        1 * transfers.newUploadStream(KEY) >> upload
+        upload.published
+        !upload.aborted
+        upload.bytes.size() == 1000
 
         where:
         reported << [1000L, -1L]

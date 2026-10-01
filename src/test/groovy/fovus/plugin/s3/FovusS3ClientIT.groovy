@@ -14,8 +14,11 @@ import java.nio.file.Path
 @Tag('integration')
 class FovusS3ClientIT extends Specification {
 
+    static final long PART = TransferManagerTransfers.MIN_PART_SIZE
+
     @Shared MinIOContainer minio
     @Shared S3Client s3
+    @Shared TransferManagerTransfers transfers
     @Shared CountingInterceptor requests = new CountingInterceptor()
 
     @TempDir
@@ -27,15 +30,17 @@ class FovusS3ClientIT extends Specification {
     def setupSpec() {
         minio = MinioSupport.start()
         s3 = MinioSupport.s3Client(minio, requests)
+        transfers = MinioSupport.transfers(minio, PART, requests)
     }
 
     def cleanupSpec() {
+        transfers?.close()
         s3?.close()
         minio?.stop()
     }
 
     def setup() {
-        client = MinioSupport.fovusClient(s3)
+        client = MinioSupport.fovusClient(s3, transfers)
         base = "${MinioSupport.PREFIX}${UUID.randomUUID()}/".toString()
         requests.reset()
     }
@@ -63,55 +68,83 @@ class FovusS3ClientIT extends Specification {
         requests.count('CreateMultipartUploadRequest') == 0
     }
 
-    def 'a large stream should become a multipart upload'() {
-        given:
-        def key = base + 'large.bin'
-        def data = randomBytes(3 * FovusS3Client.MIN_PART_SIZE + 17)
-
-        when:
+    /** Write {@code data} to {@code key} through a stream, 1 MiB at a time: the length is not known up front. */
+    private void stream(String key, byte[] data) {
         client.newOutputStream(key).withCloseable { out ->
             for (int offset = 0; offset < data.length; offset += 1024 * 1024) {
                 out.write(data, offset, Math.min(1024 * 1024, data.length - offset))
             }
         }
+    }
+
+    def 'a stream of unknown length over two parts should become a multipart upload'() {
+        given:
+        def key = base + 'large.bin'
+        def data = randomBytes((int) (2 * PART + 1024 * 1024))
+
+        when:
+        stream(key, data)
 
         then:
         read(key) == data
         requests.count('CreateMultipartUploadRequest') == 1
-        requests.count('UploadPartRequest') == 4
+        requests.count('UploadPartRequest') == 3
+        requests.count('CompleteMultipartUploadRequest') == 1
     }
 
-    def 'a stream that is never closed should leave no object'() {
+    def 'a stream of exactly one part should become one PutObject'() {
         given:
-        def key = base + 'interrupted.bin'
-        def out = client.newOutputStream(key)
+        def key = base + 'one-part.bin'
+        def data = randomBytes((int) PART)
 
         when:
-        out.write(randomBytes(2 * FovusS3Client.MIN_PART_SIZE + 1))
+        stream(key, data)
+
+        then:
+        read(key) == data
+        requests.count('PutObjectRequest') == 1
+        requests.count('CreateMultipartUploadRequest') == 0
+    }
+
+    def 'an aborted stream should leave no object'() {
+        given:
+        def key = base + 'aborted.bin'
+        def out = client.newOutputStream(key)
+        out.write(randomBytes((int) (2 * PART + 1)))
+
+        when:
+        out.abort()
+        out.close()
+        // any part the SDK was still sending ends without completing the upload
+        Thread.sleep(1000)
 
         then:
         client.head(key) == null
-
-        cleanup:
-        out.abort()
+        requests.count('CompleteMultipartUploadRequest') == 0
     }
 
-    def 'files should upload and download whole, in parts when large'() {
+    def 'files should upload, in parts when large, and download whole'() {
         given:
         def small = Files.write(tempDir.resolve('small.txt'), 'hello'.bytes)
-        def large = Files.write(tempDir.resolve('large.bin'), randomBytes(3 * FovusS3Client.MIN_PART_SIZE + 1))
+        def large = Files.write(tempDir.resolve('large.bin'), randomBytes((int) (3 * PART)))
 
         when:
         client.uploadFile(small, base + 'small.txt')
         client.uploadFile(large, base + 'large.bin')
+
+        then: 'three parts of 5 MiB'
+        requests.count('CreateMultipartUploadRequest') == 1
+        requests.count('UploadPartRequest') == 3
+
+        when:
         requests.reset()
         client.downloadFile(base + 'small.txt', tempDir.resolve('out/small.txt'))
         client.downloadFile(base + 'large.bin', tempDir.resolve('out/large.bin'))
 
-        then:
+        then: 'one GET each'
         Files.readAllBytes(tempDir.resolve('out/small.txt')) == Files.readAllBytes(small)
         Files.readAllBytes(tempDir.resolve('out/large.bin')) == Files.readAllBytes(large)
-        requests.count('GetObjectRequest') == 1 + 4
+        requests.count('GetObjectRequest') == 2
     }
 
     def 'copy should duplicate an object inside the pipeline'() {

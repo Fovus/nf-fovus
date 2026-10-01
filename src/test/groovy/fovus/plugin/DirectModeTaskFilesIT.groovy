@@ -3,6 +3,7 @@ package fovus.plugin
 import fovus.plugin.nio.FovusPath
 import fovus.plugin.nio.StorageTestSupport
 import fovus.plugin.s3.MinioSupport
+import fovus.plugin.s3.TransferManagerTransfers
 import nextflow.file.FileHelper
 import nextflow.processor.TaskBean
 import org.testcontainers.containers.MinIOContainer
@@ -20,6 +21,7 @@ class DirectModeTaskFilesIT extends Specification {
 
     @Shared MinIOContainer minio
     @Shared S3Client s3
+    @Shared TransferManagerTransfers transfers
 
     @TempDir
     Path tempDir
@@ -29,15 +31,17 @@ class DirectModeTaskFilesIT extends Specification {
     def setupSpec() {
         minio = MinioSupport.start()
         s3 = MinioSupport.s3Client(minio)
+        transfers = MinioSupport.transfers(minio)
     }
 
     def cleanupSpec() {
+        transfers?.close()
         s3?.close()
         minio?.stop()
     }
 
     def setup() {
-        final fs = StorageTestSupport.fileSystem(MinioSupport.fovusClient(s3))
+        final fs = StorageTestSupport.fileSystem(MinioSupport.fovusClient(s3, transfers))
         workDir = (FovusPath) fs.getPath("/fovus-storage/pipelines/p-1-user/fovus-work/ab/${UUID.randomUUID()}")
         Files.createDirectories(workDir)
     }
