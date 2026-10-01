@@ -42,6 +42,11 @@ class FakeS3Server implements Closeable {
         server.start()
     }
 
+    /** The requests for {@code key}, in the order they arrived. */
+    List<String> requestsFor(String key) {
+        return requests.findAll { String request -> request.endsWith(' ' + key) }
+    }
+
     URI getEndpoint() {
         return URI.create("http://${server.address.hostString}:${server.address.port}")
     }

@@ -3,24 +3,32 @@ package fovus.plugin.s3
 import groovy.transform.CompileStatic
 import groovy.transform.PackageScope
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
+import software.amazon.awssdk.core.FileTransformerConfiguration
+import software.amazon.awssdk.core.FileTransformerConfiguration.FailureBehavior
+import software.amazon.awssdk.core.FileTransformerConfiguration.FileWriteOption
+import software.amazon.awssdk.core.async.AsyncResponseTransformer
 import software.amazon.awssdk.core.async.BlockingOutputStreamAsyncRequestBody
 import software.amazon.awssdk.core.async.BufferedSplittableAsyncRequestBody
 import software.amazon.awssdk.core.exception.SdkException
 import software.amazon.awssdk.core.interceptor.ExecutionInterceptor
 import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient
+import software.amazon.awssdk.http.nio.netty.SdkEventLoopGroup
 import software.amazon.awssdk.services.s3.S3AsyncClient
 import software.amazon.awssdk.services.s3.S3AsyncClientBuilder
 import software.amazon.awssdk.services.s3.model.GetObjectRequest
+import software.amazon.awssdk.services.s3.model.GetObjectResponse
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import software.amazon.awssdk.services.s3.model.PutObjectResponse
 import software.amazon.awssdk.services.s3.multipart.MultipartConfiguration
 import software.amazon.awssdk.transfer.s3.S3TransferManager
-import software.amazon.awssdk.transfer.s3.model.DownloadFileRequest
+import software.amazon.awssdk.transfer.s3.model.DownloadRequest
 import software.amazon.awssdk.transfer.s3.model.UploadFileRequest
 import software.amazon.awssdk.utils.CancellableOutputStream
 import software.amazon.awssdk.utils.SdkAutoCloseable
 
+import java.nio.channels.FileChannel
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
@@ -34,7 +42,8 @@ import java.util.concurrent.TimeoutException
  *
  * <ul>
  * <li>downloads use a plain (not multipart) reader client: one GET into the destination file, retried as a whole.
- *     The SDK's parallel multipart download is left out on purpose;</li>
+ *     The SDK's parallel multipart download is left out on purpose. The file is written in place, never created:
+ *     see {@link #INTO_EXISTING_FILE};</li>
  * <li>uploads use a multipart writer client: one PutObject up to the part size, parallel parts above it (larger
  *     ones when a file would need more than 10,000), each part read again from the file on a retry;</li>
  * <li>a streamed write has no known length. The writer client splits it into parts, each buffered whole before it
@@ -43,9 +52,14 @@ import java.util.concurrent.TimeoutException
  *     until a part is sent.</li>
  * </ul>
  *
- * The SDK's threads (Netty's event loop, its async response and scheduler threads) are daemons and start with the
- * first request. Nextflow ends the JVM with {@code System.exit}, so there is no shutdown hook; {@link #close()} is
- * for tests and an orderly shutdown.
+ * An upload, of a file or a stream, has at most {@link #MAX_IN_FLIGHT_PARTS} parts in flight, far fewer than the
+ * writer's {@link #MAX_CONNECTIONS} connections, so that one large upload cannot take them all from the small writes
+ * (task files) that share the writer. A request that still finds every connection busy waits for one as long as a
+ * read may take ({@link #IO_TIMEOUT}): the SDK does not retry a connection it failed to get.
+ *
+ * The SDK's threads (Netty's event loop, which the two clients share, and the SDK's async response and scheduler
+ * threads) are daemons and start with the first request. Nextflow ends the JVM with {@code System.exit}, so there is
+ * no shutdown hook; {@link #close()} is for tests and an orderly shutdown.
  */
 @CompileStatic
 class TransferManagerTransfers implements S3Transfers {
@@ -66,6 +80,26 @@ class TransferManagerTransfers implements S3Transfers {
     static final Duration SUBSCRIBE_TIMEOUT = Duration.ofMinutes(1)
     /** How long a failed write waits for the SDK to report why the upload failed; see {@link UploadStream#failed}. */
     static final long UPLOAD_FAILURE_WAIT_SECONDS = 10
+    /**
+     * The parts of one file upload or streamed write in flight at once. Four, as our own multipart code had: at
+     * 16 MiB parts that is 64 MiB on the wire per upload, enough to keep a link busy, and a dozen uploads at once
+     * still leave connections free.
+     */
+    static final int MAX_IN_FLIGHT_PARTS = 4
+    /** The connections of each client (the SDK's default, made explicit next to {@link #MAX_IN_FLIGHT_PARTS}). */
+    static final int MAX_CONNECTIONS = 50
+    /** How long a read or write may stall, and how long a request waits for a free connection. */
+    static final Duration IO_TIMEOUT = Duration.ofMinutes(5)
+    /**
+     * A download writes into the destination from its start, opening it for writing only: unlike the
+     * {@code downloadFile} default, it never creates the file. The caller deletes its temp file on failure or
+     * interrupt; an SDK attempt whose response arrives later then fails to open it instead of re-creating it.
+     */
+    private static final FileTransformerConfiguration INTO_EXISTING_FILE = FileTransformerConfiguration.builder()
+            .fileWriteOption(FileWriteOption.WRITE_TO_POSITION)
+            .position(0L)
+            .failureBehavior(FailureBehavior.LEAVE)
+            .build()
 
     private final S3TransferManager reader
     private final S3TransferManager writer
@@ -73,15 +107,18 @@ class TransferManagerTransfers implements S3Transfers {
     private final String bucket
     /** The clients built for the transfer managers, which do not close a client they were given. */
     private final List<? extends SdkAutoCloseable> clients
+    /** The event loop of those clients, which do not shut down an event loop they were given. */
+    private final SdkEventLoopGroup eventLoops
 
     @PackageScope
     TransferManagerTransfers(S3TransferManager reader, S3TransferManager writer, S3AsyncClient writerClient, String bucket,
-                             List<? extends SdkAutoCloseable> clients = []) {
+                             List<? extends SdkAutoCloseable> clients = [], SdkEventLoopGroup eventLoops = null) {
         this.reader = reader
         this.writer = writer
         this.writerClient = writerClient
         this.bucket = bucket
         this.clients = clients
+        this.eventLoops = eventLoops
     }
 
     /** The transfers of Fovus storage in {@code region}, with the settings of every Fovus client ({@link FovusS3Client#withFovusSettings}). */
@@ -93,31 +130,36 @@ class TransferManagerTransfers implements S3Transfers {
 
     /**
      * The reader and writer clients from these builders, with the HTTP client and the part handling described
-     * above. Tests point the builders at MinIO or a local fake.
+     * above. Tests point the builders at MinIO or a local fake, and may narrow the connection pool.
      */
     @PackageScope
     static TransferManagerTransfers fromBuilders(S3AsyncClientBuilder readerBuilder, S3AsyncClientBuilder writerBuilder,
-                                                 String bucket, long partSize) {
-        final readerClient = readerBuilder.httpClientBuilder(httpClient()).build()
-        final writerClient = writerBuilder.httpClientBuilder(httpClient())
+                                                 String bucket, long partSize, int maxConnections = MAX_CONNECTIONS) {
+        final eventLoops = SdkEventLoopGroup.builder().build()
+        final readerClient = readerBuilder.httpClientBuilder(httpClient(eventLoops, maxConnections)).build()
+        final writerClient = writerBuilder.httpClientBuilder(httpClient(eventLoops, maxConnections))
                 .multipartEnabled(true)
                 .multipartConfiguration(MultipartConfiguration.builder()
                         .thresholdInBytes(partSize)
                         .minimumPartSizeInBytes(partSize)
                         // what bounds the memory of a streamed write; a file's parts are read from the file
                         .apiCallBufferSizeInBytes(STREAM_BUFFER_PARTS * partSize)
+                        .parallelConfiguration { it.maxInFlightParts(MAX_IN_FLIGHT_PARTS) }
                         .build())
                 .build()
         return new TransferManagerTransfers(S3TransferManager.builder().s3Client(readerClient).build(),
                                             S3TransferManager.builder().s3Client(writerClient).build(),
-                                            writerClient, bucket, [readerClient, writerClient])
+                                            writerClient, bucket, [readerClient, writerClient], eventLoops)
     }
 
-    private static NettyNioAsyncHttpClient.Builder httpClient() {
+    private static NettyNioAsyncHttpClient.Builder httpClient(SdkEventLoopGroup eventLoops, int maxConnections) {
         return NettyNioAsyncHttpClient.builder()
+                .eventLoopGroup(eventLoops)
+                .maxConcurrency(maxConnections)
+                .connectionAcquisitionTimeout(IO_TIMEOUT)
                 .connectionTimeout(Duration.ofSeconds(30))
-                .readTimeout(Duration.ofMinutes(5))
-                .writeTimeout(Duration.ofMinutes(5))
+                .readTimeout(IO_TIMEOUT)
+                .writeTimeout(IO_TIMEOUT)
     }
 
     @Override
@@ -131,11 +173,16 @@ class TransferManagerTransfers implements S3Transfers {
 
     @Override
     void downloadFile(String key, Path destination) throws IOException {
-        final request = DownloadFileRequest.builder()
+        final request = DownloadRequest.builder()
                 .getObjectRequest(GetObjectRequest.builder().bucket(bucket).key(key).build())
-                .destination(destination)
+                .responseTransformer(AsyncResponseTransformer.<GetObjectResponse> toFile(destination, INTO_EXISTING_FILE))
                 .build()
-        await(reader.downloadFile(request).completionFuture(), 'read', key)
+        final GetObjectResponse response = await(reader.download(request).completionFuture(), 'read', key).result()
+        // Each attempt writes from the start without truncating: cut what a longer attempt before it left at the end
+        final Long length = response.contentLength()
+        if (length != null) {
+            FileChannel.open(destination, StandardOpenOption.WRITE).withCloseable { FileChannel file -> file.truncate(length) }
+        }
     }
 
     @Override
@@ -159,6 +206,8 @@ class TransferManagerTransfers implements S3Transfers {
         reader.close()
         writer.close()
         for (SdkAutoCloseable client : clients) client.close()
+        // At once: the clients are closed, so there is nothing for a quiet period to wait for
+        eventLoops?.eventLoopGroup()?.shutdownGracefully(0, 5, TimeUnit.SECONDS)?.awaitUninterruptibly(5, TimeUnit.SECONDS)
     }
 
     /**

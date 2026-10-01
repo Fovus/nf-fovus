@@ -112,7 +112,7 @@ class FovusS3ClientEndpointTest extends Specification {
 
         when: 'a file download, with the download token (straight to the transfers: the client looks the object up first)'
         recorder.hosts.clear()
-        client.@transfers.downloadFile(PREFIX + 'x', tempDir.resolve('out.txt'))
+        client.@transfers.downloadFile(PREFIX + 'x', Files.createFile(tempDir.resolve('out.txt')))
 
         then:
         thrown(Exception)

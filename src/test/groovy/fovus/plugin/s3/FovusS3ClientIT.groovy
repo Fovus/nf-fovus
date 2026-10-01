@@ -115,7 +115,7 @@ class FovusS3ClientIT extends Specification {
         when:
         out.abort()
         out.close()
-        // any part the SDK was still sending ends without completing the upload
+        // a window for a wrong CompleteMultipartUpload to show: a part the SDK was still sending ends without one
         Thread.sleep(1000)
 
         then:

@@ -8,7 +8,10 @@ interface S3Transfers extends Closeable {
     /** Upload a local file to {@code key} (multipart above the threshold). SDK failures are thrown unwrapped. */
     void uploadFile(Path file, String key) throws IOException
 
-    /** Download {@code key} to {@code destination}, which the caller owns (a temp file). SDK failures are thrown unwrapped. */
+    /**
+     * Download {@code key} into {@code destination}, an existing file the caller owns (a temp file): it is written in
+     * place, never created. SDK failures are thrown unwrapped.
+     */
     void downloadFile(String key, Path destination) throws IOException
 
     /** A stream whose bytes become the object at {@code key} only when it is closed without error. */

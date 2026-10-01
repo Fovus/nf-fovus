@@ -4,14 +4,18 @@ import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
 import software.amazon.awssdk.core.async.AsyncRequestBody
 import software.amazon.awssdk.core.async.BufferedSplittableAsyncRequestBody
+import software.amazon.awssdk.core.async.SdkPublisher
+import software.amazon.awssdk.http.nio.netty.SdkEventLoopGroup
+import software.amazon.awssdk.services.s3.model.GetObjectResponse
 import software.amazon.awssdk.core.exception.SdkClientException
 import software.amazon.awssdk.services.s3.S3AsyncClient
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
 import software.amazon.awssdk.services.s3.model.PutObjectResponse
 import software.amazon.awssdk.services.s3.model.S3Exception
 import software.amazon.awssdk.transfer.s3.S3TransferManager
-import software.amazon.awssdk.transfer.s3.model.DownloadFileRequest
-import software.amazon.awssdk.transfer.s3.model.FileDownload
+import software.amazon.awssdk.transfer.s3.model.CompletedDownload
+import software.amazon.awssdk.transfer.s3.model.Download
+import software.amazon.awssdk.transfer.s3.model.DownloadRequest
 import software.amazon.awssdk.transfer.s3.model.FileUpload
 import software.amazon.awssdk.transfer.s3.model.UploadFileRequest
 import spock.lang.Specification
@@ -35,7 +39,7 @@ class TransferManagerTransfersTest extends Specification {
     S3TransferManager writer = Mock()
     S3AsyncClient writerClient = Mock()
     FileUpload fileUpload = Mock()
-    FileDownload fileDownload = Mock()
+    Download<GetObjectResponse> download = Mock()
     TransferManagerTransfers transfers = new TransferManagerTransfers(reader, writer, writerClient, 'bucket')
 
     def 'uploadFile should send the file to the bucket and key with the writer'() {
@@ -53,19 +57,58 @@ class TransferManagerTransfersTest extends Specification {
         0 * reader._
     }
 
-    def 'downloadFile should fetch the bucket and key into the destination with the reader'() {
+    /** A finished download whose response says the object is {@code length} bytes long. */
+    private static CompletableFuture<CompletedDownload<GetObjectResponse>> downloaded(long length) {
+        return CompletableFuture.completedFuture(
+                CompletedDownload.builder().result(GetObjectResponse.builder().contentLength(length).build()).build())
+    }
+
+    def 'downloadFile should fetch the bucket and key with the reader'() {
         given:
-        def destination = tempDir.resolve('.data.bin.part')
+        def destination = Files.write(tempDir.resolve('.data.bin.part'), 'hello'.bytes)
 
         when:
         transfers.downloadFile(KEY, destination)
 
         then:
-        1 * reader.downloadFile({ DownloadFileRequest r ->
-            r.getObjectRequest().bucket() == 'bucket' && r.getObjectRequest().key() == KEY && r.destination() == destination
-        }) >> fileDownload
-        fileDownload.completionFuture() >> CompletableFuture.completedFuture(null)
+        1 * reader.download({ DownloadRequest r -> r.getObjectRequest().bucket() == 'bucket' && r.getObjectRequest().key() == KEY }) >> download
+        download.completionFuture() >> downloaded(5)
         0 * writer._
+    }
+
+    def "downloadFile should write into the destination, never create it: the file is the caller's, and may be gone"() {
+        given:
+        def destination = tempDir.resolve('.data.bin.part')
+        DownloadRequest request = null
+        reader.download(_) >> { DownloadRequest r -> request = r; download }
+        download.completionFuture() >> downloaded(5)
+        Files.write(destination, 'hello'.bytes)
+        transfers.downloadFile(KEY, destination)
+
+        when: 'its transformer gets a response after the caller deleted the file'
+        Files.delete(destination)
+        def transformer = request.responseTransformer()
+        def result = transformer.prepare()
+        transformer.onResponse(GetObjectResponse.builder().contentLength(5L).build())
+        transformer.onStream(SdkPublisher.adapt(AsyncRequestBody.fromBytes('hello'.bytes)))
+        result.handle { r, t -> null }.get()
+
+        then:
+        result.isCompletedExceptionally()
+        !Files.exists(destination)
+    }
+
+    def 'downloadFile should cut the destination to the length of the object'() {
+        given: 'an attempt that wrote more than the object holds now'
+        def destination = Files.write(tempDir.resolve('.data.bin.part'), 'hello, and more'.bytes)
+        reader.download(_) >> download
+        download.completionFuture() >> downloaded(5)
+
+        when:
+        transfers.downloadFile(KEY, destination)
+
+        then:
+        Files.readAllBytes(destination) == 'hello'.bytes
     }
 
     def 'a transfer failing with #wrapped should surface the failure unwrapped, or else as an I/O error naming its class'() {
@@ -74,8 +117,8 @@ class TransferManagerTransfersTest extends Specification {
         future.completeExceptionally(failure)
         writer.uploadFile(_) >> fileUpload
         fileUpload.completionFuture() >> future
-        reader.downloadFile(_) >> fileDownload
-        fileDownload.completionFuture() >> future
+        reader.download(_) >> download
+        download.completionFuture() >> future
 
         when:
         transfers.uploadFile(tempDir.resolve('in.bin'), KEY)
@@ -114,8 +157,8 @@ class TransferManagerTransfersTest extends Specification {
     def 'an interrupted wait should cancel the transfer, keep the interrupt and throw InterruptedIOException'() {
         given:
         def future = new CompletableFuture()
-        reader.downloadFile(_) >> fileDownload
-        fileDownload.completionFuture() >> future
+        reader.download(_) >> download
+        download.completionFuture() >> future
 
         when:
         Thread.currentThread().interrupt()
@@ -317,10 +360,12 @@ class TransferManagerTransfersTest extends Specification {
         e.is(clientError)
     }
 
-    def 'close should close both transfer managers and the clients built for them'() {
+    def 'close should close both transfer managers, the clients built for them, and their event loops'() {
         given:
         S3AsyncClient readerClient = Mock()
-        def built = new TransferManagerTransfers(reader, writer, writerClient, 'bucket', [readerClient, writerClient])
+        def eventLoops = SdkEventLoopGroup.builder().numberOfThreads(1).build()
+        eventLoops.eventLoopGroup().submit({ -> } as Runnable).get()
+        def built = new TransferManagerTransfers(reader, writer, writerClient, 'bucket', [readerClient, writerClient], eventLoops)
 
         when:
         built.close()
@@ -330,5 +375,6 @@ class TransferManagerTransfersTest extends Specification {
         1 * writer.close()
         1 * readerClient.close()
         1 * writerClient.close()
+        eventLoops.eventLoopGroup().isTerminated()
     }
 }
