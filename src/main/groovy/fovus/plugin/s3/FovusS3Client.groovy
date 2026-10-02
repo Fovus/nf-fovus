@@ -260,10 +260,22 @@ class FovusS3Client implements Closeable {
 
     // -- transfers
 
-    /** A stream whose bytes become the object at {@code key} once it is closed; see {@link S3Transfers#newUploadStream}. */
+    /** A stream of unknown length whose bytes become the object at {@code key} once it is closed; see {@link S3Transfers#newUploadStream}. */
     S3UploadStream newOutputStream(String key) throws IOException {
+        return uploadStream(key, null)
+    }
+
+    /**
+     * A stream of exactly {@code contentLength} bytes, which become the object at {@code key} once it is closed. A
+     * known length lets a large stream use larger parts; see {@link S3Transfers#newUploadStream}.
+     */
+    S3UploadStream newOutputStream(String key, long contentLength) throws IOException {
+        return uploadStream(key, contentLength)
+    }
+
+    private S3UploadStream uploadStream(String key, Long contentLength) throws IOException {
         writable(key)
-        return new MappedUploadStream(key, call('write', key) { transfers.newUploadStream(key) })
+        return new MappedUploadStream(key, call('write', key) { transfers.newUploadStream(key, contentLength) })
     }
 
     /**
@@ -299,8 +311,8 @@ class FovusS3Client implements Closeable {
 
     /**
      * Copy a readable key to a writable one, in any area (a task output into {@code files/}, for {@code publishDir}):
-     * CopyObject when allowed, otherwise a streamed download and upload. The write token is expected to deny
-     * CopyObject: once it has, every later copy streams without asking again.
+     * CopyObject when allowed, otherwise a streamed download and upload of {@code size} bytes, the source's size. The
+     * write token is expected to deny CopyObject: once it has, every later copy streams without asking again.
      */
     void copy(String sourceKey, String targetKey, long size) throws IOException {
         writable(targetKey)
@@ -319,7 +331,7 @@ class FovusS3Client implements Closeable {
                 log.debug "[FOVUS] CopyObject is not allowed for ${sourceKey}; copying it, and every later file, through a download instead"
             }
         }
-        final out = newOutputStream(targetKey)
+        final out = newOutputStream(targetKey, size)
         try {
             getObject(sourceKey).withCloseable { InputStream input -> input.transferTo(out) }
             out.close()

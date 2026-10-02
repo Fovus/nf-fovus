@@ -14,6 +14,11 @@ interface S3Transfers extends Closeable {
      */
     void downloadFile(String key, Path destination) throws IOException
 
-    /** A stream whose bytes become the object at {@code key} only when it is closed without error. */
-    S3UploadStream newUploadStream(String key) throws IOException
+    /**
+     * A stream whose bytes become the object at {@code key} only when it is closed without error. With a
+     * {@code contentLength} (null when unknown) the stream must receive exactly that many bytes: a write past it, or
+     * a close before it, fails and discards the upload. A known length lets a large stream use larger parts; a length
+     * no stream can take fails here, before the upload starts.
+     */
+    S3UploadStream newUploadStream(String key, Long contentLength) throws IOException
 }

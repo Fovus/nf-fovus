@@ -46,10 +46,11 @@ import java.util.concurrent.TimeoutException
  *     purpose. The file is written in place, never created: see {@link #INTO_EXISTING_FILE};</li>
  * <li>uploads use a multipart writer client: one PutObject up to the part size, parallel parts above it (larger
  *     ones when a file would need more than 10,000), each part read again from the file on a retry;</li>
- * <li>a streamed write has no known length. The writer client splits it into parts, each buffered whole before it
- *     is sent, so that a part (or the single PutObject of a short stream) can be sent again. An open stream holds
- *     at most {@link #STREAM_BUFFER_PARTS} parts in memory, 32 MiB at the default part size: the writer blocks
- *     until a part is sent.</li>
+ * <li>a streamed write is split into parts by the writer client, each buffered whole before it is sent, so that
+ *     a part (or the single PutObject of a short stream) can be sent again. An open stream holds at most
+ *     {@link #STREAM_BUFFER_PARTS} parts' worth of memory, 32 MiB at the default part size: the writer blocks until
+ *     a part is sent. A stream's length may be known in advance, which lets a large one use larger parts: see
+ *     {@link #newUploadStream} for the sizes a stream can take.</li>
  * </ul>
  *
  * An upload, of a file or a stream, has at most {@link #MAX_IN_FLIGHT_PARTS} parts in flight, far fewer than the
@@ -86,6 +87,8 @@ class TransferManagerTransfers implements S3Transfers {
      * still leave connections free.
      */
     static final int MAX_IN_FLIGHT_PARTS = 4
+    /** S3's limit on the parts of one upload. */
+    static final long MAX_PARTS = 10_000
     /** The connections of each client (the SDK's default, made explicit next to {@link #MAX_IN_FLIGHT_PARTS}). */
     static final int MAX_CONNECTIONS = 50
     /** How long a read or write may stall, and how long a request waits for a free connection. */
@@ -118,16 +121,20 @@ class TransferManagerTransfers implements S3Transfers {
     private final List<? extends SdkAutoCloseable> clients
     /** The event loop of those clients, which do not shut down an event loop they were given. */
     private final SdkEventLoopGroup eventLoops
+    /** The part size of the writer client: its threshold, its smallest part, and half its stream buffer. */
+    private final long partSize
 
     @PackageScope
     TransferManagerTransfers(S3TransferManager reader, S3TransferManager writer, S3AsyncClient writerClient, String bucket,
-                             List<? extends SdkAutoCloseable> clients = [], SdkEventLoopGroup eventLoops = null) {
+                             List<? extends SdkAutoCloseable> clients = [], SdkEventLoopGroup eventLoops = null,
+                             long partSize = DEFAULT_PART_SIZE) {
         this.reader = reader
         this.writer = writer
         this.writerClient = writerClient
         this.bucket = bucket
         this.clients = clients
         this.eventLoops = eventLoops
+        this.partSize = partSize
     }
 
     /** The transfers of Fovus storage in {@code region}, with the settings of every Fovus client ({@link FovusS3Client#withFovusSettings}). */
@@ -166,7 +173,7 @@ class TransferManagerTransfers implements S3Transfers {
             final reader = S3TransferManager.builder().s3Client(readerClient).build()
             built.add(0, reader)
             final writer = S3TransferManager.builder().s3Client(writerClient).build()
-            return new TransferManagerTransfers(reader, writer, writerClient, bucket, [readerClient, writerClient], eventLoops)
+            return new TransferManagerTransfers(reader, writer, writerClient, bucket, [readerClient, writerClient], eventLoops, partSize)
         }
         catch (Throwable failure) {
             throw closeAll(built, eventLoops, failure)
@@ -212,11 +219,36 @@ class TransferManagerTransfers implements S3Transfers {
         }
     }
 
+    /**
+     * A streamed write, of {@code contentLength} bytes when known. How large a stream can be depends on that:
+     *
+     * <ul>
+     * <li>of unknown length, the writer client splits it into parts of the part size as it comes, so it is limited
+     *     to {@link #MAX_PARTS} of them: about 156 GiB at 16 MiB. Larger, it fails at the part past the limit;</li>
+     * <li>of known length, the writer client picks the part size itself, larger than ours when the stream would
+     *     otherwise need more than {@link #MAX_PARTS}. A part must still fit in the stream's buffer (the SDK refuses
+     *     to split it otherwise), so a stream is limited to {@link #MAX_PARTS} parts of
+     *     {@link #STREAM_BUFFER_PARTS} part sizes: about 312 GiB at 16 MiB. A larger length fails here, before
+     *     anything is sent. The buffer is not raised for it: it is the memory every open stream may take.</li>
+     * </ul>
+     *
+     * A local file ({@link #uploadFile}) has no such limit: its parts are read from the file, not buffered.
+     */
     @Override
-    S3UploadStream newUploadStream(String key) throws IOException {
-        // No length: the multipart client then splits the stream into parts as it comes
+    S3UploadStream newUploadStream(String key, Long contentLength) throws IOException {
+        if (contentLength != null && contentLength < 0) {
+            throw new IllegalArgumentException("A stream's length cannot be negative: ${contentLength}".toString())
+        }
+        final long largest = MAX_PARTS * STREAM_BUFFER_PARTS * partSize
+        if (contentLength != null && contentLength > largest) {
+            throw new IOException("Cannot upload ${key}: ${contentLength} bytes (${gib(contentLength)}) is more than the ${gib(largest)} a streamed upload supports".toString())
+        }
+        // A length is declared only above one part, where the writer client sends parts, each buffered: a declared
+        // length within one part would be sent as one PutObject straight from the stream, which cannot be sent again.
+        // Undeclared, the client splits the stream as it comes, and a stream within one part becomes one buffered PutObject
+        final Long declared = contentLength != null && contentLength > partSize ? contentLength : null
         final body = BlockingOutputStreamAsyncRequestBody.builder()
-                .contentLength(null)
+                .contentLength(declared)
                 .subscribeTimeout(SUBSCRIBE_TIMEOUT)
                 .build()
         // Each part buffered whole before it is sent, so the SDK can send it again on a retry
@@ -225,7 +257,11 @@ class TransferManagerTransfers implements S3Transfers {
                 .bufferBeforeSend(true)
                 .build()
         final upload = writerClient.putObject(PutObjectRequest.builder().bucket(bucket).key(key).build(), retryable)
-        return new UploadStream(key, body, upload)
+        return new UploadStream(key, body, upload, contentLength)
+    }
+
+    private static String gib(long bytes) {
+        return String.format(Locale.ROOT, '%.1f GiB', bytes / (double) (1L << 30))
     }
 
     /** Close the transfer managers, then their clients, then shut the event loop down, whatever fails on the way. */
@@ -297,50 +333,64 @@ class TransferManagerTransfers implements S3Transfers {
 
     /**
      * A streamed write: the bytes go to the SDK's blocking body as they are written, and {@link #close()} ends the
-     * body and waits for the upload. Not thread-safe, as an {@code OutputStream} is not.
+     * body and waits for the upload. With a length, the stream must receive exactly that many bytes, or the upload is
+     * discarded. Not thread-safe, as an {@code OutputStream} is not.
      */
     private static final class UploadStream extends S3UploadStream {
 
         private final String key
         private final BlockingOutputStreamAsyncRequestBody body
         private final CompletableFuture<PutObjectResponse> upload
+        /** The bytes the stream must receive, or null when any number will do. */
+        private final Long length
+        /** The bytes written so far. */
+        private long written
         /** The body's stream, once the SDK reads the body. */
         private CancellableOutputStream output
         /** Closed or aborted: the upload is over, one way or the other. */
         private boolean finished
 
-        UploadStream(String key, BlockingOutputStreamAsyncRequestBody body, CompletableFuture<PutObjectResponse> upload) {
+        UploadStream(String key, BlockingOutputStreamAsyncRequestBody body, CompletableFuture<PutObjectResponse> upload, Long length) {
             this.key = key
             this.body = body
             this.upload = upload
+            this.length = length
         }
 
         @Override
         void write(int b) throws IOException {
             ensureOpen()
+            ensureRoom(1)
             try {
                 output().write(b)
             }
             catch (RuntimeException e) {
                 throw failed(e)
             }
+            written++
         }
 
         @Override
-        void write(byte[] bytes, int offset, int length) throws IOException {
+        void write(byte[] bytes, int offset, int count) throws IOException {
             ensureOpen()
+            ensureRoom(count)
             try {
-                output().write(bytes, offset, length)
+                output().write(bytes, offset, count)
             }
             catch (RuntimeException e) {
                 throw failed(e)
             }
+            written += count
         }
 
         /** End the body, so the SDK sends what is left and completes the upload, and wait for it. */
         @Override
         void close() throws IOException {
             if (finished) return
+            if (length != null && written != length) {
+                abort()
+                throw new IOException("S3 write failed on ${key}: the stream ended after ${written} of its declared ${length} bytes".toString())
+            }
             try {
                 output().close()
             }
@@ -403,6 +453,14 @@ class TransferManagerTransfers implements S3Transfers {
 
         private void ensureOpen() throws IOException {
             if (finished) throw new IOException("The upload to ${key} is closed".toString())
+        }
+
+        /** A write past the declared length discards the upload: whatever the source holds, it is not that object. */
+        private void ensureRoom(int count) throws IOException {
+            if (length != null && written + count > length) {
+                abort()
+                throw new IOException("S3 write failed on ${key}: the stream is longer than its declared ${length} bytes".toString())
+            }
         }
     }
 }

@@ -234,8 +234,8 @@ executable on the compute node because its mount shows `pipelines/` files as 077
   | `readAttributes` | cached listing metadata, else `HeadObject`, else prefix listing (implicit folder) |
   | `exists` / `checkAccess` | as `readAttributes` |
   | `delete` | `DeleteObject`; a folder's own marker |
-  | `copy` / `move` | between any readable and any writable path, including across areas (`pipelines` → `files` for `publishDir`): `CopyObject` (write client) when allowed, else a streamed `GetObject` + upload; `move` = copy + delete, a folder object by object |
-  | `upload` (`FileSystemTransferAware`) | file or folder, into `pipelines` or `files`; Transfer Manager `uploadFile` (parallel multipart above 16 MiB, at most 4 parts in flight, each part read again from the file on a retry); other file systems (https, `s3://`) streamed |
+  | `copy` / `move` | between any readable and any writable path, including across areas (`pipelines` → `files` for `publishDir`): `CopyObject` (write client) when allowed, else a streamed `GetObject` + upload of the source's size; `move` = copy + delete, a folder object by object |
+  | `upload` (`FileSystemTransferAware`) | file or folder, into `pipelines` or `files`; Transfer Manager `uploadFile` (parallel multipart above 16 MiB, at most 4 parts in flight, each part read again from the file on a retry); other file systems (https, `s3://`) streamed, as an upload of their size when they report one |
   | `download` (`FileSystemTransferAware`) | file or folder; Transfer Manager `downloadFile`: one `GetObject`, retried as a whole by the SDK, into a temp file next to the target, moved into place on success |
   | symlinks, locks, `setAttribute` | `UnsupportedOperationException` naming the operation |
 
@@ -249,7 +249,7 @@ executable on the compute node because its mount shows `pipelines/` files as 077
   `GetObject`, small `PutObject`s (folder markers), `CopyObject` and `DeleteObject`.
 - Two `S3TransferManager`s (D11), one per token, on the Java-based `S3AsyncClient` over the Netty HTTP
   client (no CRT, no Apache HTTP client), built with the same credentials, endpoint and settings as
-  the sync clients. They serve file uploads and downloads, and streamed writes of unknown length. The
+  the sync clients. They serve file uploads and downloads, and streamed writes. The
   AWS SDK for Java v2 is 2.55.9, bumped from 2.31.0: on 2.31.0 neither streamed writes nor multipart
   downloads were retried.
   - The **writer** client is multipart-enabled: threshold and part size 16 MiB, at most 4 parts in
@@ -264,9 +264,16 @@ executable on the compute node because its mount shows `pipelines/` files as 077
     `BufferedSplittableAsyncRequestBody` with `bufferBeforeSend`. Every part, and the single
     `PutObject` of a short stream, is buffered whole before it is sent, so every part is retried.
     An open stream holds at most 2 parts (32 MiB) in memory, and the writer blocks until a part is
-    sent; a short stream holds only its own bytes. A streamed write is limited to 10,000 parts, about
-    156 GiB at 16 MiB. A file upload is not: its parts grow when the file would otherwise need more
-    than 10,000.
+    sent; a short stream holds only its own bytes. A streamed write of unknown length is split into
+    16 MiB parts as it comes, so it is limited to 10,000 of them, about 156 GiB. When the size is
+    known (a remote input that reports one, a streamed copy such as a publish into `files/`), it is
+    declared to the SDK above one part, and the SDK picks larger parts when it would otherwise need
+    more than 10,000; a part must still fit in the 32 MiB buffer, so such a write is limited to
+    10,000 × 32 MiB, about 312 GiB, and a larger one fails before anything is sent (the buffer is not
+    raised: it is the memory of every open stream). A stream of known size must deliver exactly that
+    many bytes: fewer at close, or more on a write, discards the upload. A size within one part is not
+    declared, so its single `PutObject` stays buffered and retried. A file upload has no such limit:
+    its parts grow when the file would otherwise need more than 10,000, and are read from the file.
   - A download writes into the temp file the caller created and never creates the file: a response
     that arrives after an interrupt, when the caller has deleted the temp file, fails instead of
     creating it again.
@@ -604,7 +611,10 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
   parts of a stream, the parts and the `PutObject` of a file upload, and the GET of a download are each
   retried after a transient failure, and a retried download fetches the whole object again with one
   GET, also after a body cut short of its declared length; a streamed read through the url-connection
-  client fails on such a body instead of ending early; an aborted stream publishes nothing; a file upload has at most 4 parts in flight; a request
+  client fails on such a body instead of ending early; an aborted stream publishes nothing; a stream
+  of known size is sent in parts, in larger ones when it would need more than 10,000 (parts of
+  100 bytes for that case), its parts are retried, and one closed early or written past its size
+  publishes nothing; a file upload has at most 4 parts in flight; a request
   waits for a free connection past the SDK's default of 10 seconds, then goes through; an open stream
   holds at most 2 parts in memory.
 - `FovusTaskHandler.checkIfCompleted()`: temporary read error defers, fails after the bound;

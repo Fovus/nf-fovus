@@ -117,7 +117,7 @@ class S3TransferFailureTest extends Specification {
         then:
         1 * s3.copyObject(_ as CopyObjectRequest) >> { throw FovusS3ClientTest.s3Error(403, 'AccessDenied') }
         1 * s3.getObject({ GetObjectRequest r -> r.key() == SOURCE }) >> responseStream(new ByteArrayInputStream('hello'.bytes))
-        1 * transfers.newUploadStream(KEY) >> upload
+        1 * transfers.newUploadStream(KEY, 5L) >> upload
         upload.published
         !upload.aborted
         upload.text == 'hello'
@@ -136,8 +136,8 @@ class S3TransferFailureTest extends Specification {
         1 * s3.copyObject(_ as CopyObjectRequest) >> { throw FovusS3ClientTest.s3Error(403, 'AccessDenied') }
         2 * s3.getObject({ GetObjectRequest r -> r.key() == SOURCE }) >>> [responseStream(new ByteArrayInputStream('hello'.bytes)),
                                                                           responseStream(new ByteArrayInputStream('again'.bytes))]
-        1 * transfers.newUploadStream(KEY) >> first
-        1 * transfers.newUploadStream('files/results/out.bin') >> second
+        1 * transfers.newUploadStream(KEY, 5L) >> first
+        1 * transfers.newUploadStream('files/results/out.bin', 5L) >> second
         first.text == 'hello'
         second.text == 'again'
         second.published
@@ -180,7 +180,7 @@ class S3TransferFailureTest extends Specification {
         then:
         0 * s3.copyObject(_)
         1 * s3.getObject({ GetObjectRequest r -> r.key() == SOURCE }) >> responseStream(new ByteArrayInputStream('hello'.bytes))
-        1 * transfers.newUploadStream(KEY) >> upload
+        1 * transfers.newUploadStream(KEY, FovusS3Client.MAX_COPY_OBJECT_SIZE + 1) >> upload
         upload.text == 'hello'
         upload.published
     }
@@ -214,7 +214,7 @@ class S3TransferFailureTest extends Specification {
         thrown.message == expectedMessage
         thrown.cause == null
         1 * s3.getObject(_ as GetObjectRequest) >> responseStream(failing)
-        1 * transfers.newUploadStream(KEY) >> upload
+        1 * transfers.newUploadStream(KEY, FovusS3Client.MAX_COPY_OBJECT_SIZE + 1) >> upload
         (1.._) * upload.write(_, _, _)
         1 * upload.abort()
         0 * upload.close()
@@ -237,7 +237,7 @@ class S3TransferFailureTest extends Specification {
         e.message == "S3 read failed on ${SOURCE}: the body ended after 6 of 10 bytes".toString()
         e.cause == null
         1 * s3.getObject(_ as GetObjectRequest) >> responseStream(new ByteArrayInputStream(new byte[6]), 10L)
-        1 * transfers.newUploadStream(KEY) >> upload
+        1 * transfers.newUploadStream(KEY, FovusS3Client.MAX_COPY_OBJECT_SIZE + 1) >> upload
         1 * upload.abort()
         0 * upload.close()
     }
@@ -245,6 +245,14 @@ class S3TransferFailureTest extends Specification {
     def 'newOutputStream should refuse #key outside the pipeline before calling S3'() {
         when:
         client.newOutputStream(key)
+
+        then:
+        thrown(AccessDeniedException)
+        0 * s3._
+        0 * transfers._
+
+        when: 'of a known size'
+        client.newOutputStream(key, 5L)
 
         then:
         thrown(AccessDeniedException)

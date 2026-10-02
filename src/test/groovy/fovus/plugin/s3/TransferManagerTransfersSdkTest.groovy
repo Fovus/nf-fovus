@@ -65,9 +65,9 @@ class TransferManagerTransfersSdkTest extends Specification {
         return bytes
     }
 
-    /** Write {@code data} through an upload stream of {@code via} in 64 KiB writes, then close it. */
-    private void stream(byte[] data, TransferManagerTransfers via = transfers) {
-        final out = via.newUploadStream(key)
+    /** Write {@code data} through an upload stream of {@code length} (null: unknown) in 64 KiB writes, then close it. */
+    private void stream(byte[] data, Long length = null) {
+        final out = transfers.newUploadStream(key, length)
         for (int offset = 0; offset < data.length; offset += 65536) out.write(data, offset, Math.min(65536, data.length - offset))
         out.close()
     }
@@ -203,7 +203,7 @@ class TransferManagerTransfersSdkTest extends Specification {
         when: 'a small write waits for the connection longer than a 10 s connection acquire would allow'
         def writer = Thread.start {
             try {
-                final out = narrow.newUploadStream(smallKey)
+                final out = narrow.newUploadStream(smallKey, null)
                 out.write('hello'.bytes)
                 out.close()
             }
@@ -343,7 +343,7 @@ class TransferManagerTransfersSdkTest extends Specification {
 
     def 'a stream aborted after #written bytes should publish nothing'() {
         given:
-        def out = transfers.newUploadStream(key)
+        def out = transfers.newUploadStream(key, null)
         out.write(content(written))
 
         when:
@@ -378,10 +378,112 @@ class TransferManagerTransfersSdkTest extends Specification {
         s3.objects[key] == data
     }
 
+    def 'a stream of known size should be uploaded in parts of the part size'() {
+        given:
+        def data = content(2 * PART + PART.intdiv(2))
+
+        when:
+        stream(data, (long) data.length)
+
+        then: 'the parts may reach S3 in any order'
+        s3.requestsFor(key).first() == "CREATE ${key}"
+        s3.requestsFor(key).last() == "COMPLETE ${key}"
+        s3.requestsFor(key).findAll { it.startsWith('PART ') } as Set == (1..3).collect { "PART ${it} ${key}".toString() } as Set
+        parts() == 3
+        s3.objects[key] == data
+    }
+
+    def 'a stream of known size that would need more than 10,000 parts should be sent in larger ones'() {
+        given: 'parts of 100 bytes, so that 10,000 of them hold 1,000,000 bytes, and a stream half as large again'
+        def small = TransferManagerTransfers.fromBuilders(clientBuilder(), clientBuilder(), 'bucket', 100L)
+        def data = content(1_500_000)
+
+        when: 'written 100 bytes at a time: a write must fit in the 200-byte buffer of these parts'
+        def out = small.newUploadStream(key, (long) data.length)
+        for (int offset = 0; offset < data.length; offset += 100) out.write(data, offset, 100)
+        out.close()
+
+        then: 'the SDK picks parts of 150 bytes; of unknown length, the stream would fail at part 10,001'
+        parts() == 10_000
+        s3.requestsFor(key).last() == "COMPLETE ${key}"
+        s3.objects[key] == data
+
+        cleanup:
+        small?.close()
+    }
+
+    def 'a stream of known size whose second part fails once should send that part again'() {
+        given:
+        def data = content(2 * PART + PART.intdiv(2))
+        s3.failOnce("PART 2 ${key}")
+
+        when:
+        stream(data, (long) data.length)
+
+        then:
+        s3.requestsFor(key).count { it == "PART 2 ${key}" } == 2
+        parts() == 4
+        s3.requestsFor(key).last() == "COMPLETE ${key}"
+        s3.objects[key] == data
+    }
+
+    def 'a stream of known size within one part whose PutObject fails once should be sent again'() {
+        given:
+        def data = content(size)
+        s3.failOnce("PUT ${key}")
+
+        when:
+        stream(data, size)
+
+        then:
+        s3.requestsFor(key) == ["PUT ${key}", "PUT ${key}"]
+        s3.objects[key] == data
+
+        where:
+        size << [5L, PART]
+    }
+
+    def 'a stream of known size closed after #written bytes should fail and publish nothing'() {
+        given:
+        def out = transfers.newUploadStream(key, 3 * PART)
+        out.write(content(written))
+
+        when:
+        out.close()
+
+        then:
+        def e = thrown(IOException)
+        e.message == "S3 write failed on ${key}: the stream ended after ${written} of its declared ${3 * PART} bytes".toString()
+        staysTrue(500) { !s3.objects.containsKey(key) && !s3.requestsFor(key).any { it.startsWith('COMPLETE ') || it.startsWith('PUT ') } }
+
+        where:
+        written << [0L, 5L, PART + PART.intdiv(2)]
+    }
+
+    def 'a stream of known size written past it should fail and publish nothing'() {
+        given:
+        def out = transfers.newUploadStream(key, 2 * PART)
+        out.write(content(2 * PART))
+
+        when:
+        out.write(1)
+
+        then:
+        def e = thrown(IOException)
+        e.message == "S3 write failed on ${key}: the stream is longer than its declared ${2 * PART} bytes".toString()
+
+        when:
+        out.close()
+
+        then:
+        noExceptionThrown()
+        staysTrue(500) { !s3.objects.containsKey(key) && !s3.requestsFor(key).any { it.startsWith('COMPLETE ') || it.startsWith('PUT ') } }
+    }
+
     def 'a stream should hold at most two parts in memory while S3 is slow to take them'() {
         given:
         s3.holdParts()
-        def out = transfers.newUploadStream(key)
+        def out = transfers.newUploadStream(key, null)
         def chunk = new byte[64 * 1024]
         def written = new AtomicLong()
         Throwable failure = null

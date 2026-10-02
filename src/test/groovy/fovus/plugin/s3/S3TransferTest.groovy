@@ -128,16 +128,58 @@ class S3TransferTest extends Specification {
         out.close()
 
         then:
-        1 * transfers.newUploadStream(KEY) >> upload
+        1 * transfers.newUploadStream(KEY, null) >> upload
         0 * s3._
         upload.published
         upload.text == 'hello'
     }
 
+    def 'newOutputStream of a known size should hand that size to the transfers under the guard'() {
+        given:
+        def upload = new RecordingUploadStream()
+
+        when:
+        def out = client.newOutputStream(KEY, 5L)
+        out.write('hello'.bytes)
+        out.close()
+
+        then:
+        1 * transfers.newUploadStream(KEY, 5L) >> upload
+        0 * s3._
+        upload.published
+        upload.text == 'hello'
+    }
+
+    def 'a stream of known size that the transfers refuse should fail with their error, before any write'() {
+        when:
+        client.newOutputStream(KEY, 400L << 30)
+
+        then:
+        1 * transfers.newUploadStream(KEY, 400L << 30) >> { throw new IOException("Cannot upload ${KEY}: too large") }
+        def e = thrown(IOException)
+        e.message == "Cannot upload ${KEY}: too large".toString()
+    }
+
+    def 'a failure of a stream of known size should be reported like any S3 failure'() {
+        given:
+        S3UploadStream upload = Mock()
+        transfers.newUploadStream(KEY, 5L) >> upload
+        def out = client.newOutputStream(KEY, 5L)
+
+        when:
+        out.close()
+
+        then:
+        1 * upload.close() >> { throw FovusS3ClientTest.s3Error(500, 'InternalError') }
+        def e = thrown(IOException)
+        e.message == "S3 write failed on ${KEY}: InternalError (HTTP 500, request req-1)".toString()
+        e.cause == null
+    }
+
     def 'abort should discard the upload stream of the transfers'() {
         given:
         def upload = new RecordingUploadStream()
-        transfers.newUploadStream(KEY) >> upload
+        transfers.newUploadStream(KEY, null) >> upload
 
         when:
         def out = client.newOutputStream(KEY)
@@ -153,7 +195,7 @@ class S3TransferTest extends Specification {
     def 'a failure of the upload stream on #operation should be reported like any S3 failure: #expected'() {
         given:
         S3UploadStream upload = Mock()
-        transfers.newUploadStream(KEY) >> upload
+        transfers.newUploadStream(KEY, null) >> upload
         def out = client.newOutputStream(KEY)
 
         when:
@@ -180,7 +222,7 @@ class S3TransferTest extends Specification {
         given:
         def failure = new StorageCredentialsException('Unable to refresh Fovus storage credentials: CLI down', false)
         S3UploadStream upload = Mock()
-        transfers.newUploadStream(KEY) >> upload
+        transfers.newUploadStream(KEY, null) >> upload
         def out = client.newOutputStream(KEY)
 
         when:

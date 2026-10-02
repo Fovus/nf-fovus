@@ -309,7 +309,8 @@ class S3Storage {
 
     /**
      * A local file is uploaded by the Transfer Manager, in parallel parts when large. A file on another file system
-     * is streamed, and published only once it was read in full: any failure while reading it, or fewer bytes than
+     * is streamed, as an upload of its size when the file system reports one (which lets a large file use larger
+     * parts), and published only once it was read in full: any failure while reading it, or a byte count other than
      * its known size, discards the upload, so FilePorter never finds a truncated input to reuse.
      */
     private void uploadFile(Path source, String key) throws IOException {
@@ -319,12 +320,13 @@ class S3Storage {
             return
         }
         final long expected = knownSize(source)
-        final out = s3.newOutputStream(key)
+        final out = expected > 0 ? s3.newOutputStream(key, expected) : s3.newOutputStream(key)
         boolean complete = false
         try {
             final long copied = Files.newInputStream(source).withCloseable { InputStream input -> input.transferTo(out) }
             if (expected > 0 && copied != expected) {
-                throw new IOException("Read ${copied} of ${expected} bytes for ${FovusS3Client.uri(key)}: the source ended early, so nothing was uploaded".toString())
+                final why = copied < expected ? 'the source ended early' : 'the source is longer than its reported size'
+                throw new IOException("Read ${copied} of ${expected} bytes for ${FovusS3Client.uri(key)}: ${why}, so nothing was uploaded".toString())
             }
             out.close()
             complete = true

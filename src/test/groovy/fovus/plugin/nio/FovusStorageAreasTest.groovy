@@ -147,7 +147,7 @@ class FovusStorageAreasTest extends Specification {
             calls << "PUT ${key}".toString()
             objects[key] = file.text
         }
-        transfers.newUploadStream(_ as String) >> { String key ->
+        transfers.newUploadStream(_ as String, _) >> { String key, Long length ->
             new RecordingUploadStream({ byte[] bytes ->
                 calls << "PUT ${key}".toString()
                 objects[key] = new String(bytes)

@@ -245,7 +245,7 @@ class TransferManagerTransfersTest extends Specification {
         def sdk = new ConsumingUpload()
 
         when:
-        def out = transfers.newUploadStream(KEY)
+        def out = transfers.newUploadStream(KEY, null)
         out.write('hel'.bytes)
         out.write((int) ('l' as char))
         out.write('xox'.bytes, 1, 1)
@@ -259,13 +259,134 @@ class TransferManagerTransfersTest extends Specification {
         sdk.future.isDone() && !sdk.future.isCompletedExceptionally()
     }
 
+    static final long PART = TransferManagerTransfers.DEFAULT_PART_SIZE
+    /** The largest stream of known size: 10,000 parts of the buffer's 2 parts, 312.5 GiB at 16 MiB parts. */
+    static final long LARGEST_KNOWN = 10_000L * TransferManagerTransfers.STREAM_BUFFER_PARTS * PART
+
+    def 'an upload stream of known size above one part should declare its size, so the SDK picks parts that fit in 10,000'() {
+        given:
+        def sdk = new ConsumingUpload()
+
+        when:
+        def out = transfers.newUploadStream(KEY, size)
+        out.abort()
+
+        then:
+        1 * writerClient.putObject({ PutObjectRequest r -> r.key() == KEY }, _ as AsyncRequestBody) >> { PutObjectRequest r, AsyncRequestBody body -> sdk.start(body) }
+        sdk.body instanceof BufferedSplittableAsyncRequestBody
+        sdk.body.contentLength() == Optional.of(size)
+
+        where:
+        size << [PART + 1, 3 * PART, 10_000L * PART + 1, LARGEST_KNOWN]
+    }
+
+    def 'an upload stream of known size within one part should not declare it, so its single PutObject stays buffered and retryable'() {
+        given:
+        def sdk = new ConsumingUpload()
+
+        when:
+        def out = transfers.newUploadStream(KEY, size)
+        out.abort()
+
+        then:
+        1 * writerClient.putObject(_ as PutObjectRequest, _ as AsyncRequestBody) >> { PutObjectRequest r, AsyncRequestBody body -> sdk.start(body) }
+        !sdk.body.contentLength().isPresent()
+
+        where:
+        size << [0L, 5L, PART]
+    }
+
+    def 'an upload stream of known size above what a stream can take should fail before any upload starts'() {
+        when:
+        transfers.newUploadStream(KEY, size)
+
+        then:
+        def e = thrown(IOException)
+        e.message == "Cannot upload ${KEY}: ${size} bytes (${expected}) is more than the 312.5 GiB a streamed upload supports".toString()
+        0 * writerClient._
+
+        where:
+        size              | expected
+        LARGEST_KNOWN + 1 | '312.5 GiB'
+        400L << 30        | '400.0 GiB'
+    }
+
+    def 'an upload stream of known size should publish exactly that many bytes'() {
+        given:
+        def sdk = new ConsumingUpload()
+        writerClient.putObject(_ as PutObjectRequest, _ as AsyncRequestBody) >> { PutObjectRequest r, AsyncRequestBody body -> sdk.start(body) }
+
+        when:
+        def out = transfers.newUploadStream(KEY, 5L)
+        out.write('hell'.bytes)
+        out.write((int) ('o' as char))
+        out.close()
+
+        then:
+        sdk.received.toString() == 'hello'
+        sdk.future.isDone() && !sdk.future.isCompletedExceptionally()
+    }
+
+    def 'an upload stream of known size written past it with #how should fail and discard the upload'() {
+        given:
+        def sdk = new ConsumingUpload()
+        writerClient.putObject(_ as PutObjectRequest, _ as AsyncRequestBody) >> { PutObjectRequest r, AsyncRequestBody body -> sdk.start(body) }
+        def out = transfers.newUploadStream(KEY, 5L)
+        out.write('hell'.bytes)
+
+        when:
+        write.call(out)
+
+        then:
+        def e = thrown(IOException)
+        e.message == "S3 write failed on ${KEY}: the stream is longer than its declared 5 bytes".toString()
+        e.cause == null
+        sdk.future.isCompletedExceptionally()
+        !sdk.received.toString().contains('!')
+
+        when: 'the discarded upload cannot be published'
+        out.close()
+
+        then:
+        noExceptionThrown()
+        sdk.future.isCompletedExceptionally()
+
+        where:
+        how             | write
+        'write(int)'    | { OutputStream o -> o.write((int) ('o' as char)); o.write((int) ('!' as char)) }
+        'write(byte[])' | { OutputStream o -> o.write('o!'.bytes) }
+    }
+
+    def 'an upload stream of known size closed before it was reached should fail and discard the upload'() {
+        given:
+        def sdk = new ConsumingUpload()
+        writerClient.putObject(_ as PutObjectRequest, _ as AsyncRequestBody) >> { PutObjectRequest r, AsyncRequestBody body -> sdk.start(body) }
+        def out = transfers.newUploadStream(KEY, 10L)
+        out.write('hello'.bytes)
+
+        when:
+        out.close()
+
+        then:
+        def e = thrown(IOException)
+        e.message == "S3 write failed on ${KEY}: the stream ended after 5 of its declared 10 bytes".toString()
+        e.cause == null
+        sdk.future.isCompletedExceptionally()
+
+        when:
+        out.close()
+
+        then:
+        noExceptionThrown()
+    }
+
     def 'closing an empty upload stream should still finish the upload'() {
         given:
         def sdk = new ConsumingUpload()
         writerClient.putObject(_ as PutObjectRequest, _ as AsyncRequestBody) >> { PutObjectRequest r, AsyncRequestBody body -> sdk.start(body) }
 
         when:
-        transfers.newUploadStream(KEY).close()
+        transfers.newUploadStream(KEY, null).close()
 
         then:
         sdk.received.size() == 0
@@ -276,7 +397,7 @@ class TransferManagerTransfersTest extends Specification {
         given:
         def sdk = new ConsumingUpload(failAtEnd: new CompletionException(s3Error))
         writerClient.putObject(_ as PutObjectRequest, _ as AsyncRequestBody) >> { PutObjectRequest r, AsyncRequestBody body -> sdk.start(body) }
-        def out = transfers.newUploadStream(KEY)
+        def out = transfers.newUploadStream(KEY, null)
         out.write('hello'.bytes)
 
         when:
@@ -297,7 +418,7 @@ class TransferManagerTransfersTest extends Specification {
         given:
         def sdk = new ConsumingUpload()
         writerClient.putObject(_ as PutObjectRequest, _ as AsyncRequestBody) >> { PutObjectRequest r, AsyncRequestBody body -> sdk.start(body) }
-        def out = transfers.newUploadStream(KEY)
+        def out = transfers.newUploadStream(KEY, null)
         out.write('partial'.bytes)
 
         when:
@@ -323,7 +444,7 @@ class TransferManagerTransfersTest extends Specification {
         writerClient.putObject(_ as PutObjectRequest, _ as AsyncRequestBody) >> { PutObjectRequest r, AsyncRequestBody body -> sdk.start(body) }
 
         when:
-        def out = transfers.newUploadStream(KEY)
+        def out = transfers.newUploadStream(KEY, null)
         out.abort()
 
         then:
@@ -334,7 +455,7 @@ class TransferManagerTransfersTest extends Specification {
         given:
         def sdk = new ConsumingUpload()
         writerClient.putObject(_ as PutObjectRequest, _ as AsyncRequestBody) >> { PutObjectRequest r, AsyncRequestBody body -> sdk.start(body) }
-        def out = transfers.newUploadStream(KEY)
+        def out = transfers.newUploadStream(KEY, null)
         out.write('hello'.bytes)
         out.close()
 
@@ -350,7 +471,7 @@ class TransferManagerTransfersTest extends Specification {
         given:
         def sdk = new ConsumingUpload(failAtFirstChunk: new CompletionException(s3Error))
         writerClient.putObject(_ as PutObjectRequest, _ as AsyncRequestBody) >> { PutObjectRequest r, AsyncRequestBody body -> sdk.start(body) }
-        def out = transfers.newUploadStream(KEY)
+        def out = transfers.newUploadStream(KEY, null)
 
         when: 'the first chunk fails the upload, so the SDK cancels the body; one of the next writes notices'
         10.times { out.write(new byte[8192]) }
@@ -369,7 +490,7 @@ class TransferManagerTransfersTest extends Specification {
     def 'an upload that failed before the SDK read the body should fail the first write with that failure'() {
         given:
         writerClient.putObject(_ as PutObjectRequest, _ as AsyncRequestBody) >> CompletableFuture.failedFuture(clientError)
-        def out = transfers.newUploadStream(KEY)
+        def out = transfers.newUploadStream(KEY, null)
 
         when:
         out.write('hello'.bytes)

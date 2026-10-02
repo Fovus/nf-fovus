@@ -320,7 +320,7 @@ class FovusS3ClientTest extends Specification {
         1 * s3.putObject({ PutObjectRequest r -> r.key() == key && r.bucket() == 'bucket' }, _ as RequestBody)
         1 * s3.deleteObject({ DeleteObjectRequest r -> r.key() == key })
         1 * s3.copyObject({ CopyObjectRequest r -> r.sourceKey() == PREFIX + 'a' && r.destinationKey() == key })
-        1 * transfers.newUploadStream(key)
+        1 * transfers.newUploadStream(key, null)
         noExceptionThrown()
 
         where:
@@ -383,7 +383,7 @@ class FovusS3ClientTest extends Specification {
         then:
         1 * s3.putObject({ PutObjectRequest r -> r.key() == key }, _ as RequestBody)
         1 * s3.headObject({ HeadObjectRequest r -> r.key() == key }) >> HeadObjectResponse.builder().contentLength(0L).build()
-        1 * transfers.newUploadStream(key) >> new RecordingUploadStream()
+        1 * transfers.newUploadStream(key, null) >> new RecordingUploadStream()
         found != null
         stream != null
 

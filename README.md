@@ -211,8 +211,10 @@ files at `/fovus-storage/pipelines/...` as in mount mode.
   ```
 - Files over 16 MiB are uploaded in parts, at most four at a time per file, and a failed request is retried.
   A download is one request, retried as a whole, into a temporary file that is moved into place once it is
-  complete. Data the plugin streams without knowing its size in advance, such as a remote input or a
-  publish into `files/`, is limited to about 156 GiB. Uploading a local file is not.
+  complete. Data the plugin streams rather than uploads from a local file is limited in size: about
+  156 GiB when its size is not known in advance, and about 312 GiB when it is, as for a remote input
+  that reports its size or a publish into `files/` (larger ones fail before anything is uploaded).
+  Uploading a local file has no such limit.
 - When an upload in parts fails or is cancelled, the AWS SDK may log a WARN "Failed to abort previous
   multipart upload": the direct-mode credentials cannot abort uploads. It is harmless: the parts already
   sent never become a file, and stay invisible until the bucket's lifecycle rule removes them.

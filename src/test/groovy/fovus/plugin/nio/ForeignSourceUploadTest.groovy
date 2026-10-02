@@ -130,8 +130,8 @@ class ForeignSourceUploadTest extends Specification {
         when:
         FileHelper.copyPath(source, inArea('files', 'in/in.bin'))
 
-        then:
-        1 * transfers.newUploadStream('files/in/in.bin') >> upload
+        then: 'as an upload of the size the source reports'
+        1 * transfers.newUploadStream('files/in/in.bin', 1000L) >> upload
         upload.published
         upload.bytes.size() == 1000
     }
@@ -146,7 +146,7 @@ class ForeignSourceUploadTest extends Specification {
         then:
         def e = thrown(IOException)
         e.message == 'connection reset'
-        1 * transfers.newUploadStream('files/in/in.bin') >> upload
+        1 * transfers.newUploadStream('files/in/in.bin', 2000L) >> upload
         upload.aborted
         !upload.published
     }
@@ -162,7 +162,7 @@ class ForeignSourceUploadTest extends Specification {
         then:
         def e = thrown(IOException)
         e.message == 'connection reset'
-        1 * transfers.newUploadStream(KEY) >> upload
+        1 * transfers.newUploadStream(KEY, 2L * served + 10) >> upload
         upload.aborted
         !upload.published
         upload.bytes.size() == served
@@ -180,7 +180,7 @@ class ForeignSourceUploadTest extends Specification {
 
         then:
         thrown(IllegalStateException)
-        1 * transfers.newUploadStream(KEY) >> upload
+        1 * transfers.newUploadStream(KEY, 2000L) >> upload
         upload.aborted
         !upload.published
     }
@@ -194,27 +194,45 @@ class ForeignSourceUploadTest extends Specification {
 
         then:
         def e = thrown(IOException)
-        e.message.contains('1000 of 2000 bytes')
-        1 * transfers.newUploadStream(KEY) >> upload
+        e.message == "Read 1000 of 2000 bytes for ${FovusS3Client.uri(KEY)}: the source ended early, so nothing was uploaded".toString()
+        1 * transfers.newUploadStream(KEY, 2000L) >> upload
+        upload.aborted
+        !upload.published
+    }
+
+    def 'a remote source longer than its known size should publish nothing and fail'() {
+        given:
+        def source = foreignFile(500L) { failingAfter(1000, null) }
+
+        when:
+        FileHelper.copyPath(source, target)
+
+        then:
+        def e = thrown(IOException)
+        e.message == "Read 1000 of 500 bytes for ${FovusS3Client.uri(KEY)}: the source is longer than its reported size, so nothing was uploaded".toString()
+        1 * transfers.newUploadStream(KEY, 500L) >> upload
         upload.aborted
         !upload.published
     }
 
     @Unroll
-    def 'a complete remote source should be uploaded once when its size is #reported'() {
+    def 'a complete remote source should be uploaded once when its size is #reported, as an upload of size #declared'() {
         given:
         def source = foreignFile(reported) { failingAfter(1000, null) }
 
         when:
         FileHelper.copyPath(source, target)
 
-        then:
-        1 * transfers.newUploadStream(KEY) >> upload
+        then: 'a size the source does not report is left for the stream to find out'
+        1 * transfers.newUploadStream(KEY, declared) >> upload
         upload.published
         !upload.aborted
         upload.bytes.size() == 1000
 
         where:
-        reported << [1000L, -1L]
+        reported | declared
+        1000L    | 1000L
+        -1L      | null
+        0L       | null
     }
 }
