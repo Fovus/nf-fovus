@@ -2,6 +2,7 @@ package fovus.plugin.s3
 
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
+import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient
 import software.amazon.awssdk.services.s3.S3AsyncClient
 import software.amazon.awssdk.services.s3.S3AsyncClientBuilder
 import software.amazon.awssdk.services.s3.S3Client
@@ -245,6 +246,46 @@ class TransferManagerTransfersSdkTest extends Specification {
         then:
         s3.requestsFor(key) == ["GET ${key}", "GET ${key}"]
         Files.readAllBytes(destination) == data
+    }
+
+    def 'a download whose body ends before its declared length should be fetched again, whole'() {
+        given:
+        def data = content(PART + 10)
+        s3.objects[key] = data
+        s3.truncateOnce("GET ${key}")
+        def destination = Files.createFile(tempDir.resolve('.data.bin.part'))
+
+        when:
+        transfers.downloadFile(key, destination)
+
+        then: 'the SDK notices the short body and retries; the half it wrote first is overwritten'
+        s3.requestsFor(key) == ["GET ${key}", "GET ${key}"]
+        Files.readAllBytes(destination) == data
+    }
+
+    def 'a streamed read through the sync client whose body ends before its declared length should fail, not end early'() {
+        given: 'the url-connection client the sync clients use, which reports a body cut short as a normal end'
+        def data = content(PART + 10)
+        s3.objects[key] = data
+        s3.truncateOnce("GET ${key}")
+        def credentials = StaticCredentialsProvider.create(AwsBasicCredentials.create('AKIA-TEST', 'secret-test'))
+        def sync = FovusS3Client.withFovusSettings(S3Client.builder(), 'us-east-1', credentials, [])
+                .endpointOverride(s3.endpoint)
+                .forcePathStyle(true)
+                .httpClientBuilder(UrlConnectionHttpClient.builder())
+                .build()
+        def client = new FovusS3Client(sync, sync, transfers, 'bucket', 'pipelines/p-1-user/', null)
+
+        when:
+        client.getObject(key).withCloseable { InputStream input -> input.readAllBytes() }
+
+        then:
+        def e = thrown(IOException)
+        e.message == "S3 read failed on ${key}: the body ended after ${data.length.intdiv(2)} of ${data.length} bytes".toString()
+        e.cause == null
+
+        cleanup:
+        sync?.close()
     }
 
     def 'a download should replace a longer content of the destination entirely'() {

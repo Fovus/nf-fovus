@@ -227,7 +227,7 @@ executable on the compute node because its mount shows `pipelines/` files as 077
 
   | NIO operation | S3 |
   |---|---|
-  | `newByteChannel` / `newInputStream` (read) | `GetObject`, streamed |
+  | `newByteChannel` / `newInputStream` (read) | `GetObject`, streamed; a body that ends before its declared length is an I/O error (§10) |
   | `newByteChannel` / `newOutputStream` (write, create, truncate) | streamed upload of unknown length by the multipart-enabled writer client: one `PutObject` below 16 MiB, multipart above; every part (or the single `PutObject`) is buffered whole before it is sent, so the SDK can retry it; at most 2 parts (32 MiB) in memory per open stream, no local spooling |
   | `createDirectory` | zero-byte `key/` marker object; no-op for an area root |
   | `newDirectoryStream` | `ListObjectsV2` with delimiter `/`, paginated; each entry carries size and last-modified |
@@ -567,6 +567,11 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 - Failed or interrupted multipart uploads are aborted by the SDK, best effort. If abort is not
   permitted, leftover parts stay invisible until the bucket lifecycle rule removes them (spike).
 - Downloads go to a temp file, moved on success, deleted on failure.
+- A `GetObject` body that ends before the length its response declared (for a ranged GET, the bytes
+  left from its start) is an I/O error, never an early end of file: a read stream or channel fails,
+  a streamed copy is discarded, and a download fails (the SDK already retries such a body) and
+  leaves no file. The url-connection client of the sync clients reports a connection dropped part
+  way as a normal end, so the plugin counts the bytes itself.
 - Ctrl-C: submitted jobs keep running (`killTask` stays a no-op); in-progress uploads are aborted.
 
 ## 11. Testing
@@ -598,7 +603,8 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
   Docker; `TransferManagerTransfersSdkTest`, parts of 1 MiB): the `PutObject` of a short stream, the
   parts of a stream, the parts and the `PutObject` of a file upload, and the GET of a download are each
   retried after a transient failure, and a retried download fetches the whole object again with one
-  GET; an aborted stream publishes nothing; a file upload has at most 4 parts in flight; a request
+  GET, also after a body cut short of its declared length; a streamed read through the url-connection
+  client fails on such a body instead of ending early; an aborted stream publishes nothing; a file upload has at most 4 parts in flight; a request
   waits for a free connection past the SDK's default of 10 seconds, then goes through; an open stream
   holds at most 2 parts in memory.
 - `FovusTaskHandler.checkIfCompleted()`: temporary read error defers, fails after the bound;

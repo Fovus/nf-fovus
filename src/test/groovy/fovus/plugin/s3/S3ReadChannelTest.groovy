@@ -1,5 +1,10 @@
 package fovus.plugin.s3
 
+import software.amazon.awssdk.core.ResponseInputStream
+import software.amazon.awssdk.http.AbortableInputStream
+import software.amazon.awssdk.services.s3.S3Client
+import software.amazon.awssdk.services.s3.model.GetObjectRequest
+import software.amazon.awssdk.services.s3.model.GetObjectResponse
 import spock.lang.Specification
 
 import java.nio.ByteBuffer
@@ -70,5 +75,24 @@ class S3ReadChannelTest extends Specification {
         expect:
         channel.read(buffer) == 50
         channel.read(buffer) == -1
+    }
+
+    def 'a ranged body that ends before its declared length should fail the read'() {
+        given: 'from byte 100 of a 1000-byte object, S3 declares the 900 bytes left but the body ends after 50'
+        S3Client s3 = Mock()
+        def client = new FovusS3Client(s3, s3, Mock(S3Transfers), 'bucket', 'pipelines/p-1-user/', null)
+        def channel = new S3ReadChannel(client, KEY, 1000L)
+        channel.position(100L)
+
+        when:
+        channel.read(ByteBuffer.allocate(BLOCK))
+
+        then:
+        1 * s3.getObject({ GetObjectRequest r -> r.key() == KEY && r.range() == 'bytes=100-' }) >>
+                new ResponseInputStream<GetObjectResponse>(GetObjectResponse.builder().contentLength(900L).build(),
+                                                           AbortableInputStream.create(trickling(content(50))))
+        def e = thrown(IOException)
+        e.message == "S3 read failed on ${KEY}: the body ended after 50 of 900 bytes".toString()
+        e.cause == null
     }
 }

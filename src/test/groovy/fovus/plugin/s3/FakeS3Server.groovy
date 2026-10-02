@@ -13,7 +13,8 @@ import java.util.concurrent.TimeUnit
 
 /**
  * A local S3 endpoint for testing the real SDK clients without Docker: path-style requests over plain HTTP to one
- * bucket, with single and multipart uploads, whole-object GETs, and failures injected per request. Every request is
+ * bucket, with single and multipart uploads, whole-object GETs, and failures (an error status, a denial, a body cut
+ * short) injected per request. Every request is
  * recorded as a short line, such as {@code PUT <key>}, {@code CREATE <key>}, {@code PART 2 <key>},
  * {@code COMPLETE <key>}, {@code ABORT <key>} or {@code GET <key>}.
  */
@@ -25,6 +26,7 @@ class FakeS3Server implements Closeable {
     final List<String> requests = new CopyOnWriteArrayList<>()
     private final Map<String, Map<Integer, byte[]>> uploads = new ConcurrentHashMap<>()
     private final Set<String> failingOnce = ConcurrentHashMap.newKeySet()
+    private final Set<String> truncatingOnce = ConcurrentHashMap.newKeySet()
     private final Set<String> denied = ConcurrentHashMap.newKeySet()
     private volatile CountDownLatch partsHeld = new CountDownLatch(0)
     private final ExecutorService executor
@@ -56,6 +58,14 @@ class FakeS3Server implements Closeable {
         failingOnce.add(request)
     }
 
+    /**
+     * Answer the next request recorded as {@code request} (a {@code GET <key>}) with the object's whole length but
+     * only the first half of its bytes, then drop the connection, once.
+     */
+    void truncateOnce(String request) {
+        truncatingOnce.add(request)
+    }
+
     /** Answer every request recorded as {@code request} with a 403. */
     void deny(String request) {
         denied.add(request)
@@ -76,6 +86,7 @@ class FakeS3Server implements Closeable {
         requests.clear()
         uploads.clear()
         failingOnce.clear()
+        truncatingOnce.clear()
         denied.clear()
     }
 
@@ -92,7 +103,12 @@ class FakeS3Server implements Closeable {
             respondTo(exchange)
         }
         finally {
-            exchange.close()
+            try {
+                exchange.close()
+            }
+            catch (IOException ignored) {
+                // a truncated body: the server drops the connection, short of the length it declared
+            }
         }
     }
 
@@ -153,7 +169,8 @@ class FakeS3Server implements Closeable {
             exchange.responseHeaders.add('ETag', '"object"')
             exchange.responseHeaders.add('Last-Modified', 'Thu, 01 Oct 2026 12:00:00 GMT')
             exchange.sendResponseHeaders(200, data.length == 0 ? -1 : data.length)
-            if (data.length > 0) exchange.responseBody.write(data)
+            if (truncatingOnce.remove(request)) exchange.responseBody.write(data, 0, data.length.intdiv(2))
+            else if (data.length > 0) exchange.responseBody.write(data)
         }
         else {
             error(exchange, 400, 'NotImplemented')

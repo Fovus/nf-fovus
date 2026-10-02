@@ -115,6 +115,21 @@ class TransferManagerTransfersTest extends Specification {
         Files.readAllBytes(destination) == 'hello'.bytes
     }
 
+    def 'a download that wrote less than the length of the object should fail'() {
+        given: 'a response that declared 5 bytes, of which only 3 reached the destination'
+        def destination = Files.write(tempDir.resolve('.data.bin.part'), 'hel'.bytes)
+        reader.download(_) >> download
+        download.completionFuture() >> downloaded(5)
+
+        when:
+        transfers.downloadFile(KEY, destination)
+
+        then:
+        def e = thrown(IOException)
+        e.message == "S3 read failed on ${KEY}: the body ended after 3 of 5 bytes".toString()
+        e.cause == null
+    }
+
     def 'a transfer failing with #wrapped should surface the failure unwrapped, or else as an I/O error naming its class'() {
         given:
         def future = new CompletableFuture()

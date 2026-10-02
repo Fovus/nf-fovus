@@ -225,6 +225,23 @@ class S3TransferFailureTest extends Specification {
         SdkClientException.create('Unable to execute HTTP request: timed out')    | "S3 read failed on ${SOURCE}: SdkClientException".toString()
     }
 
+    def 'a streamed copy whose source body ends before its declared length should abort the upload and fail'() {
+        given:
+        S3UploadStream upload = Mock()
+
+        when:
+        client.copy(SOURCE, KEY, FovusS3Client.MAX_COPY_OBJECT_SIZE + 1)
+
+        then:
+        def e = thrown(IOException)
+        e.message == "S3 read failed on ${SOURCE}: the body ended after 6 of 10 bytes".toString()
+        e.cause == null
+        1 * s3.getObject(_ as GetObjectRequest) >> responseStream(new ByteArrayInputStream(new byte[6]), 10L)
+        1 * transfers.newUploadStream(KEY) >> upload
+        1 * upload.abort()
+        0 * upload.close()
+    }
+
     def 'newOutputStream should refuse #key outside the pipeline before calling S3'() {
         when:
         client.newOutputStream(key)
@@ -297,7 +314,9 @@ class S3TransferFailureTest extends Specification {
         key << OUTSIDE_KEYS
     }
 
-    private static ResponseInputStream<GetObjectResponse> responseStream(InputStream input) {
-        return new ResponseInputStream<GetObjectResponse>(GetObjectResponse.builder().build(), AbortableInputStream.create(input))
+    /** A GetObject body; its response declares {@code declaredLength} bytes, or no length when null. */
+    private static ResponseInputStream<GetObjectResponse> responseStream(InputStream input, Long declaredLength = null) {
+        return new ResponseInputStream<GetObjectResponse>(GetObjectResponse.builder().contentLength(declaredLength).build(),
+                                                          AbortableInputStream.create(input))
     }
 }

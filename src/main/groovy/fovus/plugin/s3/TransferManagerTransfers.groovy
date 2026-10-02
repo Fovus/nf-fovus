@@ -41,9 +41,9 @@ import java.util.concurrent.TimeoutException
  * Netty. Every transfer is one the SDK can retry:
  *
  * <ul>
- * <li>downloads use a plain (not multipart) reader client: one GET into the destination file, retried as a whole.
- *     The SDK's parallel multipart download is left out on purpose. The file is written in place, never created:
- *     see {@link #INTO_EXISTING_FILE};</li>
+ * <li>downloads use a plain (not multipart) reader client: one GET into the destination file, retried as a whole,
+ *     also when its body ends before its declared length. The SDK's parallel multipart download is left out on
+ *     purpose. The file is written in place, never created: see {@link #INTO_EXISTING_FILE};</li>
  * <li>uploads use a multipart writer client: one PutObject up to the part size, parallel parts above it (larger
  *     ones when a file would need more than 10,000), each part read again from the file on a retry;</li>
  * <li>a streamed write has no known length. The writer client splits it into parts, each buffered whole before it
@@ -199,10 +199,16 @@ class TransferManagerTransfers implements S3Transfers {
                 .responseTransformer(AsyncResponseTransformer.<GetObjectResponse> toFile(destination, INTO_EXISTING_FILE))
                 .build()
         final GetObjectResponse response = await(reader.download(request).completionFuture(), 'read', key).result()
-        // Each attempt writes from the start without truncating: cut what a longer attempt before it left at the end
         final Long length = response.contentLength()
-        if (length != null) {
-            FileChannel.open(destination, StandardOpenOption.WRITE).withCloseable { FileChannel file -> file.truncate(length) }
+        if (length == null) return
+        FileChannel.open(destination, StandardOpenOption.WRITE).withCloseable { FileChannel file ->
+            // The SDK fails (and retries) a body cut short of its declared length; should one get through, it is an error
+            final long written = file.size()
+            if (written < length) {
+                throw new IOException("S3 read failed on ${key}: the body ended after ${written} of ${length} bytes".toString())
+            }
+            // Each attempt writes from the start without truncating: cut what a longer attempt before it left at the end
+            file.truncate(length)
         }
     }
 
