@@ -4817,7 +4817,15 @@ Needs the CLI branch from the CLI plan and a beta Fovus account. Nothing here is
 
 **Interfaces:** consumes everything above.
 
-- [ ] **Step 1: Build and install the plugin on the host**
+- [ ] **Step 1: Run the MinIO integration tests**
+
+```bash
+cd /Users/jashminpatel/Desktop/Code/Nextflow-Plugin/nf-fovus && FOVUS_MINIO_IMAGE=<a published MinIO image> ./gradlew integrationTest
+```
+
+Expected: `BUILD SUCCESSFUL`, with the `@Tag('integration')` specs run (not skipped).
+
+- [ ] **Step 2: Build and install the plugin on the host**
 
 ```bash
 cd /Users/jashminpatel/Desktop/Code/Nextflow-Plugin/nf-fovus && ./gradlew assemble install
@@ -4825,13 +4833,16 @@ cd /Users/jashminpatel/Desktop/Code/Nextflow-Plugin/nf-fovus && ./gradlew assemb
 
 Expected: `BUILD SUCCESSFUL`; the plugin is under `~/.nextflow/plugins/nf-fovus-<version>`.
 
-- [ ] **Step 2: Write the test pipeline**
+- [ ] **Step 3: Write the test pipeline**
 
 `/tmp/direct-mode-e2e/main.nf`:
 
 ```groovy
 params.big = 'big.bin'
 params.samplesheet = null
+params.remote = 'https://raw.githubusercontent.com/nf-core/test-datasets/modules/data/genomics/sarscov2/genome/genome.fasta'
+params.direct = true        // false: the mount-mode run of Step 8, with no fovus:// path
+params.fromJob = null       // a file in a finished job's outputs: fovus:///fovus-storage/jobs/<jobId>/<file>
 
 process HELLO {
     publishDir 'results', mode: 'copy'
@@ -4867,6 +4878,78 @@ process FLAKY {
     """
 }
 
+process REMOTE {
+    input:
+    path remote
+
+    output:
+    stdout
+
+    script:
+    "wc -c < ${remote} | tr -d ' '"
+}
+
+process MOVED {
+    publishDir 'moved', mode: 'move'
+
+    output:
+    path 'folder'
+
+    script:
+    """
+    mkdir -p folder/sub
+    echo one > folder/a.txt
+    echo two > folder/sub/b.txt
+    """
+}
+
+process PUBLISH_COPY {
+    publishDir 'fovus:///fovus-storage/files/e2e-publish/copy', mode: 'copy'
+
+    output:
+    path 'one.txt'
+    path 'dir'
+
+    script:
+    """
+    echo one > one.txt
+    mkdir -p dir/sub
+    echo two > dir/a.txt
+    echo three > dir/sub/b.txt
+    """
+}
+
+process PUBLISH_MOVE {
+    publishDir 'fovus:///fovus-storage/files/e2e-publish/move', mode: 'move'
+
+    output:
+    path 'moved.txt'
+
+    script:
+    "echo moved > moved.txt"
+}
+
+process FROM_JOB {
+    input:
+    path fromJob
+
+    output:
+    stdout
+
+    script:
+    "wc -c < ${fromJob} | tr -d ' '"
+}
+
+process BIG_OUT {
+    publishDir 'bigout', mode: 'copy'
+
+    output:
+    path 'big.out'
+
+    script:
+    "dd if=/dev/zero of=big.out bs=1M count=120"
+}
+
 process ARRAYED {
     array 3
 
@@ -4881,15 +4964,26 @@ process ARRAYED {
 }
 
 workflow {
+    // Before any process: collectFile writes under workDir (pipelines/tmp/) before the executor exists
+    Channel.of('x', 'y').collectFile(name: 'collected.txt', newLine: true).view { it.text }
+    Channel.of('x', 'y').collectFile(name: 'stored.txt', newLine: true, storeDir: 'collected').view { it.text }
     HELLO(file(params.big), file(params.samplesheet))
     FLAKY().view()
+    REMOTE(file(params.remote)).view()
+    MOVED()
+    BIG_OUT()
     ARRAYED(Channel.of('a', 'b', 'c')).view()
+    if( params.direct ) {
+        PUBLISH_COPY()
+        PUBLISH_MOVE()
+        FROM_JOB(file(params.fromJob)).view()
+    }
 }
 ```
 
-Create the large input: `dd if=/dev/urandom of=/tmp/direct-mode-e2e/big.bin bs=1M count=120`. Upload any small CSV to Fovus storage and note its path, e.g. `/fovus-storage/files/e2e/samplesheet.csv`.
+Create the large input: `dd if=/dev/urandom of=/tmp/direct-mode-e2e/big.bin bs=1M count=120`. Upload any small CSV to Fovus storage and note its path, e.g. `/fovus-storage/files/e2e/samplesheet.csv`. Note the path of an output file of any finished Fovus job, e.g. `/fovus-storage/jobs/<jobId>/results.txt`.
 
-- [ ] **Step 3: Start a container that cannot mount FUSE**
+- [ ] **Step 4: Start a container that cannot mount FUSE**
 
 ```bash
 docker run --rm -it -v /tmp/direct-mode-e2e:/e2e -v "$HOME/.nextflow/plugins:/root/.nextflow/plugins" -v /Users/jashminpatel/Desktop/Code/CLI/fovus-cli-python:/cli -w /e2e eclipse-temurin:21 bash
@@ -4899,21 +4993,32 @@ Inside: `apt-get update && apt-get install -y python3-pip curl && pip install /c
 
 Check FUSE really is unavailable: `fovus storage mount` must fail.
 
-- [ ] **Step 4: Run and check**
+- [ ] **Step 5: Run and check**
 
 ```bash
-./nextflow run main.nf -plugins nf-fovus -w fovus:///fovus-storage/pipelines --samplesheet fovus:///fovus-storage/files/e2e/samplesheet.csv
+./nextflow run main.nf -plugins nf-fovus -w fovus:///fovus-storage/pipelines --samplesheet fovus:///fovus-storage/files/e2e/samplesheet.csv --fromJob fovus:///fovus-storage/jobs/<jobId>/results.txt
 ```
 
-Expected: the run completes; `results/out/size.txt` contains `125829120`; `results/out/header.txt` is the CSV's first line; `FLAKY` prints `recovered` after one retry; `ARRAYED` prints three paths.
+Do not add debug or trace logging for `io.netty` or `software.amazon` (e.g. `-trace io.netty`, `-debug software.amazon`) to any run in these steps: their output includes the signed request headers and the session token.
 
-- [ ] **Step 5: Resume, interrupt, and refresh**
+Expected: the run completes; `results/out/size.txt` contains `125829120`; `results/out/header.txt` is the CSV's first line; `FLAKY` prints `recovered` after one retry; `ARRAYED` runs as one array job and prints three paths; `REMOTE` prints the size of the `https://` file (compare with `curl -s <url> | wc -c`); `moved/folder/a.txt` and `moved/folder/sub/b.txt` exist locally, `.nextflow.log` has exactly one WARN saying the folder stays in Fovus storage, and the folder is still under the task's folder in Fovus storage; both `collectFile`s print `x` and `y` (the one without `storeDir` from `fovus:///fovus-storage/pipelines/tmp/…`, the other from the local `collected/stored.txt`).
+
+Publishing and reading Fovus storage:
+
+- `FROM_JOB` prints the size of the job's output file (the input is read in place from `jobs/`, not copied into the work directory).
+- `PUBLISH_COPY` (`mode 'copy'`) put `one.txt`, `dir/a.txt` and `dir/sub/b.txt` under `files/e2e-publish/copy/` in Fovus storage, with the content the script wrote. Check in the Fovus web app or with the CLI.
+- `PUBLISH_MOVE` (`mode 'move'`) put `moved.txt` under `files/e2e-publish/move/`, and `moved.txt` is still under the task's folder in Fovus storage. The WARN about a source left in place is the same one `MOVED` produces: the plugin warns once per run, and logs further ones at debug level, so `.nextflow.log` still has exactly one.
+- `BIG_OUT` (a 125829120-byte output, over 100 MiB) is published to the local `bigout/` through the Transfer Manager download: `bigout/big.out` is 125829120 bytes, and `bigout/` holds no `.part` file.
+
+Run the same command again without `-resume`, so that `PUBLISH_COPY` publishes over the objects it made: the run completes, the objects under `files/e2e-publish/copy/` are the new ones (check their content or modification time), and `.nextflow.log` has the one WARN that the credentials cannot delete.
+
+- [ ] **Step 6: Resume, interrupt, and refresh**
 
 1. Re-run with `-resume`: every task reports `cached`.
 2. Add `process.cache = false` temporarily, start the run, press Ctrl-C while `HELLO` is staging, then run again with `-resume` (and the cache line removed): the run completes and `results/` is correct.
 3. Add a process with `script: "sleep 4500"` and run it once: it completes, and `grep -c 'Fetched Fovus storage credentials' .nextflow.log` is at least 2 (with `-trace fovus.plugin.s3` on the command line).
 
-- [ ] **Step 6: Check nothing leaked**
+- [ ] **Step 7: Check nothing leaked**
 
 ```bash
 grep -E 'ASIA[A-Z0-9]{16}' .nextflow.log ~/.fovus/logs/* ; echo "exit=$?"
@@ -4922,10 +5027,14 @@ grep -iE 'SessionToken|SecretAccessKey' .nextflow.log ~/.fovus/logs/* ; echo "ex
 
 Expected: both print only `exit=1` (no matches).
 
-- [ ] **Step 7: Mount mode still works**
+- [ ] **Step 8: Mount mode still works**
 
-On a machine that can mount FUSE, run the same pipeline with `-w <mount>/pipelines` (the current way). Expected: it completes as before.
+On a machine that can mount FUSE, run the same pipeline with `-w <mount>/pipelines` (the current way), with a local CSV as the samplesheet and no `fovus://` path: `--direct false --samplesheet /path/to/samplesheet.csv`. Expected: it completes as before.
 
-- [ ] **Step 8: Record the result**
+- [ ] **Step 9: A `fovus://` input in mount mode**
 
-Note the date, Nextflow version, CLI version and outcome of Steps 4–7 in the pull request description.
+On the same machine, run with a Fovus storage input: `--direct false --samplesheet fovus:///fovus-storage/files/e2e/samplesheet.csv`, with `-w <mount>/pipelines`. Expected: the run stops with `Fovus storage paths (fovus://) can only be used in direct mode (workDir = 'fovus:///fovus-storage/pipelines'), after the Fovus executor has started. With a Fovus storage mount, use the mounted path instead.`, and not with a null pointer or a CLI error.
+
+- [ ] **Step 10: Record the result**
+
+Note the date, Nextflow version, CLI version and outcome of Steps 5–9 in the pull request description.

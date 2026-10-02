@@ -2,6 +2,7 @@
 
 - **Date:** 2026-09-30
 - **Status:** Draft for review
+- **Revised:** 2026-10-01, after review of the implementation: D9–D11, and §6.4 after the SDK finding behind D11
 - **Repos affected:** `nf-fovus` (most of the work), `fovus-cli-python` (one hidden command)
 - **Backend (fovus-infra):** no change
 
@@ -12,6 +13,9 @@ control node). Some users cannot mount FUSE there. This design adds a second sto
 **direct mode**, in which the plugin reads and writes the pipeline's work directory directly with
 the AWS S3 SDK for Java, using short-lived credentials obtained from the Fovus CLI. Users select it
 by pointing Nextflow's `workDir` at `fovus:///fovus-storage/pipelines` instead of at a mount.
+In direct mode the same `fovus://` filesystem also reads Fovus storage `files/` and `jobs/` and
+writes `files/`, so inputs can come from, and `publishDir` can publish to, Fovus storage without a
+mount.
 
 The existing mount mode is unchanged: a local `workDir` keeps working exactly as today.
 
@@ -53,8 +57,15 @@ The existing mount mode is unchanged: a local `workDir` keeps working exactly as
 - Temporary S3 credentials come from two existing API endpoints, both 1-hour STS credentials:
   - `get-file-upload-token` (`storageType = FOVUS_STORAGE`, `jobId = ""`): writes. The CLI uses
     it for uploads to both `files/` and `pipelines/`, so its policy is wider than one pipeline.
+    The upload role grants only `s3:PutObject` on the bucket, so `DeleteObject`,
+    `AbortMultipartUpload` and `CopyObject` are denied. `CreateMultipartUpload`, `UploadPart`
+    and `CompleteMultipartUpload` work under `PutObject`.
   - `get-file-download-token` (`storageType = PIPELINE_STORAGE`, `pipelineId`): reads and
-    listings for one pipeline.
+    listings. The request names the pipeline, but the download role grants `s3:GetObject` on
+    the whole bucket and `s3:ListBucket`, so the token can read the user's whole bucket.
+
+  These permissions come from reading fovus-infra (`create-s3-rw-roles.ts`,
+  `get-file-download-token.ts`) and are to be confirmed by the spike (§12).
 
   The API returns no expiration; the CLI assumes 3600 s and re-fetches after 55 minutes.
 - No CLI command prints S3 credentials today.
@@ -86,10 +97,12 @@ The existing mount mode is unchanged: a local `workDir` keeps working exactly as
 4. Keep `-resume`, `publishDir` to local paths, array tasks, `errorStrategy` and input staging
    behaving as they do in mount mode.
 5. Leave mount mode and Fovus-hosted runs unchanged.
+6. In direct mode, read inputs from Fovus storage `files/` and `jobs/` (`fovus://` paths) and
+   publish into `files/`.
 
 ### Non-goals (first version)
 
-- Publishing into Fovus storage `files/` from direct mode (see §13).
+- `fovus://` paths in mount mode. With a mount, inputs and publish targets use the mounted path.
 - Carrying the `-resume` cache across a switch between mount and direct mode.
 - A new backend endpoint for pipeline-scoped read/write credentials (possible follow-up, §13).
 - Automatic fallback to direct mode when FUSE is unavailable. The user chooses the mode.
@@ -103,10 +116,13 @@ The existing mount mode is unchanged: a local `workDir` keeps working exactly as
 | D2 | Make the plugin's own `fovus://` filesystem read and write S3, and use it as the work directory in direct mode. | Nextflow keeps its normal staging, output collection and `-resume`. Fovus credentials stay isolated from the user's own AWS credentials. Two separate tokens (read/write) are possible. |
 | D3 | Rejected: Nextflow's `nf-amazon` `s3://` work directory. | One global credential chain: cannot use separate read/write tokens, and would override the user's AWS credentials for other `s3://` inputs. |
 | D4 | Rejected: local work directory synced at fixed points. | Every output would be downloaded in full to the control node. |
-| D5 | The CLI command is hidden (`hidden=True`) and undocumented. | Not a public interface. This deters casual use only; the real limit is the credentials' server-side scope. |
+| D5 | The CLI command is hidden (`hidden=True`) and undocumented. | Not a public interface. This deters casual use only; the real limit is the plugin's prefix guard (both tokens are bucket-wide), not the credentials' server-side scope. |
 | D6 | The CLI validates the pipeline ID before issuing credentials. | Stops credentials being issued for another user's, a deleted, or a hosted pipeline. |
 | D7 | The mode follows the scheme of Nextflow's `workDir`: a local path (the mount) is mount mode, `fovus:///fovus-storage/pipelines` is direct mode. There is no `fovus.storageMode` setting. | Still an explicit choice, with no automatic fallback. Matches how Nextflow treats `s3://` work directories, works with `-w`, and keeps `session.workDir` equal to where task files actually live. Suggested in review. |
 | D8 | The mode is called "direct" in docs and messages, not "S3". | Describes what users get (storage reached directly, no mount) rather than the AWS service behind it. "Remote" was avoided because it already means a Fovus-hosted run (`WORKFLOW_HOST=REMOTE`); "sync" because it suggests a local mirror. |
+| D9 | One S3-backed storage serves every `fovus://` area (`pipelines`, `files`, `jobs`). The old `files`/`jobs` filesystem, which listed and downloaded through `fovus` subprocesses, is removed, so `fovus://` paths work only in direct mode. | One code path instead of two. Suggested in review. The read token already reaches the whole bucket, and one `HeadObject` replaces a CLI subprocess per file lookup, which `-resume` does for every input. The CLI-backed areas predate the mount and were undocumented; mount mode uses mounted paths. |
+| D10 | Direct mode also writes into `files/` (`publishDir`, uploads). `jobs/` stays read-only. | Suggested in review. The upload token already writes `files/` (the CLI uses it for `fovus storage upload`), and without it a run with no mount could not put results in Fovus storage. |
+| D11 | File transfers and streamed writes use the AWS SDK's S3 Transfer Manager and the Java-based S3 async client (Netty HTTP client): multipart for writes, one GET for downloads. The plugin has no multipart or ranged-download code of its own. The SDK is 2.55.9. | Suggested in review: the SDK's tested part handling and retries instead of our own. The Java-based client (parallel multipart since SDK 2.27.5) avoids the CRT's native libraries on users' control nodes. The SDK was bumped from 2.31.0 to 2.55.9 so that every transfer path is retried: on 2.31.0 neither streamed writes nor multipart downloads were. Downloads are therefore one retried GET, not parallel ranged GETs. |
 
 ## 5. User-facing configuration
 
@@ -124,6 +140,10 @@ fovus {
 
 - A `fovus://` `workDir` must be exactly `fovus:///fovus-storage/pipelines`. Anything else, such as
   `fovus:///fovus-storage/files/…` or `fovus:///fovus-storage/pipelines/x`, fails at start-up.
+- In direct mode other `fovus://` paths are ordinary inputs and outputs:
+  `fovus:///fovus-storage/files/…` and `fovus:///fovus-storage/jobs/<jobId>/…` can be read, and
+  `publishDir` can target `fovus:///fovus-storage/files/…`. In mount mode they fail with a message
+  pointing to the mounted path.
 - Task folders live under `fovus:///fovus-storage/pipelines/<pid>/fovus-work/`, the same S3 prefix
   mount mode uses.
 - Direct mode is only for pipelines launched on the user's machine. A `fovus://` `workDir` on a
@@ -140,9 +160,10 @@ fovus {
 |---|---|---|---|
 | `WorkDirStorage` (interface) | nf-fovus | new | Everything the executor and task handler need to know about where the work directory lives. A factory picks the implementation from `session.workDir`'s scheme and validates it. |
 | `MountedWorkDirStorage` | nf-fovus | new (moved code) | Today's mount behaviour, moved without change. |
-| `DirectWorkDirStorage` | nf-fovus | new | Direct mode: credentials, S3 client, attaching the client to the `pipelines` filesystem, path rules. |
-| `FovusFileSystemProvider`, `FovusPath`, `FovusFileSystem` | nf-fovus | changed | Add the `pipelines` storage area with full read/write via `FovusS3Client`; the filesystem exists before credentials do and gets its client later. `files` and `jobs` stay read-only through the CLI. |
-| `FovusS3Client` | nf-fovus | new | Two AWS SDK v2 `S3Client`s (read, write), prefix guard, error mapping, multipart. |
+| `DirectWorkDirStorage` | nf-fovus | new | Direct mode: credentials, S3 client, attaching the client to the `fovus://` filesystem provider, path rules. |
+| `FovusFileSystemProvider`, `FovusPath`, `FovusFileSystem` | nf-fovus | changed | Add the `pipelines` storage area. Every area reads and writes through one S3-backed `S3Storage` once direct mode attaches an S3 client; `jobs` is read-only. The filesystems exist before credentials do. The CLI-backed listing and download code is removed. |
+| `S3Storage` | nf-fovus | new | NIO operations (streams, channels, listing, attributes, copy, move, upload, download) for any `fovus://` path, on top of `FovusS3Client`. |
+| `FovusS3Client` | nf-fovus | new | Two AWS SDK v2 `S3Client`s (read, write) for metadata and small objects, two S3 Transfer Managers for file transfers and streamed writes, the access guard, error mapping. |
 | `FovusStorageCredentialsSource` | nf-fovus | new | Runs the CLI command with a dedicated, non-logging runner and parses the JSON. |
 | `RefreshingStorageCredentials` | nf-fovus | new | Caches one fetch; exposes read and write `AwsCredentialsProvider`s; refreshes before expiry. |
 | `FovusExecutor`, `FovusTaskHandler`, `FovusFileCopyStrategy` | nf-fovus | changed | Delegate mount-specific logic to `WorkDirStorage`; defer completion on temporary errors. |
@@ -167,7 +188,7 @@ interface WorkDirStorage {
 |---|---|---|
 | Chosen when `session.workDir` is | a local path | a `FovusPath` |
 | `workDir` check | must end with `pipelines` (as today) | must be exactly `/fovus-storage/pipelines`; not allowed on a Fovus-hosted run |
-| `prepare` | `fovus storage mount … --no-auto-remount` | first credential fetch (fails fast); build `FovusS3Client`; attach it to the `pipelines` filesystem |
+| `prepare` | `fovus storage mount … --no-auto-remount` | first credential fetch (fails fast); build `FovusS3Client`; attach it to the `fovus://` filesystem provider |
 | `isForeignFile` | outside the mount folder, or a different scheme | not a `FovusPath` |
 | `remotePath` | swap the mount prefix for `/fovus-storage` | `Path.of(path.toString())`, which is already `/fovus-storage/…` |
 
@@ -189,50 +210,94 @@ executable on the compute node because its mount shows `pipelines/` files as 077
 ### 6.3 Filesystem provider
 
 - `FovusPath` accepts a third storage area, `pipelines`, alongside `files` and `jobs`. Its
-  `toString()` already yields `/fovus-storage/<area>/<key>`, the compute-node path.
-- The provider dispatches on the storage area:
-  - `pipelines`: read/write through `FovusS3Client`.
-    - The filesystem is created when Nextflow parses `workDir`, before the pipeline ID or any
-      credentials exist, so it starts without an S3 client.
-    - The area root (`/fovus-storage/pipelines`, the `workDir` itself) needs no S3 call:
-      `mkdirs()` succeeds and `exists()` is true. This is what `Session.init()` does.
-    - `DirectWorkDirStorage.prepare()` attaches the S3 client. Any other read or write on a
-      `pipelines` path before that, or in mount mode, raises a clear error.
-  - `files`, `jobs`: unchanged, read-only through the CLI, in both modes.
-- Operations implemented for `pipelines`:
+  `toString()` already yields `/fovus-storage/<area>/<key>`, the compute-node path, and its S3 key
+  is `<area>/<key>`, the object the mount shows at that path.
+- Every area reads and writes through `S3Storage` on top of `FovusS3Client` (D9):
+  - The filesystems are created when Nextflow parses a `fovus://` path (the `workDir` first),
+    before the pipeline ID or any credentials exist, so they start without an S3 client.
+    `DirectWorkDirStorage.prepare()` attaches one client to the provider, shared by all areas.
+  - Area roots (`/fovus-storage/files`, `/fovus-storage/jobs`, `/fovus-storage/pipelines`) need no
+    S3 call: they exist, are folders, and `mkdirs()` on them does nothing. This is what
+    `Session.init()` does with the `workDir`.
+  - Any other access before the client is attached, or in mount mode, raises a clear error.
+  - Access by area (enforced by `FovusS3Client`, §6.4): `pipelines/<pid>/` and the session scratch
+    folders read/write; `files/` read/write; `jobs/` read-only; other pipelines' folders are
+    invisible.
+- Operations:
 
   | NIO operation | S3 |
   |---|---|
-  | `newByteChannel` / `newInputStream` (read) | `GetObject`, streamed |
-  | `newByteChannel` / `newOutputStream` (write, create, truncate) | `PutObject` on close below one part; streamed multipart above, 16 MiB parts, bounded memory, no local spooling |
-  | `createDirectory` | zero-byte `key/` marker object; no-op for the area root |
+  | `newByteChannel` / `newInputStream` (read) | `GetObject`, streamed; a body that ends before its declared length is an I/O error (§10) |
+  | `newByteChannel` / `newOutputStream` (write, create, truncate) | streamed upload of unknown length by the multipart-enabled writer client: one `PutObject` below 16 MiB, multipart above; every part (or the single `PutObject`) is buffered whole before it is sent, so the SDK can retry it; at most 2 parts (32 MiB) in memory per open stream, no local spooling |
+  | `createDirectory` | zero-byte `key/` marker object; no-op for an area root |
   | `newDirectoryStream` | `ListObjectsV2` with delimiter `/`, paginated; each entry carries size and last-modified |
   | `readAttributes` | cached listing metadata, else `HeadObject`, else prefix listing (implicit folder) |
   | `exists` / `checkAccess` | as `readAttributes` |
-  | `delete` | `DeleteObject` (folder: list then delete) |
-  | `copy` / `move` | `CopyObject` inside the prefix (write client), falling back to `GetObject` + `PutObject` if the spike shows the upload token cannot read the source; `move` = copy + delete |
-  | `upload` (`FileSystemTransferAware`) | file or folder; `PutObject` or parallel multipart |
-  | `download` (`FileSystemTransferAware`) | file or folder; parallel ranged `GetObject` into a temp file, moved into place on success |
+  | `delete` | `DeleteObject`; a folder's own marker |
+  | `copy` / `move` | between any readable and any writable path, including across areas (`pipelines` → `files` for `publishDir`): `CopyObject` (write client) when allowed, else a streamed `GetObject` + upload of the source's size; `move` = copy + delete, a folder object by object |
+  | `upload` (`FileSystemTransferAware`) | file or folder, into `pipelines` or `files`; Transfer Manager `uploadFile` (parallel multipart above 16 MiB, at most 4 parts in flight, each part read again from the file on a retry); other file systems (https, `s3://`) streamed, as an upload of their size when they report one |
+  | `download` (`FileSystemTransferAware`) | file or folder; Transfer Manager `downloadFile`: one `GetObject`, retried as a whole by the SDK, into a temp file next to the target, moved into place on success |
   | symlinks, locks, `setAttribute` | `UnsupportedOperationException` naming the operation |
 
-- Copying from `files`/`jobs` into `pipelines` is not supported. In direct mode those paths are
-  never foreign, so Nextflow never stages them, and no other Nextflow code path copies them into
-  the work directory.
+- Inputs in `files`/`jobs` are never foreign in direct mode, so Nextflow never stages them; the
+  compute node reads them in place through its mount.
 
 ### 6.4 `FovusS3Client`
 
 - Two sync `S3Client`s from AWS SDK v2: the reader uses the download token, the writer the
-  upload token. HTTP client: `url-connection-client` (no Netty, no CRT).
+  upload token. HTTP client: `url-connection-client`. They serve listings, `HeadObject`, streamed
+  `GetObject`, small `PutObject`s (folder markers), `CopyObject` and `DeleteObject`.
+- Two `S3TransferManager`s (D11), one per token, on the Java-based `S3AsyncClient` over the Netty HTTP
+  client (no CRT, no Apache HTTP client), built with the same credentials, endpoint and settings as
+  the sync clients. They serve file uploads and downloads, and streamed writes. The
+  AWS SDK for Java v2 is 2.55.9, bumped from 2.31.0: on 2.31.0 neither streamed writes nor multipart
+  downloads were retried.
+  - The **writer** client is multipart-enabled: threshold and part size 16 MiB, at most 4 parts in
+    flight per upload.
+  - The **reader** client is not multipart. A download is one `GetObject` that the SDK retries as a
+    whole; there are no parallel ranged GETs.
+  - Both clients run on Netty with one shared event loop, at most 50 connections each. A request waits
+    up to 5 minutes for a free connection, because the SDK does not retry a connection it failed to
+    get. Four parts in flight keep one large upload from taking every connection of the writer from
+    the small writes (task files) that share it.
+  - A streamed write uses the SDK's blocking output stream body, wrapped in
+    `BufferedSplittableAsyncRequestBody` with `bufferBeforeSend`. Every part, and the single
+    `PutObject` of a short stream, is buffered whole before it is sent, so every part is retried.
+    An open stream holds at most 2 parts (32 MiB) in memory, and the writer blocks until a part is
+    sent; a short stream holds only its own bytes. A streamed write of unknown length is split into
+    16 MiB parts as it comes, so it is limited to 10,000 of them, about 156 GiB. When the size is
+    known (a remote input that reports one, a streamed copy such as a publish into `files/`), it is
+    declared to the SDK above one part, and the SDK picks larger parts when it would otherwise need
+    more than 10,000; a part must still fit in the 32 MiB buffer, so such a write is limited to
+    10,000 × 32 MiB, about 312 GiB, and a larger one fails before anything is sent (the buffer is not
+    raised: it is the memory of every open stream). A stream of known size must deliver exactly that
+    many bytes: fewer at close, or more on a write, discards the upload. A size within one part is not
+    declared, so its single `PutObject` stays buffered and retried. A file upload has no such limit:
+    its parts grow when the file would otherwise need more than 10,000, and are read from the file.
+  - A download writes into the temp file the caller created and never creates the file: a response
+    that arrives after an interrupt, when the caller has deleted the temp file, fails instead of
+    creating it again.
 - Standard retry mode, up to 10 attempts, matching the CLI's boto settings.
 - Checksum calculation and validation set to `WHEN_REQUIRED` (TLS already protects the transfer,
-  and it keeps manual multipart uploads and S3-compatible test servers simple).
+  and it keeps S3-compatible test servers simple).
 - Bucket, region and prefix come from the first credential fetch and are fixed for the run.
-- **Prefix guard:** every key is checked against `Prefix` (`pipelines/<pid>/`) before any call.
-  Writes outside it are refused; reads outside it raise `NoSuchFileException`.
+- The user's own AWS configuration never applies: an explicit endpoint
+  `https://s3.<region>.amazonaws.com` (so `AWS_ENDPOINT_URL[_S3]` or a profile's `endpoint_url`
+  cannot redirect Fovus-signed requests), an empty profile file, and FIPS and dual-stack off.
+- **Access guard:** every key is checked before any call, and a key with a `.` or `..` segment is
+  refused.
+  - Reads: `Prefix` (`pipelines/<pid>/`), Nextflow's session scratch folders next to it
+    (`pipelines/tmp/`, `pipelines/collect-file/`; see §8), `files/` and `jobs/`. Reads elsewhere
+    raise `NoSuchFileException`.
+  - Writes: the same except `jobs/`. Writes elsewhere are refused before calling S3; a `jobs/`
+    write fails as read-only.
 - Maps S3 errors to NIO exceptions and messages as described in §10.
-- On `ExpiredToken` / `InvalidToken`: force a credential refresh and retry the request once.
-- Multipart uploads use a bounded thread pool and are aborted (`AbortMultipartUpload`) on
-  failure or interruption, best effort.
+- On `ExpiredToken` / `InvalidToken`: force a credential refresh and retry the request, or the
+  whole file transfer (an upload or a download), once. A streamed write cannot be replayed after a
+  refresh and fails; the SDK still retries its parts, and the single `PutObject` of a short stream,
+  for transient failures.
+- The SDK aborts a failed multipart upload, best effort: the write token cannot abort (§12), so
+  leftover parts stay invisible until the bucket's lifecycle rule removes them.
 
 ### 6.5 Credentials in the plugin
 
@@ -254,7 +319,9 @@ fovus --silence storage credentials --pipeline-id <pid>
 
 - **Hidden:** registered with `hidden=True`, so it is absent from `fovus --help`,
   `fovus storage --help` and the `sphinx_click` docs. No page under `docs/commands/storage/`,
-  no README mention. Docstring: internal to nf-fovus, not a supported interface.
+  no README mention. Docstring: internal to nf-fovus, not a supported interface. The command's
+  help text says the credentials are for nf-fovus to use with the pipeline's work directory and
+  are not limited to it.
 - **Steps:**
   1. If `sys.stdout.isatty()`, exit 2 with a message on stderr. No override flag.
   2. Validate the pipeline ID:
@@ -336,14 +403,29 @@ the plugin calling the Fovus API itself (duplicates CLI sign-in and needs its to
 
 The plugin never enables AWS SDK request logging.
 
+The SDK's Netty client logs wire dumps of every request and response, including the signed headers
+and the session token, at DEBUG under `io.netty`. The SDK's request signer (`DefaultV4RequestSigner`,
+"AWS4 Canonical Request") logs each canonical request it signs, `x-amz-security-token` header
+included, at DEBUG under `software.amazon`, for the sync and the async clients alike. Nextflow's
+default log levels never enable either. Users must not turn on debug or trace logging for
+`io.netty` or `software.amazon` (e.g. `-trace io.netty`, `-debug software.amazon`) in direct mode.
+The plugin's tests keep `io.netty` and the SDK at INFO for the same reason.
+
 ### Limits of this design
 
 - The hidden command and the pipeline ID checks run in the CLI on the user's machine. A
   determined user can get the same credentials by calling the API with their own sign-in token.
   This is acceptable because the credentials only reach that user's own bucket.
-- The download token is scoped to the pipeline by the backend. The upload token is not: it can
-  write to all of `files/` and `pipelines/`. The plugin's prefix guard keeps the plugin itself
-  inside `pipelines/<pid>/`. A pipeline-scoped backend endpoint (§13) would remove the gap.
+- Neither token is scoped to the pipeline. The read token can read, and the write token can
+  write, anywhere in the user's bucket for up to an hour. The plugin's access guard is the only
+  thing keeping the plugin inside `pipelines/<pid>/`, `files/` and (read-only) `jobs/`, and a
+  leaked credentials document grants that bucket-wide access. A pipeline-scoped backend endpoint
+  (§13) would remove the gap, and it is now the main open hardening item.
+- Reading `files/` and `jobs/` (D9) relies on the read token reaching the whole bucket. A
+  pipeline-scoped endpoint would have to keep read access to those areas, or the CLI command
+  would return a second read credential for them.
+- Direct mode also reads and writes Nextflow's session scratch folders `pipelines/tmp/` and
+  `pipelines/collect-file/` (e.g. `collectFile` without `storeDir`), exactly as mount mode does.
 
 ## 9. Lifecycle in direct mode
 
@@ -356,7 +438,7 @@ The plugin never enables AWS SDK request logging.
    exactly `/fovus-storage/pipelines` and that the run is not Fovus-hosted.
 3. Warm up `fovus.auth` and get or create the pipeline, as today.
 4. `DirectWorkDirStorage.prepare()`: first credential fetch, build `FovusS3Client`, attach it to
-   the `pipelines` filesystem. No mount.
+   the `fovus://` filesystem provider, for every area. No mount.
 5. Work directory: `fovus:///fovus-storage/pipelines/<pid>/fovus-work`, from the unchanged
    `getWorkDir()`.
 6. `bin/` is uploaded to `…/fovus-work/tmp/<rand>/bin`; `remoteBinDir` is
@@ -369,11 +451,13 @@ The plugin never enables AWS SDK request logging.
 2. Foreign inputs (not `fovus://`) are staged by `FilePorter` into
    `…/fovus-work/stage-<sessionId>/…`:
    - local files: provider `upload()` (`PutObject` or parallel multipart);
-   - http or the user's own `s3://`: streamed through `newOutputStream()`;
+   - http or the user's own `s3://`: provider `upload()` streams it, and publishes the object only
+     once the source was read in full (and matches its size, when known); any failure discards it;
    - already-staged files with the same size are skipped (Nextflow's `FilePorter` compares sizes).
 3. Inputs already in Fovus storage (`fovus:///fovus-storage/files|jobs|pipelines/…`) are not
    foreign; they are linked on the compute node with `fovus_link /fovus-storage/…`. Nothing is
-   copied.
+   copied. Nextflow still reads their attributes (for `-resume` hashing) and lists folders for
+   globs, with `HeadObject` and `ListObjectsV2`.
 4. `BashWrapperBuilder` writes `.command.sh`, `.command.run` (and `.command.in` /
    `.command.stage` when needed); `FovusScriptLauncher` writes `.command.fovus.env`. One
    `PutObject` each. Script contents are unchanged, since `FovusFileCopyStrategy` refers to
@@ -403,10 +487,17 @@ strongly consistent, so reads after that point see the final objects.
 
 ### `publishDir`
 
-- Local target: provider `download()` (parallel ranged `GetObject`, temp file then move).
+- Local target: provider `download()` (Transfer Manager `downloadFile`, temp file then move).
   Folders via listing.
-- `symlink` / `link` modes: Nextflow switches remote work directories to `copy` with a warning.
-- Fovus storage `files/` target: not supported in the first version (§13).
+- `symlink` / `link` / `rellink` modes: Nextflow switches remote work directories to `copy` with a
+  warning; an unset mode becomes `copy` too.
+- `move` mode: the copy succeeds, but the source objects stay in Fovus storage, since the write
+  token cannot delete; the plugin warns once per storage area and logs further ones at debug level.
+- Fovus storage `files/` target (`publishDir 'fovus:///fovus-storage/files/results'`, D10): copied
+  inside the bucket, `CopyObject` when allowed, else streamed; after the first denied `CopyObject`,
+  every later copy streams without trying it. With `overwrite` (the default) the old object cannot
+  be deleted first (warned once for `files/`); the new object replaces it. With `mode 'move'`
+  the source stays in place, as for a local target. A `jobs/` target fails as read-only.
 
 ### `-resume`
 
@@ -457,10 +548,11 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 | 5xx, `SlowDown`, timeouts | SDK standard retries, up to 10 attempts |
 | `NoSuchKey` / 404 | `NoSuchFileException` |
 | `AccessDenied` (not expiry) | no retry; "Fovus storage credentials don't allow `<op>` on `<key>` (read/write token)" |
-| `AccessDenied` on delete (only `publishDir` with `mode: 'move'` deletes) | warning only; the file is published and the source is left in place |
-| Write outside `pipelines/<pid>/` | refused before calling S3 |
-| Read outside `pipelines/<pid>/` | `NoSuchFileException` |
-| Read or write on a `pipelines` path before the S3 client is attached, or in mount mode | "Fovus storage pipelines/ paths can only be read or written in direct mode, after the Fovus executor has started" |
+| `AccessDenied` on delete (`publishDir` with `mode: 'move'`, or overwriting in `files/`) | warning only, once per storage area, then at debug level; the object stays in place, and the next write to that path replaces it |
+| Write outside `pipelines/<pid>/`, the scratch folders and `files/` | refused before calling S3 |
+| Write into `jobs/` | refused before calling S3: "Fovus storage jobs/ is read-only" |
+| Read outside `pipelines/<pid>/`, the scratch folders, `files/` and `jobs/` | `NoSuchFileException` |
+| Any access to a `fovus://` path (other than an area root) before the S3 client is attached, or in mount mode | "Fovus storage paths (fovus://) can only be used in direct mode (workDir = 'fovus:///fovus-storage/pipelines'), after the Fovus executor has started. With a Fovus storage mount, use the mounted path instead." |
 | Unsupported operation | `UnsupportedOperationException` naming it |
 
 ### Where a failure lands
@@ -476,10 +568,17 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 
 ### All-or-nothing
 
-- Objects become visible only when `PutObject` / `CompleteMultipartUpload` finishes.
-- Failed or interrupted multipart uploads are aborted, best effort. If abort is not permitted,
-  leftover parts stay invisible until the bucket lifecycle rule removes them (spike).
+- Objects become visible only when `PutObject` / `CompleteMultipartUpload` finishes. A streamed
+  write that is discarded (failure, or a remote source that ended early) is cancelled before it
+  completes.
+- Failed or interrupted multipart uploads are aborted by the SDK, best effort. If abort is not
+  permitted, leftover parts stay invisible until the bucket lifecycle rule removes them (spike).
 - Downloads go to a temp file, moved on success, deleted on failure.
+- A `GetObject` body that ends before the length its response declared (for a ranged GET, the bytes
+  left from its start) is an I/O error, never an early end of file: a read stream or channel fails,
+  a streamed copy is discarded, and a download fails (the SDK already retries such a body) and
+  leaves no file. The url-connection client of the sync clients reports a connection dropped part
+  way as a normal end, so the plugin counts the bytes itself.
 - Ctrl-C: submitted jobs keep running (`killTask` stays a no-op); in-progress uploads are aborted.
 
 ## 11. Testing
@@ -489,8 +588,10 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 - Mode selection (`WorkDirStorage.forSession`): a local `workDir` gives mount mode;
   `fovus:///fovus-storage/pipelines` gives direct mode; any other `fovus://` `workDir` is rejected;
   a `fovus://` `workDir` on a Fovus-hosted run is rejected.
-- `pipelines` filesystem before the S3 client is attached: `mkdirs()` and `exists()` on the area
-  root succeed with no S3 call; any other read or write raises the clear error.
+- `fovus://` filesystems before the S3 client is attached: area roots exist and `mkdirs()` on
+  them succeeds with no S3 call; any other read or write raises the clear error, in every area.
+- `files/` and `jobs/` read through S3; `jobs/` writes refused; a `publishDir`-style copy and move
+  from `pipelines` into `files/`; local uploads into `files/`.
 - `MountedWorkDirStorage`: existing tests keep passing; new tests pin today's path rewriting and
   foreign-file rules. `DirectWorkDirStorage`: work directory, foreign-file rule, compute path.
   No `chmod` command is started in either mode.
@@ -500,10 +601,22 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 - `RefreshingStorageCredentials` with a fake clock: prefetch at T-10 min, blocking in the last
   2 min, failed refresh keeps valid credentials, 50 concurrent callers cause one fetch.
 - Credential classes' `toString()` contains no key.
-- Prefix guard: writes refused, reads "not found".
-- Error mapping with a mocked `S3Client`: `ExpiredToken` refresh and single retry;
+- Access guard: writes outside the writable areas refused, `jobs/` read-only, reads outside the
+  readable areas "not found".
+- Error mapping with a mocked `S3Client` and Transfer Manager: `ExpiredToken` refresh and single retry;
   `AccessDenied` message and no retry; delete denial is a warning; no raw S3 error body in any
   message.
+- The Transfer Manager settings on the real SDK 2.55.9 clients, against a local fake S3 server (no
+  Docker; `TransferManagerTransfersSdkTest`, parts of 1 MiB): the `PutObject` of a short stream, the
+  parts of a stream, the parts and the `PutObject` of a file upload, and the GET of a download are each
+  retried after a transient failure, and a retried download fetches the whole object again with one
+  GET, also after a body cut short of its declared length; a streamed read through the url-connection
+  client fails on such a body instead of ending early; an aborted stream publishes nothing; a stream
+  of known size is sent in parts, in larger ones when it would need more than 10,000 (parts of
+  100 bytes for that case), its parts are retried, and one closed early or written past its size
+  publishes nothing; a file upload has at most 4 parts in flight; a request
+  waits for a free connection past the SDK's default of 10 seconds, then goes through; an open stream
+  holds at most 2 parts in memory.
 - `FovusTaskHandler.checkIfCompleted()`: temporary read error defers, fails after the bound;
   missing `.exitcode` gives `MAX_VALUE`. `submit()` passes
   `/fovus-storage/pipelines/<pid>/fovus-work/ab` to `job create`.
@@ -512,8 +625,9 @@ object is `NoSuchFileException`; objects are all-or-nothing; errors never carry 
 
 Separate Gradle task so `check` needs no Docker. CI (`ubuntu-latest`) has Docker.
 
-- Small write and read back; multipart write at 3× part size; `newOutputStream` streaming;
-  interrupted write leaves no object.
+- Small write and read back; multipart write at 3× part size through the Transfer Manager;
+  `newOutputStream` streaming of unknown length; interrupted write leaves no object.
+- Reads from `files/` and `jobs/`; `publishDir`-style copy from `pipelines` into `files/`.
 - Folder marker makes `exists()` true after `mkdirs()`; paginated listing (small page size);
   `walkFileTree` with globs; an SDK call-counting interceptor confirms no `HeadObject` per file.
 - Upload and download of files and folders; failed download leaves no partial file.
@@ -544,7 +658,8 @@ Docker container started without `/dev/fuse` or `SYS_ADMIN`; Fovus CLI signed in
 
 1. Small pipeline with local inputs (one over 100 MiB), an input from
    `fovus:///fovus-storage/files/…`, glob and `env` outputs, an array task, a failing task with
-   `errorStrategy 'retry'`, and `publishDir` to a local folder.
+   `errorStrategy 'retry'`, and `publishDir` to a local folder and to
+   `fovus:///fovus-storage/files/…`.
 2. `-resume` immediately after: every task cached.
 3. Ctrl-C mid-run, then `-resume`: no partial objects, correct re-run.
 4. One run longer than 70 minutes (credential refresh).
@@ -557,9 +672,11 @@ Run against a beta account first; record answers here before planning.
 
 1. Can the upload token delete objects (`s3:DeleteObject` on `pipelines/<pid>/*`)? Only
    `publishDir` with `mode: 'move'` needs it, since Nextflow skips `cleanup` for remote work
-   directories.
+   directories. Expected from fovus-infra's code: denied (the upload role has only
+   `s3:PutObject`); the plugin's fallbacks cover it. Confirm with the spike.
 2. Can the upload token abort a multipart upload? Does the bucket have a lifecycle rule for
-   incomplete multipart uploads?
+   incomplete multipart uploads? Expected from fovus-infra's code: denied (the upload role has
+   only `s3:PutObject`); the plugin's fallbacks cover it. Confirm with the spike.
 3. ~~Does the `get_pipeline` response include `workflowHost`?~~ Answered: yes, always. The server's
    `PipelineSchema` defaults `workflowHost` to `LOCAL`.
 4. ~~Does `fovus job create --pipeline-id` accept a job directory that does not exist locally?~~
@@ -568,7 +685,13 @@ Run against a beta account first; record answers here before planning.
    again by the end-to-end run.
 5. Can the upload token `CopyObject` within `pipelines/<pid>/` (it needs read access to the
    source)? If not, `copy` uses `GetObject` with the read client and `PutObject` with the write
-   client.
+   client. Expected from fovus-infra's code: denied (the upload role has only `s3:PutObject`);
+   the plugin's fallbacks cover it. Confirm with the spike.
+6. Confirm the read token can `ListObjectsV2` and `GetObject` outside `pipelines/<pid>/`
+   (fovus-infra's code says yes: the download role reads the whole bucket). Direct mode relies on
+   it for `files/` and `jobs/` inputs (D9).
+7. Confirm the upload token can `PutObject` and multipart-upload into `files/` (the CLI's
+   `fovus storage upload` does). Direct mode relies on it for `publishDir` into `files/` (D10).
 
 Also confirm while there: the download token (`PIPELINE_STORAGE`) allows `ListObjectsV2` and
 `GetObject` under `pipelines/<pid>/`, and the upload token allows `PutObject` and multipart there.
@@ -576,10 +699,11 @@ Also confirm while there: the download token (`PIPELINE_STORAGE`) allows `ListOb
 ## 13. Out of scope and follow-ups
 
 - **Pipeline-scoped backend endpoint:** one read/write credential limited to
-  `pipelines/<pid>/`. Removes the wide upload-token scope; the plugin would only need
-  `FovusStorageCredentialsSource` to change.
-- **Publishing into Fovus `files/` in direct mode:** needs a copy that stays in S3 and a check of
-  what the tokens allow.
+  `pipelines/<pid>/`. This is the main hardening follow-up, because both current tokens are
+  bucket-wide. It would also need read access to `files/` and `jobs/` and write access to `files/`
+  (D9, D10), or separate credentials for them. The plugin would only need
+  `FovusStorageCredentialsSource` and the access guard to change.
+- **`fovus://` paths in mount mode:** map them to the mounted path instead of failing.
 - **Resume across a mode switch:** map mount-mode cache paths to `fovus://` paths.
 
 ## 14. Compatibility and rollout
@@ -589,7 +713,11 @@ Also confirm while there: the download token (`PIPELINE_STORAGE`) allows `ListOb
 - Direct mode needs the Fovus CLI release that adds `storage credentials`. When the command is
   missing the plugin tells the user to run `pip install --upgrade fovus`; the README names the
   first CLI release that includes it once that release exists.
-- New nf-fovus dependencies: `software.amazon.awssdk:s3` and
-  `software.amazon.awssdk:url-connection-client`, bundled in the plugin (isolated by the plugin
-  classloader from any `nf-amazon` copy).
+- `fovus://` inputs in mount mode, an undocumented use of the removed CLI-backed filesystem, stop
+  working (D9); the error names the mounted path as the replacement.
+- New nf-fovus dependencies: `software.amazon.awssdk:s3`, `s3-transfer-manager`,
+  `url-connection-client` and `netty-nio-client`, all at 2.55.9 and bundled in the plugin (isolated
+  by the plugin classloader from any `nf-amazon` copy). `apache-client` and `apache5-client` are
+  excluded (2.55's `s3` pulls in `apache5-client`), and there is no CRT client or native library.
+  The plugin zip grows from about 9.5 MB to about 14.4 MB.
 - Release order: CLI first, then nf-fovus.

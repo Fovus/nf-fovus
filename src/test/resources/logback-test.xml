@@ -1,0 +1,20 @@
+<configuration>
+    <!--
+      Logback's own defaults, except for the SDK and Netty. The SDK adds a DEBUG LoggingHandler to every Netty
+      channel, which would dump each request and response into the test reports (the signed Authorization header
+      included), and the SDK's own DEBUG output is as long. Tests that check log messages attach their own appenders
+      and set their loggers' levels.
+    -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} -- %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="io.netty" level="INFO"/>
+    <logger name="software.amazon.awssdk" level="INFO"/>
+
+    <root level="DEBUG">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

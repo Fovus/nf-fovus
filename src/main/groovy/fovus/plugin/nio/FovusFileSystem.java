@@ -31,21 +31,15 @@ import java.util.Set;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 
-import fovus.plugin.job.FovusJobClient;
-
+/** One area of Fovus storage ({@code files}, {@code jobs} or {@code pipelines}); its provider holds the S3 storage they share. */
 public class FovusFileSystem extends FileSystem {
 
     private final FovusFileSystemProvider provider;
 
-    private final FovusJobClient jobClient;
-
-
     private final String fileType;
 
-
-    public FovusFileSystem(FovusFileSystemProvider provider, FovusJobClient client, URI uri) {
+    public FovusFileSystem(FovusFileSystemProvider provider, URI uri) {
         this.provider = provider;
-        this.jobClient = client;
         this.fileType = FovusPath.getFileTypeOfUri(uri);
     }
 
@@ -67,7 +61,7 @@ public class FovusFileSystem extends FileSystem {
 
     @Override
     public boolean isReadOnly() {
-        return true;
+        return FovusPath.JOBS.equals(fileType);
     }
 
     @Override
@@ -113,9 +107,5 @@ public class FovusFileSystem extends FileSystem {
     @Override
     public WatchService newWatchService() throws IOException {
         throw new UnsupportedOperationException();
-    }
-
-    public FovusJobClient getJobClient() {
-        return jobClient;
     }
 }

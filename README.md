@@ -164,12 +164,84 @@ between a local check and the submission. The server's rejection is surfaced ver
 distinguishes an unknown connector from one you are not entitled to.
 
 
+## Direct mode: run without mounting Fovus storage
+
+By default the plugin mounts Fovus storage on the machine running Nextflow (`fovus storage mount`),
+which needs FUSE. If you cannot mount FUSE there, point `workDir` at Fovus storage instead:
+
+```groovy
+workDir = 'fovus:///fovus-storage/pipelines'
+
+fovus {
+    pipelineName = 'my-pipeline'
+}
+```
+
+or on the command line: `nextflow run main.nf -w fovus:///fovus-storage/pipelines`.
+
+In direct mode the plugin reads and writes the pipeline's work directory with the AWS S3 SDK, using
+short-lived credentials it gets from the Fovus CLI. Nothing is mounted, and compute nodes see the same
+files at `/fovus-storage/pipelines/...` as in mount mode.
+
+- It needs a Fovus CLI that provides storage credentials. If yours is too old, the run stops and asks
+  you to run `pip install --upgrade fovus`.
+- It is only for pipelines launched on your own machine; Fovus-hosted runs always use the mount.
+- `workDir` must be exactly `fovus:///fovus-storage/pipelines`.
+- Local and remote (`http`, `s3://`) inputs are uploaded into the pipeline's work directory. Inputs
+  already in Fovus storage are read in place, not copied: `fovus:///fovus-storage/files/...` (your files)
+  and `fovus:///fovus-storage/jobs/<jobId>/...` (the outputs of your jobs). Globs work on them.
+- `publishDir` can target a local folder or Fovus storage `files/`, for example
+  `publishDir 'fovus:///fovus-storage/files/results'`. `jobs/` is read-only: publishing there fails with
+  "Fovus storage jobs/ is read-only".
+  - A local folder gets a download of the results.
+  - As for any remote work directory, the `symlink`, `link` and `rellink` modes, and an unset mode,
+    become `copy`.
+  - `overwrite` (the default) replaces an existing object in `files/` with the new one. The credentials
+    cannot delete the old one first: the plugin warns that it stays in Fovus storage until the new one
+    replaces it.
+  - `mode: 'move'` copies and leaves the source files in the pipeline's work directory in Fovus storage,
+    with a warning, because the direct-mode credentials cannot delete.
+  - Each of these warnings is logged once per storage area (`files/`, `pipelines/`), and further ones at
+    debug level.
+- `fovus://` paths work only in direct mode. In a run with a mount they fail with this message, and you
+  use the mounted path instead:
+
+  ```
+  Fovus storage paths (fovus://) can only be used in direct mode (workDir = 'fovus:///fovus-storage/pipelines'), after the Fovus executor has started. With a Fovus storage mount, use the mounted path instead.
+  ```
+- Files over 16 MiB are uploaded in parts, at most four at a time per file, and a failed request is retried.
+  A download is one request, retried as a whole, into a temporary file that is moved into place once it is
+  complete. Data the plugin streams rather than uploads from a local file is limited in size: about
+  156 GiB when its size is not known in advance, and about 312 GiB when it is, as for a remote input
+  that reports its size or a publish into `files/` (larger ones fail before anything is uploaded).
+  Uploading a local file has no such limit.
+- When an upload in parts fails or is cancelled, the AWS SDK may log a WARN "Failed to abort previous
+  multipart upload": the direct-mode credentials cannot abort uploads. It is harmless: the parts already
+  sent never become a file, and stay invisible until the bucket's lifecycle rule removes them.
+- `cleanup = true` has no effect, as for any remote work directory in Nextflow.
+- Switching a pipeline between mount and direct mode re-runs its tasks on `-resume`.
+- The short-lived credentials can reach your whole Fovus storage bucket. The plugin keeps itself to the
+  pipeline's own folder, Nextflow's scratch folders (`pipelines/tmp/`, `pipelines/collect-file/`), `files/`
+  and, for reading only, `jobs/`.
+- Do not turn on debug or trace logging for `io.netty` or `software.amazon` (for example `-trace io.netty`
+  or `-debug software.amazon`) in direct mode. Their output includes the signed request headers and the
+  session token (Netty's dumps of each request, and the SDK's request signer logging each request it
+  signs), which would end up in `.nextflow.log`. Nextflow's default log levels do not enable it.
+- Your own AWS credentials are neither used nor changed: `s3://` inputs from your buckets keep using them.
+  Your AWS configuration, such as a custom endpoint URL, does not apply to Fovus storage either.
+
 ## Building
 
 To build the plugin:
 ```bash
 make assemble
 ```
+
+## Tests
+
+`./gradlew test` runs the unit tests. `./gradlew integrationTest` runs the direct-mode S3 tests against a
+MinIO container, so it needs Docker. Set `FOVUS_MINIO_IMAGE` to a MinIO image to use; the default tag is
+no longer published on Docker Hub.
 
 ## Testing with Nextflow
 
