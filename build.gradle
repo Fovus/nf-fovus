@@ -4,6 +4,9 @@ plugins {
 
 version = '1.0.17'
 
+// Every AWS SDK module the plugin ships must be the same release
+def awsSdkVersion = '2.55.9'
+
 dependencies {
     // This dependency is exported to consumers, that is to say found on their compile classpath.
 //    compileOnly "io.nextflow:nextflow:$nextflowVersion"
@@ -13,10 +16,35 @@ dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-annotations:2.17.2'
     implementation 'com.fasterxml.jackson.core:jackson-core:2.17.2'
 
+    // Direct storage mode: S3 access with temporary Fovus credentials. The sync client, over the JDK's
+    // HttpURLConnection, serves metadata, listings, reads and small writes. The S3 Transfer Manager and the
+    // Java-based async client over Netty serve file transfers and streamed writes (multipart for writes only).
+    // No Apache HTTP client (neither apache-client nor apache5-client), and no CRT (native libraries
+    // on the user's control node). 2.55 rather than older releases: buffered split bodies, so the parts of a
+    // streamed write can be retried.
+    implementation("software.amazon.awssdk:s3:${awsSdkVersion}") {
+        exclude group: 'software.amazon.awssdk', module: 'apache-client'
+        exclude group: 'software.amazon.awssdk', module: 'apache5-client'
+    }
+    implementation("software.amazon.awssdk:s3-transfer-manager:${awsSdkVersion}") {
+        exclude group: 'software.amazon.awssdk', module: 'apache-client'
+        exclude group: 'software.amazon.awssdk', module: 'apache5-client'
+    }
+    implementation "software.amazon.awssdk:url-connection-client:${awsSdkVersion}"
+    implementation "software.amazon.awssdk:netty-nio-client:${awsSdkVersion}"
+
+    testImplementation 'org.testcontainers:testcontainers:1.21.4'
+    testImplementation 'org.testcontainers:minio:1.21.4'
+
     // see https://docs.gradle.org/4.1/userguide/dependency_management.html#sec:module_replacement
     modules {
         module("commons-logging:commons-logging") { replacedBy("org.slf4j:jcl-over-slf4j") }
     }
+}
+
+// Nextflow provides SLF4J at runtime; do not ship a second copy inside the plugin.
+configurations.runtimeClasspath {
+    exclude group: 'org.slf4j', module: 'slf4j-api'
 }
 
 // Run tests from a scratch directory. The pipeline cache resolves `.fovus/pipeline_cache.json`
@@ -24,6 +52,24 @@ dependencies {
 test {
     workingDir = layout.buildDirectory.dir('test-workdir').get().asFile
     doFirst { workingDir.mkdirs() }
+    useJUnitPlatform {
+        excludeTags 'integration'
+    }
+}
+
+// Direct-mode S3 tests against a MinIO container. Needs Docker, so it is kept out of `check`.
+tasks.register('integrationTest', Test) {
+    description = 'Runs the direct-mode S3 tests against a MinIO container (needs Docker).'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    workingDir = layout.buildDirectory.dir('integration-test-workdir').get().asFile
+    doFirst { workingDir.mkdirs() }
+    // FileHelper.visitFiles with a glob reflects into sun.nio.fs, which Nextflow's own launcher opens
+    jvmArgs '--add-opens=java.base/sun.nio.fs=ALL-UNNAMED'
+    useJUnitPlatform {
+        includeTags 'integration'
+    }
 }
 
 nextflowPlugin {

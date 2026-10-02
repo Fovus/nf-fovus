@@ -25,6 +25,7 @@ import javax.annotation.Nullable;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.file.*;
 import java.util.*;
 import java.util.Objects;
@@ -37,6 +38,10 @@ public class FovusPath implements Path {
     public static final String PATH_SEPARATOR = "/";
 
     public static final String FOVUS_PATH_PREFIX = "/fovus-storage";
+
+    public static final String PIPELINES = "pipelines";
+
+    public static final String JOBS = "jobs";
 
     /**
      * Parts without fovus-storage prefix and fileType name.
@@ -60,7 +65,7 @@ public class FovusPath implements Path {
     /**
      * Get the file type of this Fovus Path
      *
-     * @return files or jobs.
+     * @return files, jobs or pipelines: the storage area.
      */
     public String getFileType() {
         return fileType;
@@ -98,10 +103,11 @@ public class FovusPath implements Path {
         }
 
         if (first.startsWith(PATH_SEPARATOR)) { // absolute path
-            Preconditions.checkArgument(parts.size() >= 2 &&
+            Preconditions.checkArgument(parts.size() >= 3 &&
                             parts.get(1).equals("fovus-storage") &&
-                            (parts.get(2).equals("jobs") || parts.get(2).equals("files") || parts.get(2).equals("shared")),
-                    "Invalid Fovus file path. Path must start with fovus-storage prefix and followed by 'files' or 'jobs' or 'shared");
+                            (parts.get(2).equals("jobs") || parts.get(2).equals("files") || parts.get(2).equals("shared")
+                                    || parts.get(2).equals(PIPELINES)),
+                    "Invalid Fovus file path. Path must start with fovus-storage prefix and followed by 'files', 'jobs', 'pipelines' or 'shared'");
 
             fileType = parts.get(2);
             if (fileType.equals("shared")) {
@@ -148,12 +154,13 @@ public class FovusPath implements Path {
     }
 
     /**
-     * Get the corresponding remote file path of this {@link FovusPath} object relatively to /fovus-storage/
+     * @return true for {@code /fovus-storage/<area>} itself, in any area, such as the work directory of direct
+     * mode: a folder that always exists
      */
-    public String toRemoteFilePath() {
-        return getFileType() + PATH_SEPARATOR + getKey();
+    public boolean isAreaRoot() {
+        return fileType != null && parts.isEmpty();
     }
-    
+
     @Override
     public FovusFileSystem getFileSystem() {
         return this.fileSystem;
@@ -396,18 +403,21 @@ public class FovusPath implements Path {
         return new FovusPath(fileSystem, null, resultParts);
     }
 
+    /**
+     * {@code fovus:///fovus-storage/{fileType}/{key}}, with what a URI cannot hold as it is (a space, {@code [},
+     * {@code #}, {@code %}...) percent-encoded, as Nextflow's own {@code FileHelper.toPathURI} encodes a path:
+     * {@link URI#getPath()} gives the names back as they are.
+     */
     @Override
     public URI toUri() {
-        StringBuilder builder = new StringBuilder();
-        builder.append("fovus://");
-        builder.append(FOVUS_PATH_PREFIX);
-        builder.append(PATH_SEPARATOR);
-        builder.append(fileType);
-        builder.append(PATH_SEPARATOR);
-        builder.append(Joiner.on(PATH_SEPARATOR).join(parts));
-
-        // Eg: fovus:///fovus-storage/{fileType}/{key}
-        return URI.create(builder.toString());
+        final String path = FOVUS_PATH_PREFIX + PATH_SEPARATOR + fileType + PATH_SEPARATOR + Joiner.on(PATH_SEPARATOR).join(parts);
+        try {
+            // The empty authority keeps the three slashes
+            return new URI("fovus", "", path, null, null);
+        } catch (URISyntaxException e) {
+            // Every character of the path is encoded as needed, so this cannot happen
+            throw new IllegalStateException("Fovus path cannot be made a URI: " + this, e);
+        }
     }
 
     @Override
@@ -502,7 +512,7 @@ public class FovusPath implements Path {
 
     /**
      * This method returns the cached {@link FovusFileMetadata} instance if this path has been created
-     * while iterating a directory structures by the {@link FovusPathIterator}.
+     * while listing a folder, by {@link S3Storage#newDirectoryStream}.
      * <br>
      * After calling this method the cached object is reset, so any following method invocation will return {@code null}.
      * This is necessary to discard the object meta-data and force to reload file attributes when required.
