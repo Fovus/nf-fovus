@@ -2,7 +2,7 @@ plugins {
     id 'io.nextflow.nextflow-plugin' version '1.0.0-beta.10'
 }
 
-version = '1.0.17'
+version = '1.0.18'
 
 // Every AWS SDK module the plugin ships must be the same release
 def awsSdkVersion = '2.55.9'
