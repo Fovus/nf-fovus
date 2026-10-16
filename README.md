@@ -91,13 +91,16 @@ process {
 
 ```groovy
 process {
-    ext.storageConnectors = ['reference-genomes']
-
     withName: 'publishResults' {
         ext.storageConnectors = ['reference-genomes', 'results-archive']
     }
+
+    ext.storageConnectors = ['reference-genomes']
 }
 ```
+
+Put the pipeline-wide `ext` line after the `withName` block. Nextflow drops the selector when a
+plain `ext` line comes before it.
 
 It can also come from a JSON job config file (`ext.jobConfigFile`) or a benchmarking profile:
 
@@ -112,12 +115,20 @@ every other Fovus job attribute.
 
 ### Pre-configured resources
 
-At the start of a run the plugin sends the resource configurations declared in `process.ext` to
+Once, before the first job starts, the plugin sends resource configurations to
 `fovus pipeline pre-config-resources`, so Fovus can provision the pipeline's resources ahead of the
-first job. `storageConnectors` travels with those configurations, which is what lets an on-demand
-pcluster be created with the IAM roles its jobs will need.
+first job. There is one configuration for each distinct `ext` among the processes that the workflow
+uses and that run on the `fovus` executor. Processes that are never called, or that run on another
+executor, are not sent. `storageConnectors` travels with those configurations, which is what lets
+an on-demand pcluster be created with the IAM roles its jobs will need.
 
-A configuration is only sent when its `ext` block also declares a `benchmarkingProfileName`. A
+Each `ext` is read the way the process's first attempt sees it, so `withName` and `withLabel` rules
+apply, and closures that read `params` or `task.attempt` (which is 1) are resolved. A value that
+needs task inputs, such as `meta`, cannot be resolved up front. It is left out with a warning and
+is still applied when the job is submitted.
+
+A configuration is only sent when its `ext` block also declares a `benchmarkingProfileName` that
+resolves to text. A
 process that declares `storageConnectors` without one still gets the connectors on its job, but it
 contributes nothing to the pre-configuration step. Per-process connectors override the pipeline-wide
 ones in the payload, and a process that declares none inherits the pipeline-wide list; setting
