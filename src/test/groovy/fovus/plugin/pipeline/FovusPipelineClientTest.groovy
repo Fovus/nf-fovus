@@ -149,6 +149,23 @@ class FovusPipelineClientTest extends Specification {
                 '[{"benchmarkingProfileName":"profile","storageConnectors":["reference-genomes"]}]'
     }
 
+    def 'preConfigResources should drop a configuration that still holds closure text'() {
+        given:
+        def client = new CapturingClient()
+        def unresolved = new ResourceConfiguration(
+                benchmarkingProfileName: '_nf_config_4553341a$_run_closure6$_closure22$_closure38@6fde6f05')
+        def resolved = new ResourceConfiguration(benchmarkingProfileName: 'profile', maxvCpu: 8)
+
+        when:
+        client.preConfigResources(TEST_CONFIG, TEST_PIPELINE, [unresolved, resolved])
+
+        then:
+        def configurationsJson = flagValue(client.captured, '--configurations')
+        !configurationsJson.contains('_nf_config_')
+        !configurationsJson.contains('$_closure')
+        configurationsJson == '[{"benchmarkingProfileName":"profile","maxvCpu":8}]'
+    }
+
     def 'a failing CLI call should raise an error'() {
         given:
         def client = new CapturingClient() {
