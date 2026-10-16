@@ -6,10 +6,12 @@ import groovy.util.logging.Slf4j
 import nextflow.Session
 import nextflow.processor.TaskProcessor
 import fovus.plugin.FovusConfig
+import fovus.plugin.FovusExecutor
 import fovus.plugin.FovusPipelineCache
 import fovus.plugin.FovusUtil
 import fovus.plugin.job.FovusJobConfig
 import fovus.plugin.job.FovusJobConfigBuilder
+import fovus.plugin.pipeline.FovusPipeline
 import fovus.plugin.pipeline.FovusPipelineClient
 import fovus.plugin.pipeline.FovusPipelineStatus
 import fovus.plugin.pipeline.ResourceConfiguration
@@ -21,6 +23,7 @@ import nextflow.trace.TraceObserverV2
 import nextflow.trace.event.TaskEvent
 
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.Function
 
@@ -36,6 +39,8 @@ class FovusTraceObserver implements TraceObserverV2 {
     // session.abort() can cause onFlowComplete to fire from two threads concurrently;
     // this guard ensures the pipeline status update and headnode cleanup run exactly once.
     private final AtomicBoolean isCompletionReported = new AtomicBoolean(false)
+    private final AtomicBoolean isPreConfigSent = new AtomicBoolean(false)
+    private final Map<String, ResourceConfiguration> resourceConfigurations = new ConcurrentHashMap<>()
 
     FovusTraceObserver(Session session) {
         this(
@@ -62,15 +67,6 @@ class FovusTraceObserver implements TraceObserverV2 {
         prepareDirectModeStorage(session?.getWorkDir(), isHostedMode, pipelineId,
                 { Path workDir -> WorkDirStorageFactory.create(workDir, isHostedMode, fovusConfig) } as Function<Path, WorkDirStorage>)
 
-
-        try {
-            final configurations = collectResourceConfigurations(session)
-            final nextflowConfig = FovusUtil.readNextflowConfig(session?.getConfigFiles())
-
-            pipelineClient.preConfigResources(fovusConfig, pipelineClient.getPipeline(), configurations, nextflowConfig)
-        } catch (Exception e) {
-            log.trace "[FOVUS] Cannot configure pipeline resources: ${e.message}"
-        }
     }
 
     /**
@@ -89,63 +85,41 @@ class FovusTraceObserver implements TraceObserverV2 {
         storageFactory.apply(workDir).prepare(pipelineId)
     }
 
-    /**
-     * Collect the resource configurations declared through `process.ext`, both the global
-     * one and each per-process override merged over it.
-     *
-     * @return The resource configurations, empty when the config declares none
-     */
-    @PackageScope
-    static List<ResourceConfiguration> collectResourceConfigurations(Session session) {
-        def configurations = new LinkedHashSet<ResourceConfiguration>()
-        def processConfig = session.config.navigate('process')
-        if (!processConfig || !(processConfig instanceof Map)) {
-            return []
-        }
+    @Override
+    void onProcessCreate(TaskProcessor process) {
+        try {
+            if (!(process.getExecutor() instanceof FovusExecutor)) return
 
-        // Handle the global configuration
-        processConfig = processConfig as Map
-        ResourceConfiguration globalConfig = processConfig.ext instanceof Map ?
-                                             parseExtensionObject(processConfig.ext as Map, null) : null;
-
-        if (globalConfig) {
-            configurations.add(globalConfig)
-        }
-
-        // Look for each benchmark overriding
-        processConfig.entrySet().findAll { it.value instanceof Map }.each { entry ->
-            def key = entry.key
-            def value = entry.value
-
-            ResourceConfiguration config = null;
-            if (key == "ext" && (value instanceof Map)) {
-                // Skip the global ext config
-                return
+            final configuration = parseExtensionObject(resolveFirstAttemptExt(process), process.getName())
+            if (configuration) {
+                resourceConfigurations.put(process.getName(), configuration)
             }
-
-            def ext = (value as Map).get("ext")
-            if (!ext || !(ext instanceof Map)) return
-
-            config = parseExtensionObject(ext as Map, null)
-
-            if (config && globalConfig) {
-                config = globalConfig.mergeWith(config)
-            }
-
-            if (config) {
-                configurations.add(config)
-            }
+        } catch (Exception e) {
+            log.warn "[FOVUS] Cannot read the resource configuration of process ${process?.getName()}: ${e.message}"
         }
-
-        return configurations.toList()
     }
 
     @Override
     void onFlowBegin() {
         hasFlowError = false
         lastFlowErrorEvent = null
-        pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), FovusPipelineStatus.RUNNING,
+        final pipeline = pipelineClient.getPipeline()
+        sendPreConfigOnce(pipeline)
+        pipelineClient.updatePipelineStatus(fovusConfig, pipeline, FovusPipelineStatus.RUNNING,
                                             session?.getCommandLine())
+    }
+
+    private void sendPreConfigOnce(FovusPipeline pipeline) {
+        if (!isPreConfigSent.compareAndSet(false, true)) return
+
+        try {
+            final nextflowConfig = FovusUtil.readNextflowConfig(session?.getConfigFiles())
+            pipelineClient.preConfigResources(fovusConfig, pipeline,
+                                              new ArrayList<>(new LinkedHashSet<>(resourceConfigurations.values())),
+                                              nextflowConfig)
+        } catch (Exception e) {
+            log.warn "[FOVUS] Cannot configure pipeline resources: ${e.message}"
+        }
     }
 
     @Override

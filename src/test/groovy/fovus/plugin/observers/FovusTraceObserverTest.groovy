@@ -1,6 +1,13 @@
 package fovus.plugin.observers
 
+import fovus.plugin.FovusConfig
+import fovus.plugin.FovusExecutor
+import fovus.plugin.pipeline.FovusPipeline
+import fovus.plugin.pipeline.FovusPipelineClient
+import fovus.plugin.pipeline.FovusPipelineStatus
+import fovus.plugin.pipeline.ResourceConfiguration
 import nextflow.Session
+import nextflow.executor.Executor
 import nextflow.processor.TaskConfig
 import nextflow.processor.TaskProcessor
 import nextflow.processor.TaskRun
@@ -22,255 +29,61 @@ class FovusTraceObserverTest extends Specification {
         return file.toString()
     }
 
-    def 'collectResourceConfigurations should return an empty list when the config declares no process scope'() {
-        given:
-        def session = Mock(Session) { getConfig() >> config }
-
-        expect:
-        FovusTraceObserver.collectResourceConfigurations(session) == []
-
-        where:
-        config << [[:], [process: 'not-a-map'], [process: [cpus: 4]], [process: [ext: [maxvCpu: 8]]]]
-    }
-
-    def 'collectResourceConfigurations should read the global process ext config'() {
-        given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [ext: [benchmarkingProfileName: 'global-profile', maxvCpu: 8]]]
-        }
-
+    def 'parseExtensionObject should carry the storage connectors of the ext'() {
         when:
-        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
-
-        then:
-        configurations.size() == 1
-        configurations[0].benchmarkingProfileName == 'global-profile'
-        configurations[0].maxvCpu == 8
-    }
-
-    def 'collectResourceConfigurations should merge a per-process override over the global config'() {
-        given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [
-                    ext                   : [benchmarkingProfileName: 'global-profile', maxvCpu: 8, minvCpu: 2],
-                    'withName:alignReads' : [ext: [benchmarkingProfileName: 'align-profile', maxvCpu: 64]]
-            ]]
-        }
-
-        when:
-        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
-
-        then:
-        configurations.size() == 2
-        configurations[0].benchmarkingProfileName == 'global-profile'
-        configurations[0].maxvCpu == 8
-
-        and: 'the override wins on maxvCpu but inherits minvCpu from the global config'
-        configurations[1].benchmarkingProfileName == 'align-profile'
-        configurations[1].maxvCpu == 64
-        configurations[1].minvCpu == 2
-    }
-
-    def 'collectResourceConfigurations should read a per-process config when there is no global one'() {
-        given:
-        def session = Mock(Session) {
-            getConfig() >> [process: ['withName:alignReads': [ext: [benchmarkingProfileName: 'align-profile']]]]
-        }
-
-        when:
-        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
-
-        then:
-        configurations.size() == 1
-        configurations[0].benchmarkingProfileName == 'align-profile'
-    }
-
-    def 'collectResourceConfigurations should read the scaling strategy flags'() {
-        given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [
-                    ext                  : [benchmarkingProfileName    : 'global-profile',
-                                            isHybridStrategyAllowed    : true,
-                                            isMultiRegionScalingAllowed: true],
-                    'withName:alignReads': [ext: [benchmarkingProfileName    : 'align-profile',
-                                                  isMultiRegionScalingAllowed: false]]
-            ]]
-        }
-
-        when:
-        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
-
-        then:
-        configurations[0].isHybridStrategyAllowed
-        configurations[0].isMultiRegionScalingAllowed
-
-        and: 'the override wins on isMultiRegionScalingAllowed but inherits isHybridStrategyAllowed'
-        configurations[1].isHybridStrategyAllowed
-        !configurations[1].isMultiRegionScalingAllowed
-    }
-
-    def 'collectResourceConfigurations should ignore non-boolean scaling strategy flags'() {
-        given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [ext: [benchmarkingProfileName    : 'global-profile',
-                                            isHybridStrategyAllowed    : 'yes',
-                                            isMultiRegionScalingAllowed: 1]]]
-        }
-
-        when:
-        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
-
-        then:
-        configurations[0].isHybridStrategyAllowed == null
-        configurations[0].isMultiRegionScalingAllowed == null
-    }
-
-    def 'collectResourceConfigurations should ignore a process entry without a benchmarking profile'() {
-        given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [
-                    'withName:alignReads': [ext: [maxvCpu: 64]],
-                    'withName:callVars'  : [ext: [benchmarkingProfileName: 'call-profile']]
-            ]]
-        }
-
-        when:
-        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
-
-        then:
-        configurations.size() == 1
-        configurations[0].benchmarkingProfileName == 'call-profile'
-    }
-
-    def 'collectResourceConfigurations should carry the storage connectors of the global config'() {
-        given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [ext: [benchmarkingProfileName: 'global-profile',
-                                            storageConnectors      : ['reference-genomes', 'reference-genomes']]]]
-        }
-
-        when:
-        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
+        def configuration = FovusTraceObserver.parseExtensionObject(
+                [benchmarkingProfileName: 'global-profile',
+                 storageConnectors      : ['reference-genomes', 'reference-genomes']], 'alignReads')
 
         then: 'duplicates are dropped, exactly as they are for a job'
-        configurations.size() == 1
-        configurations[0].storageConnectors == ['reference-genomes']
+        configuration.storageConnectors == ['reference-genomes']
     }
 
-    def 'collectResourceConfigurations should let a per-process override replace the global connectors'() {
-        given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [
-                    ext                    : [benchmarkingProfileName: 'global-profile',
-                                              storageConnectors      : ['reference-genomes']],
-                    'withName:publishResults': [ext: [benchmarkingProfileName: 'publish-profile',
-                                                      storageConnectors      : ['results-archive']]],
-                    'withName:alignReads'    : [ext: [benchmarkingProfileName: 'align-profile']]
-            ]]
-        }
-
-        when:
-        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
-
-        then:
-        configurations.size() == 3
-        configurations[0].storageConnectors == ['reference-genomes']
-
-        and: 'the override wins'
-        configurations[1].storageConnectors == ['results-archive']
-
-        and: 'a process that declares none inherits the global connectors'
-        configurations[2].storageConnectors == ['reference-genomes']
-    }
-
-    def 'collectResourceConfigurations should leave the connectors unset when none are declared'() {
-        given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [ext: [benchmarkingProfileName: 'global-profile']]]
-        }
-
+    def 'parseExtensionObject should leave the connectors unset when none are declared'() {
         expect:
-        FovusTraceObserver.collectResourceConfigurations(session)[0].storageConnectors == null
+        FovusTraceObserver.parseExtensionObject([benchmarkingProfileName: 'global-profile'], 'alignReads')
+                .storageConnectors == null
     }
 
-    def 'collectResourceConfigurations should keep a per-process empty list clearing the global connectors'() {
+    def 'parseExtensionObject should carry the storage connectors of a JSON job config file'() {
         given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [
-                    ext                      : [benchmarkingProfileName: 'global-profile',
-                                                storageConnectors      : ['reference-genomes']],
-                    'withName:publishResults': [ext: [benchmarkingProfileName: 'publish-profile',
-                                                      storageConnectors      : []]]
-            ]]
-        }
-
-        when:
-        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
-
-        then: 'an explicit [] is an override, so the global connectors are not merged back in'
-        configurations.size() == 2
-        configurations[0].storageConnectors == ['reference-genomes']
-        configurations[1].storageConnectors == []
-    }
-
-    def 'collectResourceConfigurations should carry the storage connectors of a JSON job config file'() {
-        given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [ext: [
-                    benchmarkingProfileName: 'global-profile',
-                    jobConfigFile          : jobConfigFile('{"storageConnectors": ["from-job-config", "from-job-config"]}')
-            ]]]
-        }
+        def ext = [benchmarkingProfileName: 'global-profile',
+                   jobConfigFile          : jobConfigFile('{"storageConnectors": ["from-job-config", "from-job-config"]}')]
 
         expect: 'duplicates are dropped, exactly as they are for a job'
-        FovusTraceObserver.collectResourceConfigurations(session)[0].storageConnectors == ['from-job-config']
+        FovusTraceObserver.parseExtensionObject(ext, 'alignReads').storageConnectors == ['from-job-config']
     }
 
-    def 'collectResourceConfigurations should let ext.storageConnectors override the JSON job config file'() {
+    def 'parseExtensionObject should let ext.storageConnectors override the JSON job config file'() {
         given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [ext: [
-                    benchmarkingProfileName: 'global-profile',
-                    jobConfigFile          : jobConfigFile('{"storageConnectors": ["from-job-config"]}'),
-                    storageConnectors      : ['from-process']
-            ]]]
-        }
+        def ext = [benchmarkingProfileName: 'global-profile',
+                   jobConfigFile          : jobConfigFile('{"storageConnectors": ["from-job-config"]}'),
+                   storageConnectors      : ['from-process']]
 
         expect:
-        FovusTraceObserver.collectResourceConfigurations(session)[0].storageConnectors == ['from-process']
+        FovusTraceObserver.parseExtensionObject(ext, 'alignReads').storageConnectors == ['from-process']
     }
 
-    def 'collectResourceConfigurations should ignore a missing JSON job config file'() {
+    def 'parseExtensionObject should ignore a missing JSON job config file'() {
         given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [ext: [benchmarkingProfileName: 'global-profile',
-                                            jobConfigFile          : '/no/such/job-config.json']]]
-        }
+        def ext = [benchmarkingProfileName: 'global-profile', jobConfigFile: '/no/such/job-config.json']
 
         expect: 'the job path reports the failure with better context, so it is not raised here'
-        FovusTraceObserver.collectResourceConfigurations(session)[0].storageConnectors == null
+        FovusTraceObserver.parseExtensionObject(ext, 'alignReads').storageConnectors == null
     }
 
-    def 'collectResourceConfigurations should ignore an unparsable JSON job config file'() {
+    def 'parseExtensionObject should ignore an unparsable JSON job config file'() {
         given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [ext: [benchmarkingProfileName: 'global-profile',
-                                            jobConfigFile          : jobConfigFile('not json at all')]]]
-        }
+        def ext = [benchmarkingProfileName: 'global-profile', jobConfigFile: jobConfigFile('not json at all')]
 
         expect:
-        FovusTraceObserver.collectResourceConfigurations(session)[0].storageConnectors == null
+        FovusTraceObserver.parseExtensionObject(ext, 'alignReads').storageConnectors == null
     }
 
-    def 'collectResourceConfigurations should reject a malformed storage connector name'() {
-        given:
-        def session = Mock(Session) {
-            getConfig() >> [process: [ext: [benchmarkingProfileName: 'global-profile',
-                                            storageConnectors      : ['team_shared']]]]
-        }
-
+    def 'parseExtensionObject should reject a malformed storage connector name'() {
         when:
-        FovusTraceObserver.collectResourceConfigurations(session)
+        FovusTraceObserver.parseExtensionObject(
+                [benchmarkingProfileName: 'global-profile', storageConnectors: ['team_shared']], 'alignReads')
 
         then:
         def error = thrown(Error)
@@ -349,5 +162,116 @@ class FovusTraceObserverTest extends Specification {
         def ratio = "${'0.5'}/${'0.5'}"
         FovusTraceObserver.parseExtensionObject([benchmarkingProfileName: 'A', timeToCostPriorityRatio: ratio], 'p')
                 .timeToCostPriorityRatio instanceof String
+    }
+
+    private static final FovusConfig TEST_CONFIG = new FovusConfig([pipelineName: 'test-pipeline'])
+    private static final FovusPipeline TEST_PIPELINE = new FovusPipeline('test-pipeline', 'p-123')
+
+    private TaskProcessor fovusProcess(String name, Map ext) {
+        return processOn(name, ext, Mock(FovusExecutor))
+    }
+
+    private TaskProcessor processOn(String name, Map ext, Executor executor) {
+        def taskConfig = new TaskConfig([ext: ext])
+        taskConfig.setContext([params: [:]])
+        return Mock(TaskProcessor) {
+            getName() >> name
+            getExecutor() >> executor
+            createTaskPreview() >> new TaskRun(config: taskConfig)
+        }
+    }
+
+    def 'onFlowBegin should pre-configure only the Fovus processes once, before setting RUNNING'() {
+        given:
+        def pipelineClient = Mock(FovusPipelineClient)
+        def observer = new FovusTraceObserver(Mock(Session), TEST_CONFIG, pipelineClient)
+        observer.onProcessCreate(fovusProcess('alignReads', [benchmarkingProfileName: 'A']))
+        observer.onProcessCreate(processOn('localStep', [benchmarkingProfileName: 'B'], Mock(Executor)))
+
+        when:
+        observer.onFlowBegin()
+
+        then:
+        1 * pipelineClient.getPipeline() >> TEST_PIPELINE
+        1 * pipelineClient.preConfigResources(TEST_CONFIG, TEST_PIPELINE,
+                [new ResourceConfiguration(benchmarkingProfileName: 'A')], _)
+
+        then:
+        1 * pipelineClient.updatePipelineStatus(TEST_CONFIG, TEST_PIPELINE, FovusPipelineStatus.RUNNING, _)
+    }
+
+    def 'onFlowBegin should send equal configurations once'() {
+        given:
+        def pipelineClient = Mock(FovusPipelineClient)
+        def observer = new FovusTraceObserver(Mock(Session), TEST_CONFIG, pipelineClient)
+        observer.onProcessCreate(fovusProcess('alignReads', [benchmarkingProfileName: 'A']))
+        observer.onProcessCreate(fovusProcess('callVariants', [benchmarkingProfileName: 'A']))
+
+        when:
+        observer.onFlowBegin()
+
+        then:
+        1 * pipelineClient.getPipeline() >> TEST_PIPELINE
+        1 * pipelineClient.preConfigResources(TEST_CONFIG, TEST_PIPELINE,
+                [new ResourceConfiguration(benchmarkingProfileName: 'A')], _)
+    }
+
+    def 'onFlowBegin should not pre-configure again when it fires a second time'() {
+        given:
+        def pipelineClient = Mock(FovusPipelineClient)
+        def observer = new FovusTraceObserver(Mock(Session), TEST_CONFIG, pipelineClient)
+
+        when:
+        observer.onFlowBegin()
+        observer.onFlowBegin()
+
+        then:
+        _ * pipelineClient.getPipeline() >> TEST_PIPELINE
+        1 * pipelineClient.preConfigResources(*_)
+    }
+
+    def 'onFlowBegin should still call preConfigResources with an empty list when no process declares a profile'() {
+        given:
+        def pipelineClient = Mock(FovusPipelineClient)
+        def observer = new FovusTraceObserver(Mock(Session), TEST_CONFIG, pipelineClient)
+        observer.onProcessCreate(fovusProcess('alignReads', [maxvCpu: 8]))
+
+        when:
+        observer.onFlowBegin()
+
+        then:
+        _ * pipelineClient.getPipeline() >> TEST_PIPELINE
+        1 * pipelineClient.preConfigResources(TEST_CONFIG, TEST_PIPELINE, [], _)
+    }
+
+    def 'onFlowBegin should keep going when the pre-configuration fails'() {
+        given:
+        def pipelineClient = Mock(FovusPipelineClient)
+        def observer = new FovusTraceObserver(Mock(Session), TEST_CONFIG, pipelineClient)
+        pipelineClient.preConfigResources(*_) >> { throw new IllegalStateException('cli down') }
+
+        when:
+        observer.onFlowBegin()
+
+        then:
+        noExceptionThrown()
+        _ * pipelineClient.getPipeline() >> TEST_PIPELINE
+        1 * pipelineClient.updatePipelineStatus(TEST_CONFIG, TEST_PIPELINE, FovusPipelineStatus.RUNNING, _)
+    }
+
+    def 'onProcessCreate should not throw when the process cannot be read'() {
+        given:
+        def process = Mock(TaskProcessor) {
+            getName() >> 'broken'
+            getExecutor() >> Mock(FovusExecutor)
+            createTaskPreview() >> { throw new IllegalStateException('no preview') }
+        }
+        def observer = new FovusTraceObserver(Mock(Session), TEST_CONFIG, Mock(FovusPipelineClient))
+
+        when:
+        observer.onProcessCreate(process)
+
+        then:
+        noExceptionThrown()
     }
 }
