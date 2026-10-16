@@ -183,7 +183,7 @@ class FovusTraceObserver implements TraceObserverV2 {
     }
 
     /**
-     * @param processName the process the ext belongs to, named in warnings; null for the global ext
+     * @param processName the process the ext belongs to, named in warnings
      * @return the configuration, or null when {@code ext} has no resolved benchmarking profile name
      */
     static ResourceConfiguration parseExtensionObject(Map ext, String processName) {
@@ -193,7 +193,7 @@ class FovusTraceObserver implements TraceObserverV2 {
         if (!benchmarkingProfileName) return
         if (!(benchmarkingProfileName instanceof CharSequence) ||
                 !ResourceConfiguration.isResolvedValue(benchmarkingProfileName)) {
-            log.warn "[FOVUS] Skipping the pre-configuration of process ${processName ?: 'defaults'}: " +
+            log.warn "[FOVUS] Skipping the pre-configuration of process ${processName}: " +
                      "ext.benchmarkingProfileName is not resolved text"
             return
         }
@@ -274,7 +274,7 @@ class FovusTraceObserver implements TraceObserverV2 {
                     if (value instanceof CharSequence) {
                         resourceConfig.timeToCostPriorityRatio = value.toString()
                     } else {
-                        log.warn "[FOVUS] Ignoring ext.timeToCostPriorityRatio of process ${processName ?: 'defaults'} " +
+                        log.warn "[FOVUS] Ignoring ext.timeToCostPriorityRatio of process ${processName} " +
                                  "because it is not text"
                     }
                     break
