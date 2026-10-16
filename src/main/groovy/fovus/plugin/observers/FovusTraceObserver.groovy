@@ -66,7 +66,6 @@ class FovusTraceObserver implements TraceObserverV2 {
         final isHostedMode = FovusEnvironment.isHostedMode()
         prepareDirectModeStorage(session?.getWorkDir(), isHostedMode, pipelineId,
                 { Path workDir -> WorkDirStorageFactory.create(workDir, isHostedMode, fovusConfig) } as Function<Path, WorkDirStorage>)
-
     }
 
     /**
