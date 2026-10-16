@@ -29,6 +29,31 @@ class FovusTraceObserverTest extends Specification {
         return file.toString()
     }
 
+    def 'parseExtensionObject should carry the scaling strategy flags when they are booleans'() {
+        when:
+        def configuration = FovusTraceObserver.parseExtensionObject(
+                [benchmarkingProfileName: 'A', isHybridStrategyAllowed: true, isMultiRegionScalingAllowed: false], 'p')
+
+        then:
+        configuration.isHybridStrategyAllowed
+        configuration.isMultiRegionScalingAllowed == false
+    }
+
+    def 'parseExtensionObject should ignore non-boolean scaling strategy flags'() {
+        when:
+        def configuration = FovusTraceObserver.parseExtensionObject(
+                [benchmarkingProfileName: 'A', isHybridStrategyAllowed: 'yes', isMultiRegionScalingAllowed: 1], 'p')
+
+        then:
+        configuration.isHybridStrategyAllowed == null
+        configuration.isMultiRegionScalingAllowed == null
+    }
+
+    def 'parseExtensionObject should return null when the ext has no benchmarking profile'() {
+        expect:
+        FovusTraceObserver.parseExtensionObject([maxvCpu: 64], 'p') == null
+    }
+
     def 'parseExtensionObject should carry the storage connectors of the ext'() {
         when:
         def configuration = FovusTraceObserver.parseExtensionObject(
