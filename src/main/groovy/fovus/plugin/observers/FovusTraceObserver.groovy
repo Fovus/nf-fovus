@@ -84,6 +84,10 @@ class FovusTraceObserver implements TraceObserverV2 {
         storageFactory.apply(workDir).prepare(pipelineId)
     }
 
+    /**
+     * Nextflow calls this for every process the workflow uses, with its withName and withLabel
+     * settings already applied. Only processes on the Fovus executor are kept, keyed by name.
+     */
     @Override
     void onProcessCreate(TaskProcessor process) {
         try {
@@ -108,6 +112,11 @@ class FovusTraceObserver implements TraceObserverV2 {
                                             session?.getCommandLine())
     }
 
+    /**
+     * Runs from {@code onFlowBegin} because by then every process has been created and no task can
+     * start until the observers return, so Fovus gets the configurations before the first job. It is
+     * sent once because each call re-triggers the backend's pre-configuration.
+     */
     private void sendPreConfigOnce(FovusPipeline pipeline) {
         if (!isPreConfigSent.compareAndSet(false, true)) return
 
