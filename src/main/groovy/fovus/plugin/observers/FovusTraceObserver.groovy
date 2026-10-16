@@ -4,6 +4,7 @@ import groovy.transform.CompileStatic
 import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.Session
+import nextflow.processor.TaskProcessor
 import fovus.plugin.FovusConfig
 import fovus.plugin.FovusPipelineCache
 import fovus.plugin.FovusUtil
@@ -105,7 +106,7 @@ class FovusTraceObserver implements TraceObserverV2 {
         // Handle the global configuration
         processConfig = processConfig as Map
         ResourceConfiguration globalConfig = processConfig.ext instanceof Map ?
-                                             parseExtensionObject(processConfig.ext as Map) : null;
+                                             parseExtensionObject(processConfig.ext as Map, null) : null;
 
         if (globalConfig) {
             configurations.add(globalConfig)
@@ -125,7 +126,7 @@ class FovusTraceObserver implements TraceObserverV2 {
             def ext = (value as Map).get("ext")
             if (!ext || !(ext instanceof Map)) return
 
-            config = parseExtensionObject(ext as Map)
+            config = parseExtensionObject(ext as Map, null)
 
             if (config && globalConfig) {
                 config = globalConfig.mergeWith(config)
@@ -176,13 +177,55 @@ class FovusTraceObserver implements TraceObserverV2 {
         return lastFlowErrorEvent
     }
 
-    static ResourceConfiguration parseExtensionObject(Map ext) {
+    /**
+     * Read the {@code ext} of a process the way its first task attempt sees it: closures run with the
+     * script's {@code params} and functions and with {@code task.attempt == 1}. A key whose closure
+     * throws, or whose value is not resolved (for instance it needs a task's input), is left out so
+     * the job resolves it at submission.
+     *
+     * @return the resolved keys, empty when the process sets no ext
+     */
+    @PackageScope
+    static Map<String, Object> resolveFirstAttemptExt(TaskProcessor process) {
+        final Map<String, Object> lazyExt = process.createTaskPreview().getConfig().get('ext') as Map<String, Object>
+        final resolvedExt = new LinkedHashMap<String, Object>()
+        for (final String key : lazyExt.keySet().toList()) {
+            try {
+                final value = lazyExt.get(key)
+                if (ResourceConfiguration.isResolvedValue(value)) {
+                    resolvedExt.put(key, value)
+                } else {
+                    logLeftOut(key, process.getName(), "its value is not resolved")
+                }
+            } catch (Exception e) {
+                logLeftOut(key, process.getName(), e.message)
+            }
+        }
+        return resolvedExt
+    }
+
+    private static void logLeftOut(String key, String processName, String reason) {
+        log.warn "[FOVUS] Leaving ext.${key} of process ${processName} out of the pre-configuration: " +
+                 "${reason}; the job resolves it at submission"
+    }
+
+    /**
+     * @param processName the process the ext belongs to, named in warnings; null for the global ext
+     * @return the configuration, or null when {@code ext} has no resolved benchmarking profile name
+     */
+    static ResourceConfiguration parseExtensionObject(Map ext, String processName) {
         if (!(ext instanceof Map)) return
 
         final benchmarkingProfileName = ext.get("benchmarkingProfileName")
         if (!benchmarkingProfileName) return
+        if (!(benchmarkingProfileName instanceof CharSequence) ||
+                !ResourceConfiguration.isResolvedValue(benchmarkingProfileName)) {
+            log.warn "[FOVUS] Skipping the pre-configuration of process ${processName ?: 'defaults'}: " +
+                     "ext.benchmarkingProfileName is not resolved text"
+            return
+        }
 
-        def resourceConfig = new ResourceConfiguration(benchmarkingProfileName: benchmarkingProfileName)
+        def resourceConfig = new ResourceConfiguration(benchmarkingProfileName: benchmarkingProfileName.toString())
         // A JSON job config file is one of the sources a job takes its connectors from, so the
         // payload has to carry those as well; an `ext.storageConnectors` entry below still
         // overrides them, exactly as it does for the job itself.
@@ -255,7 +298,12 @@ class FovusTraceObserver implements TraceObserverV2 {
                     }
                     break
                 case "timeToCostPriorityRatio":
-                    resourceConfig.timeToCostPriorityRatio = value
+                    if (value instanceof CharSequence) {
+                        resourceConfig.timeToCostPriorityRatio = value.toString()
+                    } else {
+                        log.warn "[FOVUS] Ignoring ext.timeToCostPriorityRatio of process ${processName ?: 'defaults'} " +
+                                 "because it is not text"
+                    }
                     break
                 case "isResumableWorkload":
                     if (value instanceof Boolean) {

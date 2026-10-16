@@ -1,6 +1,9 @@
 package fovus.plugin.observers
 
 import nextflow.Session
+import nextflow.processor.TaskConfig
+import nextflow.processor.TaskProcessor
+import nextflow.processor.TaskRun
 import spock.lang.Specification
 import spock.lang.TempDir
 
@@ -272,5 +275,79 @@ class FovusTraceObserverTest extends Specification {
         then:
         def error = thrown(Error)
         error.message.contains('team_shared')
+    }
+
+    private TaskProcessor processWithExt(Map ext, Map params = [:]) {
+        def taskConfig = new TaskConfig([ext: ext])
+        taskConfig.setContext([params: params])
+        return Mock(TaskProcessor) {
+            getName() >> 'alignReads'
+            createTaskPreview() >> new TaskRun(config: taskConfig)
+        }
+    }
+
+    def 'resolveFirstAttemptExt should run a closure profile name with the params of the run'() {
+        given:
+        def process = processWithExt([benchmarkingProfileName: { params.tier == 'tiny' ? 'A' : 'B' }], [tier: 'tiny'])
+
+        when:
+        def ext = FovusTraceObserver.resolveFirstAttemptExt(process)
+
+        then:
+        ext.benchmarkingProfileName == 'A'
+        FovusTraceObserver.parseExtensionObject(ext, 'alignReads').benchmarkingProfileName == 'A'
+    }
+
+    def 'resolveFirstAttemptExt should carry a memory closure and resolve task.attempt as 1'() {
+        given:
+        def process = processWithExt([
+                benchmarkingProfileName: 'A',
+                minvCpuMemGiB          : { params.mem },
+                walltimeHours          : { task.attempt * 2 }], [mem: 16])
+
+        when:
+        def configuration = FovusTraceObserver.parseExtensionObject(
+                FovusTraceObserver.resolveFirstAttemptExt(process), 'alignReads')
+
+        then:
+        configuration.minvCpuMemGiB == 16
+        configuration.walltimeHours == 2
+    }
+
+    def 'resolveFirstAttemptExt should leave out a key that cannot be resolved and keep the others'() {
+        given:
+        def process = processWithExt([
+                benchmarkingProfileName: 'A',
+                maxvCpu                : 8,
+                walltimeHours          : { meta.hours },
+                note                   : '_nf_config_4553341a$_run_closure6$_closure22$_closure38@6fde6f05'])
+
+        when:
+        def ext = FovusTraceObserver.resolveFirstAttemptExt(process)
+
+        then:
+        ext == [benchmarkingProfileName: 'A', maxvCpu: 8]
+    }
+
+    def 'resolveFirstAttemptExt should return an empty map when the process sets no ext'() {
+        expect:
+        FovusTraceObserver.resolveFirstAttemptExt(processWithExt([:])) == [:]
+    }
+
+    def 'parseExtensionObject should return null when the profile name is not resolved text'() {
+        expect:
+        FovusTraceObserver.parseExtensionObject([benchmarkingProfileName: profileName], 'alignReads') == null
+
+        where:
+        profileName << [{ 'A' }, '_nf_config_4553341a$_run_closure6$_closure22$_closure38@6fde6f05', 42]
+    }
+
+    def 'parseExtensionObject should ignore a time-to-cost ratio that is not text and store a GString as a String'() {
+        expect:
+        FovusTraceObserver.parseExtensionObject([benchmarkingProfileName: 'A', timeToCostPriorityRatio: 5], 'p')
+                .timeToCostPriorityRatio == null
+        def ratio = "${'0.5'}/${'0.5'}"
+        FovusTraceObserver.parseExtensionObject([benchmarkingProfileName: 'A', timeToCostPriorityRatio: ratio], 'p')
+                .timeToCostPriorityRatio instanceof String
     }
 }
