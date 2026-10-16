@@ -273,4 +273,45 @@ class FovusTraceObserverTest extends Specification {
         def error = thrown(Error)
         error.message.contains('team_shared')
     }
+
+    def 'collectResourceConfigurations should carry the hyperthreading mode in uppercase'() {
+        given:
+        def session = Mock(Session) {
+            getConfig() >> [process: [
+                    ext                  : [benchmarkingProfileName: 'global-profile', hyperthreadingMode: 'auto'],
+                    'withName:alignReads': [ext: [benchmarkingProfileName: 'align-profile', hyperthreadingMode: 'On']],
+                    'withName:callVars'  : [ext: [benchmarkingProfileName: 'call-profile']]
+            ]]
+        }
+
+        when:
+        def configurations = FovusTraceObserver.collectResourceConfigurations(session)
+
+        then:
+        configurations*.hyperthreadingMode == ['AUTO', 'ON', 'AUTO']
+    }
+
+    def 'collectResourceConfigurations should leave an invalid hyperthreading mode out of the payload'() {
+        given:
+        def session = Mock(Session) {
+            getConfig() >> [process: [ext: [benchmarkingProfileName: 'global-profile', hyperthreadingMode: 'MAYBE']]]
+        }
+
+        expect:
+        FovusTraceObserver.collectResourceConfigurations(session)[0].hyperthreadingMode == null
+    }
+
+    def 'collectResourceConfigurations should leave the hyperthreading mode unset when none is declared'() {
+        given:
+        def session = Mock(Session) {
+            getConfig() >> [process: [ext: [benchmarkingProfileName: 'global-profile']]]
+        }
+
+        when:
+        def configuration = FovusTraceObserver.collectResourceConfigurations(session)[0]
+
+        then:
+        configuration.hyperthreadingMode == null
+        configuration.enableHyperthreading == null
+    }
 }

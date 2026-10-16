@@ -18,6 +18,7 @@ class ResourceConfiguration {
     Number minGpuMemGiB
     String computingDevice
     Boolean enableHyperthreading
+    String hyperthreadingMode
     Boolean allowPreemptible
     String[] supportedCpuArchitectures
     Boolean isResumableWorkload
@@ -51,6 +52,7 @@ class ResourceConfiguration {
                 computingDevice: other.computingDevice ?: this.computingDevice,
                 enableHyperthreading: other.enableHyperthreading != null ? other.enableHyperthreading :
                                       this.enableHyperthreading,
+                hyperthreadingMode: other.hyperthreadingMode ?: this.hyperthreadingMode,
                 allowPreemptible: other.allowPreemptible != null ? other.allowPreemptible : this.allowPreemptible,
                 supportedCpuArchitectures: other.supportedCpuArchitectures ?: this.supportedCpuArchitectures,
                 isResumableWorkload: other.isResumableWorkload != null ? other.isResumableWorkload :

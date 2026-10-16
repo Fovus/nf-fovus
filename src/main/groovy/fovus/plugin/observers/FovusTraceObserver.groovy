@@ -208,6 +208,9 @@ class FovusTraceObserver implements TraceObserverV2 {
                         resourceConfig.enableHyperthreading = value
                     }
                     break
+                case "hyperthreadingMode":
+                    resourceConfig.hyperthreadingMode = FovusJobConfig.parseHyperthreadingMode(value)
+                    break
                 case "maxvCpu":
                     if (value instanceof Number) {
                         resourceConfig.maxvCpu = value

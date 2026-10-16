@@ -164,6 +164,48 @@ between a local check and the submission. The server's rejection is surfaced ver
 distinguishes an unknown connector from one you are not entitled to.
 
 
+## Hyperthreading
+
+Set the hyperthreading of a process's job with the `hyperthreadingMode` process directive:
+
+```groovy
+process {
+    ext.hyperthreadingMode = 'AUTO'
+
+    withName: 'alignReads' {
+        ext.hyperthreadingMode = 'OFF'
+    }
+}
+```
+
+| Value | Result |
+| --- | --- |
+| `AUTO` | Fovus uses the benchmarking profile's hyperthreading setting. A profile that does not support hyperthreading (ARM-only, or marked as not supported) runs with hyperthreading off. |
+| `ON` | Hyperthreading on. Fovus refuses the job if the benchmarking profile does not support hyperthreading. |
+| `OFF` | Hyperthreading off. |
+
+- The value is not case-sensitive. The plugin writes it in uppercase. Any other value stops the run:
+
+  ```
+  [Fovus] Invalid hyperthreadingMode: 'MAYBE'. Use AUTO, ON or OFF.
+  ```
+- `ext.enableHyperthreading = true` or `false` still works. It is the same as `ON` or `OFF`. A value that is not a
+  boolean stops the run.
+- If a process sets both, `hyperthreadingMode` wins, as on the Fovus server.
+- A JSON job config file (`ext.jobConfigFile`) can set `constraints.jobConstraints.hyperthreadingMode` or
+  `enableHyperthreading`. `ext` wins over the file.
+- If nothing sets it, the job uses the workspace default from `fovus job get-default-config`. That is `AUTO`, unless
+  the workspace saved an explicit On or Off default. The plugin no longer writes `enableHyperthreading: false` for
+  such a job.
+- Precedence, highest first: `ext.hyperthreadingMode`, `ext.enableHyperthreading`, the job config file
+  (`hyperthreadingMode`, then `enableHyperthreading`), the workspace default, `AUTO`.
+- With `AUTO`, the default `minvCpu` and `maxvCpu` from `get-default-config` are already in the vCPU units of the
+  resolved setting. If you set `minvCpu` or `maxvCpu` yourself, use the units of the setting the job runs with.
+- `hyperthreadingMode` in `process.ext` is also sent to `fovus pipeline pre-config-resources`, so pre-configured
+  resources use the same setting as the jobs.
+- **Requires** the CLI and server changes in Fovus/fovus-cli-python#409 and Fovus/fovus-infra#3676. An older Fovus
+  CLI or server does not know `hyperthreadingMode`.
+
 ## Direct mode: run without mounting Fovus storage
 
 By default the plugin mounts Fovus storage on the machine running Nextflow (`fovus storage mount`),

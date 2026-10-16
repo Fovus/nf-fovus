@@ -48,6 +48,8 @@ class FovusJobConfig {
     /** A storage connector name: letters, digits and hyphens only. */
     private static final Pattern STORAGE_CONNECTOR_NAME = Pattern.compile('^[a-zA-Z0-9-]+$')
 
+    static final List<String> HYPERTHREADING_MODES = ['AUTO', 'ON', 'OFF']
+
     private final TaskRun task
 
     void setEnvironment(Environment environment) {
@@ -179,7 +181,10 @@ class FovusJobConfig {
 
     private JobConstraints createJobConstraints(FovusJobConfig fovusJobConfig) {
         def extension = task.config.get('ext') as Map<String, Object>;
-        def defaultJobConstraints = fovusJobConfig.getConstraints().jobConstraints;
+        return buildJobConstraints(extension, fovusJobConfig.getConstraints().jobConstraints)
+    }
+
+    static JobConstraints buildJobConstraints(Map<String, Object> extension, JobConstraints defaultJobConstraints) {
         def cpuArchitectures = defaultJobConstraints.supportedCpuArchitectures;
 
         if (extension?.supportedCpuArchitectures != null && extension?.supportedCpuArchitectures instanceof List &&
@@ -192,6 +197,9 @@ class FovusJobConfig {
             throw new Error("[Fovus] Supported cpu architectures must be either x86-64 or arm-64 or both")
         }
 
+        final hyperthreadingMode = resolveHyperthreadingMode(extension, defaultJobConstraints)
+        final isDefaultModeAuto = normalizeHyperthreadingMode(defaultJobConstraints.hyperthreadingMode) == 'AUTO'
+
         return new JobConstraints(
                 benchmarkingProfileName: (extension?.benchmarkingProfileName != null)
                         ? extension.benchmarkingProfileName
@@ -202,9 +210,10 @@ class FovusJobConfig {
                 allowPreemptible: (extension?.allowPreemptible != null)
                         ? extension.allowPreemptible
                         : defaultJobConstraints.allowPreemptible,
-                enableHyperthreading: (extension?.enableHyperthreading != null)
-                        ? extension.enableHyperthreading
-                        : defaultJobConstraints.enableHyperthreading,
+                hyperthreadingMode: hyperthreadingMode,
+                enableHyperthreading: (hyperthreadingMode == 'ON' || hyperthreadingMode == 'OFF')
+                        ? hyperthreadingMode == 'ON'
+                        : null,
                 isHybridStrategyAllowed: (extension?.isHybridStrategyAllowed != null)
                         ? extension.isHybridStrategyAllowed
                         : defaultJobConstraints.isHybridStrategyAllowed,
@@ -224,7 +233,58 @@ class FovusJobConfig {
                 isMemoryCheckpointingEnabled: (extension?.isMemoryCheckpointingEnabled !== null)
                         ? extension.isMemoryCheckpointingEnabled
                         : defaultJobConstraints.isMemoryCheckpointingEnabled
-        )
+        ).withAutoHyperthreading(isDefaultModeAuto ? defaultJobConstraints.enableHyperthreading : null)
+    }
+
+    /**
+     * Precedence: ext.hyperthreadingMode, ext.enableHyperthreading, then the job config file or get-default-config
+     * (hyperthreadingMode, then enableHyperthreading). Null when none is set: the Fovus CLI then applies the
+     * get-default-config mode, else AUTO.
+     */
+    static String resolveHyperthreadingMode(Map<String, Object> extension, JobConstraints defaultJobConstraints) {
+        final extensionMode = normalizeHyperthreadingMode(extension?.hyperthreadingMode)
+        final extensionEnabledMode = explicitHyperthreadingMode(extension?.enableHyperthreading)
+        if (extensionMode != null) {
+            if (extensionEnabledMode != null && extensionEnabledMode != extensionMode) {
+                log.warn "[FOVUS] ext.hyperthreadingMode ${extensionMode} takes precedence over ext.enableHyperthreading ${extension.enableHyperthreading}"
+            }
+            return extensionMode
+        }
+        if (extensionEnabledMode != null) {
+            return extensionEnabledMode
+        }
+
+        final defaultMode = normalizeHyperthreadingMode(defaultJobConstraints.hyperthreadingMode)
+        if (defaultMode != null) {
+            return defaultMode
+        }
+        return explicitHyperthreadingMode(defaultJobConstraints.enableHyperthreading)
+    }
+
+    static String parseHyperthreadingMode(Object value) {
+        final mode = (value instanceof CharSequence) ? value.toString().trim().toUpperCase(Locale.ROOT) : null
+        return (mode in HYPERTHREADING_MODES) ? mode : null
+    }
+
+    static String normalizeHyperthreadingMode(Object value) {
+        if (value == null) {
+            return null
+        }
+        final mode = parseHyperthreadingMode(value)
+        if (mode == null) {
+            throw new Error("[Fovus] Invalid hyperthreadingMode: '${value}'. Use AUTO, ON or OFF.")
+        }
+        return mode
+    }
+
+    private static String explicitHyperthreadingMode(Object enabled) {
+        if (enabled == null) {
+            return null
+        }
+        if (!(enabled instanceof Boolean)) {
+            throw new Error("[Fovus] Invalid enableHyperthreading: '${enabled}'. Use true or false, or set hyperthreadingMode.")
+        }
+        return (enabled as Boolean) ? 'ON' : 'OFF'
     }
 
     private TaskConstraints createTaskConstraints(FovusJobConfig fovusJobConfig) {
@@ -535,12 +595,29 @@ class JobConstraints {
     List<String> supportedCpuArchitectures = ["x86-64", "arm-64"]
     boolean isHybridStrategyAllowed = false
     boolean isMultiRegionScalingAllowed = false
-    boolean enableHyperthreading = false
+    String hyperthreadingMode
+    Boolean enableHyperthreading
     boolean allowPreemptible = false
     boolean isResumableWorkload = false
     boolean isSubjectToLicenseAvailability = false
     boolean isMemoryAutoRetryEnabled = false
     boolean isMemoryCheckpointingEnabled = false
+
+    // Not a property, so it is not written to the job config: the CLI would warn about AUTO next to a boolean
+    private Boolean autoHyperthreading
+
+    JobConstraints withAutoHyperthreading(Boolean enabled) {
+        this.autoHyperthreading = enabled
+        return this
+    }
+
+    /** The hyperthreading the job runs with, for vCPU calculations; null when only the server can resolve it. */
+    Boolean resolvedHyperthreading() {
+        final mode = hyperthreadingMode?.toUpperCase(Locale.ROOT)
+        if (mode == 'ON') return true
+        if (mode == 'OFF') return false
+        return autoHyperthreading != null ? autoHyperthreading : enableHyperthreading
+    }
 }
 
 @Canonical
