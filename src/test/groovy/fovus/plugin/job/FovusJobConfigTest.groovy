@@ -145,4 +145,202 @@ class FovusJobConfigTest extends Specification {
         then:
         config.storageConnectors == []
     }
+
+    private static final String DEFAULT_CONFIG_AUTO_ON =
+            '{"constraints": {"jobConstraints": {"benchmarkingProfileName": "bp", "supportedCpuArchitectures": ["x86-64"], ' +
+            '"hyperthreadingMode": "AUTO", "enableHyperthreading": true}, "taskConstraints": {"minvCpu": 1, "maxvCpu": 1}}}'
+
+    private static JobConstraints defaults(String json) {
+        return FovusJobConfigBuilder.fromJsonString(json).constraints.jobConstraints
+    }
+
+    private static JobConstraints defaultsWith(Map jobConstraints) {
+        def all = [benchmarkingProfileName: 'bp', supportedCpuArchitectures: ['x86-64']] + jobConstraints
+        return defaults(new groovy.json.JsonBuilder([constraints: [jobConstraints: all]]).toString())
+    }
+
+    private static Map jobConstraintsPayload(JobConstraints jobConstraints) {
+        def config = new FovusJobConfig()
+        config.setConstraints(new Constraints(jobConstraints: jobConstraints, taskConstraints: new TaskConstraints()))
+        return payload(config).constraints['jobConstraints'] as Map
+    }
+
+    def 'ext.hyperthreadingMode should be written in uppercase whatever its case'() {
+        when:
+        def written = jobConstraintsPayload(FovusJobConfig.buildJobConstraints([hyperthreadingMode: value], defaults(DEFAULT_CONFIG_AUTO_ON)))
+
+        then:
+        written.hyperthreadingMode == mode
+        written.enableHyperthreading == enabled
+        written.containsKey('enableHyperthreading') == (enabled != null)
+
+        where:
+        value  | mode   | enabled
+        'auto' | 'AUTO' | null
+        'Auto' | 'AUTO' | null
+        'ON'   | 'ON'   | true
+        'on'   | 'ON'   | true
+        'Off'  | 'OFF'  | false
+        ' off ' | 'OFF' | false
+    }
+
+    def 'ext.enableHyperthreading should still be an explicit ON or OFF'() {
+        when:
+        def written = jobConstraintsPayload(FovusJobConfig.buildJobConstraints([enableHyperthreading: value], defaults(DEFAULT_CONFIG_AUTO_ON)))
+
+        then:
+        written.hyperthreadingMode == mode
+        written.enableHyperthreading == value
+
+        where:
+        value | mode
+        true  | 'ON'
+        false | 'OFF'
+    }
+
+    def 'ext.hyperthreadingMode should win over ext.enableHyperthreading'() {
+        when:
+        def written = jobConstraintsPayload(FovusJobConfig.buildJobConstraints(
+                [hyperthreadingMode: mode, enableHyperthreading: enabled], defaults(DEFAULT_CONFIG_AUTO_ON)))
+
+        then:
+        written.hyperthreadingMode == mode
+        written.enableHyperthreading == expectedEnabled
+
+        where:
+        mode   | enabled | expectedEnabled
+        'OFF'  | true    | false
+        'ON'   | false   | true
+        'AUTO' | false   | null
+    }
+
+    def 'with neither set, the get-default-config mode should be written and no hard-coded enableHyperthreading'() {
+        when:
+        def written = jobConstraintsPayload(FovusJobConfig.buildJobConstraints([:], defaults(DEFAULT_CONFIG_AUTO_ON)))
+
+        then:
+        written.hyperthreadingMode == 'AUTO'
+        !written.containsKey('enableHyperthreading')
+    }
+
+    def 'with neither set, a workspace default mode saved as ON or OFF should be kept'() {
+        when:
+        def written = jobConstraintsPayload(FovusJobConfig.buildJobConstraints([:], defaultsWith(
+                [hyperthreadingMode: mode, enableHyperthreading: enabled])))
+
+        then:
+        written.hyperthreadingMode == mode
+        written.enableHyperthreading == enabled
+
+        where:
+        mode  | enabled
+        'ON'  | true
+        'OFF' | false
+    }
+
+    def 'a job config file without hyperthreading should write neither field'() {
+        when:
+        def written = jobConstraintsPayload(FovusJobConfig.buildJobConstraints([:], defaultsWith([:])))
+
+        then:
+        !written.containsKey('hyperthreadingMode')
+        !written.containsKey('enableHyperthreading')
+    }
+
+    def 'a job config file with only enableHyperthreading should stay an explicit ON or OFF'() {
+        when:
+        def written = jobConstraintsPayload(FovusJobConfig.buildJobConstraints([:], defaultsWith([enableHyperthreading: enabled])))
+
+        then:
+        written.hyperthreadingMode == mode
+        written.enableHyperthreading == enabled
+
+        where:
+        enabled | mode
+        true    | 'ON'
+        false   | 'OFF'
+    }
+
+    def 'a job config file hyperthreadingMode should be accepted in any case and win over its enableHyperthreading'() {
+        when:
+        def written = jobConstraintsPayload(FovusJobConfig.buildJobConstraints([:], defaultsWith(
+                [hyperthreadingMode: 'off', enableHyperthreading: true])))
+
+        then:
+        written.hyperthreadingMode == 'OFF'
+        written.enableHyperthreading == false
+    }
+
+    def 'an invalid hyperthreadingMode should fail fast and list the valid values'() {
+        when:
+        FovusJobConfig.buildJobConstraints([hyperthreadingMode: value], defaults(DEFAULT_CONFIG_AUTO_ON))
+
+        then:
+        def error = thrown(Error)
+        error.message == "[Fovus] Invalid hyperthreadingMode: '${value}'. Use AUTO, ON or OFF."
+
+        where:
+        value << ['MAYBE', '', 'enabled', true, 1]
+    }
+
+    def 'an invalid hyperthreadingMode in a job config file should fail fast'() {
+        when:
+        FovusJobConfig.buildJobConstraints([:], defaultsWith([hyperthreadingMode: 'SOMETIMES']))
+
+        then:
+        def error = thrown(Error)
+        error.message == "[Fovus] Invalid hyperthreadingMode: 'SOMETIMES'. Use AUTO, ON or OFF."
+    }
+
+    def 'a non-boolean ext.enableHyperthreading should fail fast'() {
+        when:
+        FovusJobConfig.buildJobConstraints([enableHyperthreading: 'false'], defaults(DEFAULT_CONFIG_AUTO_ON))
+
+        then:
+        def error = thrown(Error)
+        error.message == "[Fovus] Invalid enableHyperthreading: 'false'. Use true or false, or set hyperthreadingMode."
+    }
+
+    def 'the resolved hyperthreading should follow the mode, and AUTO the get-default-config value'() {
+        expect:
+        FovusJobConfig.buildJobConstraints(ext, defaultsWith(defaultJobConstraints)).resolvedHyperthreading() == resolved
+
+        where:
+        ext                           | defaultJobConstraints                                     | resolved
+        [:]                           | [hyperthreadingMode: 'AUTO', enableHyperthreading: true]  | true
+        [:]                           | [hyperthreadingMode: 'AUTO', enableHyperthreading: false] | false
+        [hyperthreadingMode: 'auto']  | [hyperthreadingMode: 'AUTO', enableHyperthreading: true]  | true
+        [hyperthreadingMode: 'ON']    | [hyperthreadingMode: 'AUTO', enableHyperthreading: false] | true
+        [hyperthreadingMode: 'OFF']   | [hyperthreadingMode: 'AUTO', enableHyperthreading: true]  | false
+        [enableHyperthreading: true]  | [hyperthreadingMode: 'AUTO', enableHyperthreading: false] | true
+        [hyperthreadingMode: 'AUTO']  | [hyperthreadingMode: 'OFF', enableHyperthreading: false]  | null
+        [:]                           | [:]                                                       | null
+    }
+
+    def 'vCPU scaling should use the resolved hyperthreading of an AUTO task'() {
+        given:
+        def jobConstraints = FovusJobConfig.buildJobConstraints([:], defaultsWith(
+                [hyperthreadingMode: 'AUTO', enableHyperthreading: resolved]))
+
+        when:
+        def taskConstraints = new TaskConstraints(minvCpu: 1, maxvCpu: 1)
+                .overrideCpuConstraints(jobConstraints.resolvedHyperthreading())
+
+        then:
+        taskConstraints.minvCpu == minvCpu
+        taskConstraints.maxvCpu == minvCpu
+
+        where:
+        resolved | minvCpu
+        true     | 2
+        false    | 1
+    }
+
+    def 'the resolved hyperthreading should not be written to the job config'() {
+        when:
+        def written = jobConstraintsPayload(FovusJobConfig.buildJobConstraints([:], defaults(DEFAULT_CONFIG_AUTO_ON)))
+
+        then:
+        written.keySet().findAll { it.toLowerCase().contains('hyperthreading') } == ['hyperthreadingMode'] as Set
+    }
 }
