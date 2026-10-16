@@ -128,12 +128,11 @@ needs task inputs, such as `meta`, cannot be resolved up front. It is left out w
 is still applied when the job is submitted.
 
 A configuration is only sent when its `ext` block also declares a `benchmarkingProfileName` that
-resolves to text. A process that
-declares `storageConnectors` without one still gets the connectors on its job, but it contributes
-nothing to the pre-configuration step. Per-process connectors override the pipeline-wide
-ones in the payload, and a process that declares none inherits the pipeline-wide list; setting
-`ext.storageConnectors = []` on a process clears the pipeline-wide list for it, in the payload as
-well as on the job.
+resolves to text. A process that declares `storageConnectors` without one still gets the connectors
+on its job, but it contributes nothing to the pre-configuration step. Per-process connectors
+override the pipeline-wide ones in the payload, and a process that declares none inherits the
+pipeline-wide list; setting `ext.storageConnectors = []` on a process clears the pipeline-wide list
+for it, in the payload as well as on the job.
 
 The payload follows the same precedence as the job, so connectors named in a process's
 `ext.jobConfigFile` are read from that file and sent too. Connectors that come from a benchmarking
