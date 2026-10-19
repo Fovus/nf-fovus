@@ -167,6 +167,21 @@ class FovusTraceObserverTest extends Specification {
         ext == [benchmarkingProfileName: 'A', maxvCpu: 8]
     }
 
+    def 'resolveFirstAttemptExt should not run an ext closure that pre-configuration does not read'() {
+        given:
+        def argsClosureWasRun = false
+        def process = processWithExt([
+                benchmarkingProfileName: 'A',
+                args                   : { argsClosureWasRun = true; meta.id }])
+
+        when:
+        def ext = FovusTraceObserver.resolveFirstAttemptExt(process)
+
+        then:
+        ext == [benchmarkingProfileName: 'A']
+        !argsClosureWasRun
+    }
+
     def 'resolveFirstAttemptExt should return an empty map when the process sets no ext'() {
         expect:
         FovusTraceObserver.resolveFirstAttemptExt(processWithExt([:])) == [:]

@@ -163,7 +163,7 @@ class FovusTraceObserver implements TraceObserverV2 {
      * Read the {@code ext} of a process the way its first task attempt sees it: closures run with the
      * script's {@code params} and functions and with {@code task.attempt == 1}. A key whose closure
      * throws, or whose value is not resolved (for instance it needs a task's input), is left out so
-     * the job resolves it at submission.
+     * the job resolves it at submission. Only the keys pre-configuration reads are evaluated.
      *
      * @return the resolved keys, empty when the process sets no ext
      */
@@ -171,7 +171,7 @@ class FovusTraceObserver implements TraceObserverV2 {
     static Map<String, Object> resolveFirstAttemptExt(TaskProcessor process) {
         final Map<String, Object> lazyExt = process.createTaskPreview().getConfig().get('ext') as Map<String, Object>
         final resolvedExt = new LinkedHashMap<String, Object>()
-        for (final String key : lazyExt.keySet().toList()) {
+        for (final String key : lazyExt.keySet().findAll { it in PRE_CONFIGURATION_EXT_KEYS }) {
             try {
                 final value = lazyExt.get(key)
                 if (ResourceConfiguration.isResolvedValue(value)) {
@@ -190,6 +190,14 @@ class FovusTraceObserver implements TraceObserverV2 {
         log.warn "[FOVUS] Leaving ext.${key} of process ${processName} out of the pre-configuration: " +
                  "${reason}; the job resolves it at submission"
     }
+
+    // Every ext key parseExtensionObject reads; a key missing here is never evaluated for pre-configuration.
+    private static final Set<String> PRE_CONFIGURATION_EXT_KEYS = [
+            'benchmarkingProfileName', 'jobConfigFile', 'allowPreemptible', 'computingDevice',
+            'enableHyperthreading', 'maxvCpu', 'maxGpu', 'minGpu', 'minGpuMemGiB', 'minvCpu', 'minvCpuMemGiB',
+            'supportedCpuArchitectures', 'timeToCostPriorityRatio', 'isResumableWorkload',
+            'isHybridStrategyAllowed', 'isMultiRegionScalingAllowed', 'walltimeHours', 'storageGiB',
+            'isMemoryAutoRetryEnabled', 'storageConnectors'] as Set<String>
 
     /**
      * @param processName the process the ext belongs to, named in warnings
