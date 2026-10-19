@@ -14,6 +14,7 @@ class ResourceConfigurationTest extends Specification {
         description              | value                                                                  | expected
         'null'                   | null                                                                   | true
         'plain text'             | 'Default CPU'                                                          | true
+        'text containing _nf_config_' | 'rna_nf_config_gpu'                                               | true
         'number'                 | 4                                                                      | true
         'boolean'                | false                                                                  | true
         'resolved list'          | ['a', 'b']                                                             | true
