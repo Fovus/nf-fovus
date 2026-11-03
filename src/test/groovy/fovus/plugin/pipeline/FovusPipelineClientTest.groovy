@@ -220,4 +220,31 @@ class FovusPipelineClientTest extends Specification {
         !flagValue(client.captured, '--run-command').contains('pat-secret-value')
         flagValue(client.captured, '--run-command').contains('[REDACTED]')
     }
+
+    def 'createPipeline should share the pipeline with administrators when configured'() {
+        given:
+        def client = new CapturingClient()
+        def config = new FovusConfig([pipelineName: 'test-pipeline', shareWithAdministrators: true])
+
+        when:
+        client.createPipeline(config, 'test-pipeline')
+
+        then:
+        client.captured.contains('--share-with-administrators')
+    }
+
+    def 'createPipeline should not share the pipeline with administrators when disabled or unset'() {
+        given:
+        def client = new CapturingClient()
+
+        when:
+        client.createPipeline(new FovusConfig(configMap), 'test-pipeline')
+
+        then:
+        !client.captured.contains('--share-with-administrators')
+
+        where:
+        configMap << [[pipelineName: 'test-pipeline', shareWithAdministrators: false],
+                      [pipelineName: 'test-pipeline']]
+    }
 }

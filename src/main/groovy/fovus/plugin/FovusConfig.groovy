@@ -48,6 +48,16 @@ class FovusConfig implements ConfigScope {
     @Description('(Optional) The project name to group jobs and pipelines for budget management.')
     final public String projectName
 
+    @ConfigOption
+    @Description("""
+        (Optional) When `true`, a pipeline newly created by this run is shared with workspace administrators,
+        who get READ access to the pipeline, its jobs and files.
+
+        Ignored when the run reuses an existing pipeline (resume via the local cache, or Fovus-hosted runs).
+        Requires Fovus CLI 2.0.71 or later. Defaults to `false`.
+    """)
+    final public boolean shareWithAdministrators
+
     @Description('(Optional) Non-interactive Fovus CLI authentication for automated runs. See `fovus.auth`.')
     final public FovusAuthConfig auth
 
@@ -69,12 +79,21 @@ class FovusConfig implements ConfigScope {
         }
 
         this.projectName = config.projectName ?: null
+
+        final shareWithAdministrators = config.shareWithAdministrators
+        if (shareWithAdministrators != null && !(shareWithAdministrators instanceof Boolean)) {
+            throw new IllegalArgumentException(
+                    "[FOVUS] fovus.shareWithAdministrators must be true or false, got: ${shareWithAdministrators}")
+        }
+        this.shareWithAdministrators = shareWithAdministrators as Boolean ?: false
         this.auth = auth ?: new FovusAuthConfig()
     }
 
     String getCliPath() {cliPath}
 
     String getPipelineName() { pipelineName }
+
+    boolean getShareWithAdministrators() { shareWithAdministrators }
 
     FovusAuthConfig getAuth() { auth }
 
