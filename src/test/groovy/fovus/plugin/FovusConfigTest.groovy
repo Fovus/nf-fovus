@@ -42,4 +42,23 @@ class FovusConfigTest extends Specification {
         then:
         thrown(IllegalArgumentException)
     }
+
+    def 'shareWithAdministrators should default to false when unset'() {
+        expect:
+        !new FovusConfig([pipelineName: 'test-pipeline']).shareWithAdministrators
+    }
+
+    def 'shareWithAdministrators should be true when set to true'() {
+        expect:
+        new FovusConfig([pipelineName: 'test-pipeline', shareWithAdministrators: true]).shareWithAdministrators
+    }
+
+    def 'shareWithAdministrators should reject a non-boolean value'() {
+        when:
+        new FovusConfig([pipelineName: 'test-pipeline', shareWithAdministrators: 'yes'])
+
+        then:
+        def e = thrown(IllegalArgumentException)
+        e.message.contains('fovus.shareWithAdministrators')
+    }
 }

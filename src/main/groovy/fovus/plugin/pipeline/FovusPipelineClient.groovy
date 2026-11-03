@@ -55,6 +55,9 @@ class FovusPipelineClient {
     String createPipeline(FovusConfig config, String name, String runCommand) {
         def command = [config.getCliPath(), '--silence', 'pipeline', 'create', '--name', name, '--workflow-host',
                        'local']
+        if (config.getShareWithAdministrators()) {
+            command << '--share-with-administrators'
+        }
         appendRunMetadata(command, runCommand, config)
 
         def result = runCli(command, config.cliEnv())

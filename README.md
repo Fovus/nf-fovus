@@ -9,8 +9,15 @@ fovus {
     cliPath      = '/opt/miniconda3/bin/fovus'  // optional, defaults to 'fovus'
     pipelineName = 'my-pipeline'                // required
     projectName  = 'my-project'                 // optional
+    shareWithAdministrators = true              // optional, defaults to false
 }
 ```
+
+`shareWithAdministrators = true` shares a pipeline newly created by this run with workspace
+administrators (workspace Owners and cost-center Admins), who get read access to the pipeline, its
+jobs and files. It only applies when the run creates a new pipeline: it is ignored when the run
+reuses an existing one (resume via the local cache, or a Fovus-hosted run). Requires Fovus CLI
+2.0.71 or later.
 
 ## Automated authentication (`fovus.auth`)
 
