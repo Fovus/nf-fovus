@@ -4,11 +4,14 @@ import groovy.transform.CompileStatic
 import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.Session
+import nextflow.processor.TaskProcessor
 import fovus.plugin.FovusConfig
+import fovus.plugin.FovusExecutor
 import fovus.plugin.FovusPipelineCache
 import fovus.plugin.FovusUtil
 import fovus.plugin.job.FovusJobConfig
 import fovus.plugin.job.FovusJobConfigBuilder
+import fovus.plugin.pipeline.FovusPipeline
 import fovus.plugin.pipeline.FovusPipelineClient
 import fovus.plugin.pipeline.FovusPipelineStatus
 import fovus.plugin.pipeline.ResourceConfiguration
@@ -20,6 +23,7 @@ import nextflow.trace.TraceObserverV2
 import nextflow.trace.event.TaskEvent
 
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.Function
 
@@ -35,6 +39,8 @@ class FovusTraceObserver implements TraceObserverV2 {
     // session.abort() can cause onFlowComplete to fire from two threads concurrently;
     // this guard ensures the pipeline status update and headnode cleanup run exactly once.
     private final AtomicBoolean isCompletionReported = new AtomicBoolean(false)
+    private final AtomicBoolean isPreConfigSent = new AtomicBoolean(false)
+    private final Map<String, ResourceConfiguration> resourceConfigurations = new ConcurrentHashMap<>()
 
     FovusTraceObserver(Session session) {
         this(
@@ -60,16 +66,6 @@ class FovusTraceObserver implements TraceObserverV2 {
         final isHostedMode = FovusEnvironment.isHostedMode()
         prepareDirectModeStorage(session?.getWorkDir(), isHostedMode, pipelineId,
                 { Path workDir -> WorkDirStorageFactory.create(workDir, isHostedMode, fovusConfig) } as Function<Path, WorkDirStorage>)
-
-
-        try {
-            final configurations = collectResourceConfigurations(session)
-            final nextflowConfig = FovusUtil.readNextflowConfig(session?.getConfigFiles())
-
-            pipelineClient.preConfigResources(fovusConfig, pipelineClient.getPipeline(), configurations, nextflowConfig)
-        } catch (Exception e) {
-            log.trace "[FOVUS] Cannot configure pipeline resources: ${e.message}"
-        }
     }
 
     /**
@@ -89,62 +85,49 @@ class FovusTraceObserver implements TraceObserverV2 {
     }
 
     /**
-     * Collect the resource configurations declared through `process.ext`, both the global
-     * one and each per-process override merged over it.
-     *
-     * @return The resource configurations, empty when the config declares none
+     * Nextflow calls this for every process the workflow uses, with its withName and withLabel
+     * settings already applied. Only processes on the Fovus executor are kept, keyed by name.
      */
-    @PackageScope
-    static List<ResourceConfiguration> collectResourceConfigurations(Session session) {
-        def configurations = new LinkedHashSet<ResourceConfiguration>()
-        def processConfig = session.config.navigate('process')
-        if (!processConfig || !(processConfig instanceof Map)) {
-            return []
-        }
+    @Override
+    void onProcessCreate(TaskProcessor process) {
+        try {
+            if (!(process.getExecutor() instanceof FovusExecutor)) return
 
-        // Handle the global configuration
-        processConfig = processConfig as Map
-        ResourceConfiguration globalConfig = processConfig.ext instanceof Map ?
-                                             parseExtensionObject(processConfig.ext as Map) : null;
-
-        if (globalConfig) {
-            configurations.add(globalConfig)
-        }
-
-        // Look for each benchmark overriding
-        processConfig.entrySet().findAll { it.value instanceof Map }.each { entry ->
-            def key = entry.key
-            def value = entry.value
-
-            ResourceConfiguration config = null;
-            if (key == "ext" && (value instanceof Map)) {
-                // Skip the global ext config
-                return
+            final configuration = parseExtensionObject(resolveFirstAttemptExt(process), process.getName())
+            if (configuration) {
+                resourceConfigurations.put(process.getName(), configuration)
             }
-
-            def ext = (value as Map).get("ext")
-            if (!ext || !(ext instanceof Map)) return
-
-            config = parseExtensionObject(ext as Map)
-
-            if (config && globalConfig) {
-                config = globalConfig.mergeWith(config)
-            }
-
-            if (config) {
-                configurations.add(config)
-            }
+        } catch (Exception e) {
+            log.warn "[FOVUS] Cannot read the resource configuration of process ${process?.getName()}: ${e.message}"
         }
-
-        return configurations.toList()
     }
 
     @Override
     void onFlowBegin() {
         hasFlowError = false
         lastFlowErrorEvent = null
-        pipelineClient.updatePipelineStatus(fovusConfig, pipelineClient.getPipeline(), FovusPipelineStatus.RUNNING,
+        final pipeline = pipelineClient.getPipeline()
+        sendPreConfigOnce(pipeline)
+        pipelineClient.updatePipelineStatus(fovusConfig, pipeline, FovusPipelineStatus.RUNNING,
                                             session?.getCommandLine())
+    }
+
+    /**
+     * Runs from {@code onFlowBegin} because by then every process has been created and no task can
+     * start until the observers return, so Fovus gets the configurations before the first job. It is
+     * sent once because each call re-triggers the backend's pre-configuration.
+     */
+    private void sendPreConfigOnce(FovusPipeline pipeline) {
+        if (!isPreConfigSent.compareAndSet(false, true)) return
+
+        try {
+            final nextflowConfig = FovusUtil.readNextflowConfig(session?.getConfigFiles())
+            pipelineClient.preConfigResources(fovusConfig, pipeline,
+                                              new ArrayList<>(new LinkedHashSet<>(resourceConfigurations.values())),
+                                              nextflowConfig)
+        } catch (Exception e) {
+            log.warn "[FOVUS] Cannot configure pipeline resources: ${e.message}"
+        }
     }
 
     @Override
@@ -176,13 +159,63 @@ class FovusTraceObserver implements TraceObserverV2 {
         return lastFlowErrorEvent
     }
 
-    static ResourceConfiguration parseExtensionObject(Map ext) {
+    /**
+     * Read the {@code ext} of a process the way its first task attempt sees it: closures run with the
+     * script's {@code params} and functions and with {@code task.attempt == 1}. A key whose closure
+     * throws, or whose value is not resolved (for instance it needs a task's input), is left out so
+     * the job resolves it at submission. Only the keys pre-configuration reads are evaluated.
+     *
+     * @return the resolved keys, empty when the process sets no ext
+     */
+    @PackageScope
+    static Map<String, Object> resolveFirstAttemptExt(TaskProcessor process) {
+        final Map<String, Object> lazyExt = process.createTaskPreview().getConfig().get('ext') as Map<String, Object>
+        final resolvedExt = new LinkedHashMap<String, Object>()
+        for (final String key : lazyExt.keySet().findAll { it in PRE_CONFIGURATION_EXT_KEYS }) {
+            try {
+                final value = lazyExt.get(key)
+                if (ResourceConfiguration.isResolvedValue(value)) {
+                    resolvedExt.put(key, value)
+                } else {
+                    logLeftOut(key, process.getName(), "its value is not resolved")
+                }
+            } catch (Exception e) {
+                logLeftOut(key, process.getName(), e.message)
+            }
+        }
+        return resolvedExt
+    }
+
+    private static void logLeftOut(String key, String processName, String reason) {
+        log.warn "[FOVUS] Leaving ext.${key} of process ${processName} out of the pre-configuration: " +
+                 "${reason}; the job resolves it at submission"
+    }
+
+    // Every ext key parseExtensionObject reads; a key missing here is never evaluated for pre-configuration.
+    private static final Set<String> PRE_CONFIGURATION_EXT_KEYS = [
+            'benchmarkingProfileName', 'jobConfigFile', 'allowPreemptible', 'computingDevice',
+            'enableHyperthreading', 'maxvCpu', 'maxGpu', 'minGpu', 'minGpuMemGiB', 'minvCpu', 'minvCpuMemGiB',
+            'supportedCpuArchitectures', 'timeToCostPriorityRatio', 'isResumableWorkload',
+            'isHybridStrategyAllowed', 'isMultiRegionScalingAllowed', 'walltimeHours', 'storageGiB',
+            'isMemoryAutoRetryEnabled', 'storageConnectors'] as Set<String>
+
+    /**
+     * @param processName the process the ext belongs to, named in warnings
+     * @return the configuration, or null when {@code ext} has no resolved benchmarking profile name
+     */
+    static ResourceConfiguration parseExtensionObject(Map ext, String processName) {
         if (!(ext instanceof Map)) return
 
         final benchmarkingProfileName = ext.get("benchmarkingProfileName")
         if (!benchmarkingProfileName) return
+        if (!(benchmarkingProfileName instanceof CharSequence) ||
+                !ResourceConfiguration.isResolvedValue(benchmarkingProfileName)) {
+            log.warn "[FOVUS] Skipping the pre-configuration of process ${processName}: " +
+                     "ext.benchmarkingProfileName is not resolved text"
+            return
+        }
 
-        def resourceConfig = new ResourceConfiguration(benchmarkingProfileName: benchmarkingProfileName)
+        def resourceConfig = new ResourceConfiguration(benchmarkingProfileName: benchmarkingProfileName.toString())
         // A JSON job config file is one of the sources a job takes its connectors from, so the
         // payload has to carry those as well; an `ext.storageConnectors` entry below still
         // overrides them, exactly as it does for the job itself.
@@ -255,7 +288,12 @@ class FovusTraceObserver implements TraceObserverV2 {
                     }
                     break
                 case "timeToCostPriorityRatio":
-                    resourceConfig.timeToCostPriorityRatio = value
+                    if (value instanceof CharSequence) {
+                        resourceConfig.timeToCostPriorityRatio = value.toString()
+                    } else {
+                        log.warn "[FOVUS] Ignoring ext.timeToCostPriorityRatio of process ${processName} " +
+                                 "because it is not text"
+                    }
                     break
                 case "isResumableWorkload":
                     if (value instanceof Boolean) {

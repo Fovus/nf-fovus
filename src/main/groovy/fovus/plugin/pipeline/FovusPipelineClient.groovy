@@ -124,7 +124,15 @@ class FovusPipelineClient {
     void preConfigResources(FovusConfig config, FovusPipeline pipeline, List<ResourceConfiguration> configurations,
                             String nextflowConfig) {
         def jsonGenerator = new JsonGenerator.Options().excludeNulls().build()
-        def configurationsJson = jsonGenerator.toJson(configurations)
+        def resolvedConfigurations = []
+        configurations.eachWithIndex { configuration, index ->
+            if (configuration.hasOnlyResolvedValues()) {
+                resolvedConfigurations << configuration
+            } else {
+                log.warn "[FOVUS] Skipping resource configuration #${index + 1}: it still holds an unresolved Nextflow config closure"
+            }
+        }
+        def configurationsJson = jsonGenerator.toJson(resolvedConfigurations)
 
         def command = [
                 config.getCliPath(),
