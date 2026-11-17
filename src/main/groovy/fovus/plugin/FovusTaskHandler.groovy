@@ -189,12 +189,14 @@ class FovusTaskHandler extends TaskHandler {
         }
 
         task.stdout = outputFile
+        task.stderr = errorFile
 
         task.exitStatus = exitStatus
 
-        if (taskStatus != FovusJobStatus.COMPLETED || taskStatus != FovusTaskStatus.COMPLETED) {
-            task.stderr = errorFile
-
+        // As with Nextflow's own executors, the exit status alone decides whether the task succeeded, so a
+        // process's errorStrategy sees the same result here as anywhere else. The Fovus status only explains
+        // an exit status that is missing.
+        if (exitStatus == Integer.MAX_VALUE) {
             switch (taskStatus) {
                 case FovusJobStatus.FAILED:
                 case FovusTaskStatus.FAILED:
@@ -212,10 +214,10 @@ class FovusTaskHandler extends TaskHandler {
                     task.error = new ProcessException("Job ${jobId} uncomplete")
                     break
             }
-        }
 
-        if (!task.error && exitStatusReader.failure) {
-            task.error = new ProcessException("Unable to read the task results from Fovus storage: ${exitStatusReader.failure.message}")
+            if (!task.error && exitStatusReader.failure) {
+                task.error = new ProcessException("Unable to read the task results from Fovus storage: ${exitStatusReader.failure.message}")
+            }
         }
 
         status = TaskStatus.COMPLETED
