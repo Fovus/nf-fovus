@@ -2,9 +2,18 @@ package fovus.plugin.job
 
 import groovy.json.JsonGenerator
 import groovy.json.JsonSlurper
+import nextflow.processor.TaskConfig
+import nextflow.processor.TaskProcessor
+import nextflow.processor.TaskRun
 import spock.lang.Specification
+import spock.lang.TempDir
+
+import java.nio.file.Path
 
 class FovusJobConfigTest extends Specification {
+
+    @TempDir
+    Path workDir
 
     /** The same generator {@link FovusJobConfig#toJson} uses to write the create-job payload. */
     private static Map payload(FovusJobConfig config) {
@@ -216,5 +225,25 @@ class FovusJobConfigTest extends Specification {
 
         then:
         config.constraints.jobConstraints.allowedRegionList == ['us-east-1', 'us-west-2']
+    }
+
+    def 'a closure ext.allowedRegionList should resolve into the job constraints of a real task'() {
+        given:
+        final jobConfigFile = workDir.resolve('job_config.json')
+        jobConfigFile.text = '''{
+            "environment": {"containerized": {"container": "Docker", "version": "20.10.18", "imagePath": "ubuntu"}},
+            "constraints": {"jobConstraints": {"supportedCpuArchitectures": ["x86-64"], "allowedRegionList": ["eu-west-1"]}, "taskConstraints": {}},
+            "objective": {},
+            "workload": {}
+        }'''
+        final regions = ['us-east-1', 'us-west-2']
+        final task = new TaskRun(name: 'align (1)', workDir: workDir, processor: Stub(TaskProcessor),
+                config: new TaskConfig([ext: [jobConfigFile: jobConfigFile.toString(), allowedRegionList: { regions }]]))
+
+        when:
+        final config = new FovusJobConfig(null, task)
+
+        then:
+        payload(config).constraints.jobConstraints.allowedRegionList == regions
     }
 }
