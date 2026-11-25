@@ -315,6 +315,7 @@ class FovusTraceObserver implements TraceObserverV2 {
                     }
                     break
                 case "allowedRegionList":
+                    if (value == null) break
                     if (value instanceof List && value.every { it instanceof CharSequence }) {
                         if (!value.isEmpty()) {
                             resourceConfig.allowedRegionList = value.collect { it.toString() }

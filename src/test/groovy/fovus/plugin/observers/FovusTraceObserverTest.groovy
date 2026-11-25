@@ -75,6 +75,7 @@ class FovusTraceObserverTest extends Specification {
         'a text value'           | [allowedRegionList: 'us-east-1']
         'an empty list'          | [allowedRegionList: []]
         'a list holding a number'| [allowedRegionList: ['us-east-1', 5]]
+        'a null allowedRegionList'| [allowedRegionList: null]
         'no allowedRegionList'   | [:]
     }
 
