@@ -219,7 +219,11 @@ class FovusTraceObserver implements TraceObserverV2 {
         // A JSON job config file is one of the sources a job takes its connectors from, so the
         // payload has to carry those as well; an `ext.storageConnectors` entry below still
         // overrides them, exactly as it does for the job itself.
-        resourceConfig.storageConnectors = readJobConfigStorageConnectors(ext.get("jobConfigFile"))
+        final jobConfigFromFile = readJobConfigFile(ext.get("jobConfigFile"))
+        resourceConfig.storageConnectors = FovusJobConfig.resolveStorageConnectors(null, jobConfigFromFile?.storageConnectors) ?: null
+        // The region limit follows the same rule: a job config file can set it for the job, and an
+        // `ext.allowedRegionList` entry below overrides it.
+        resourceConfig.allowedRegionList = jobConfigFromFile?.constraints?.jobConstraints?.allowedRegionList ?: null
 
         ext.forEach { key, value ->
             switch (key) {
@@ -356,26 +360,22 @@ class FovusTraceObserver implements TraceObserverV2 {
     }
 
     /**
-     * Read the storage connectors declared in the JSON job config a process points at.
+     * Reads the JSON job config file a process names in `ext.jobConfigFile`, so pre-configuration
+     * can carry the connectors and the region limit that the job itself will use.
      *
-     * The connectors are validated and de-duplicated exactly as they are for a job, so a malformed
-     * name fails the run here rather than at submission time. A file that cannot be read or parsed
-     * is ignored: the job path reports that failure with far better context.
+     * A file that cannot be read or parsed is ignored: the job path reports that failure with far
+     * better context.
      *
-     * @return the connectors, or null when the process names no job config file or none are declared
+     * @return the parsed job config, or null when the process names no file or it cannot be read
      */
-    private static List<String> readJobConfigStorageConnectors(Object jobConfigFilePath) {
+    private static FovusJobConfig readJobConfigFile(Object jobConfigFilePath) {
         if (!jobConfigFilePath) return null
 
-        FovusJobConfig jobConfig
         try {
-            jobConfig = FovusJobConfigBuilder.fromJsonFile(jobConfigFilePath as String)
+            return FovusJobConfigBuilder.fromJsonFile(jobConfigFilePath as String)
         } catch (Exception e) {
-            log.trace "[FOVUS] Cannot read storage connectors from job config file " +
-                      "${jobConfigFilePath}: ${e.message}"
+            log.trace "[FOVUS] Cannot read job config file ${jobConfigFilePath}: ${e.message}"
             return null
         }
-
-        return FovusJobConfig.resolveStorageConnectors(null, jobConfig.storageConnectors) ?: null
     }
 }

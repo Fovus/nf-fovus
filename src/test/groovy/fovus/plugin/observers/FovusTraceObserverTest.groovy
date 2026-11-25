@@ -131,6 +131,27 @@ class FovusTraceObserverTest extends Specification {
         FovusTraceObserver.parseExtensionObject(ext, 'alignReads').storageConnectors == ['from-process']
     }
 
+    def 'parseExtensionObject should carry the allowed regions of a JSON job config file'() {
+        given:
+        def ext = [benchmarkingProfileName: 'global-profile',
+                   jobConfigFile          : jobConfigFile(
+                           '{"constraints": {"jobConstraints": {"allowedRegionList": ["us-east-1", "us-west-2"]}}}')]
+
+        expect:
+        FovusTraceObserver.parseExtensionObject(ext, 'alignReads').allowedRegionList == ['us-east-1', 'us-west-2']
+    }
+
+    def 'parseExtensionObject should let ext.allowedRegionList override the JSON job config file'() {
+        given:
+        def ext = [benchmarkingProfileName: 'global-profile',
+                   jobConfigFile          : jobConfigFile(
+                           '{"constraints": {"jobConstraints": {"allowedRegionList": ["us-east-1"]}}}'),
+                   allowedRegionList      : ['eu-west-1']]
+
+        expect:
+        FovusTraceObserver.parseExtensionObject(ext, 'alignReads').allowedRegionList == ['eu-west-1']
+    }
+
     def 'parseExtensionObject should ignore a missing JSON job config file'() {
         given:
         def ext = [benchmarkingProfileName: 'global-profile', jobConfigFile: '/no/such/job-config.json']
