@@ -197,7 +197,7 @@ class FovusTraceObserver implements TraceObserverV2 {
             'enableHyperthreading', 'maxvCpu', 'maxGpu', 'minGpu', 'minGpuMemGiB', 'minvCpu', 'minvCpuMemGiB',
             'supportedCpuArchitectures', 'timeToCostPriorityRatio', 'isResumableWorkload',
             'isHybridStrategyAllowed', 'isMultiRegionScalingAllowed', 'walltimeHours', 'storageGiB',
-            'isMemoryAutoRetryEnabled', 'storageConnectors'] as Set<String>
+            'isMemoryAutoRetryEnabled', 'storageConnectors', 'allowedRegionList'] as Set<String>
 
     /**
      * @param processName the process the ext belongs to, named in warnings
@@ -308,6 +308,16 @@ class FovusTraceObserver implements TraceObserverV2 {
                 case "isMultiRegionScalingAllowed":
                     if (value instanceof Boolean) {
                         resourceConfig.isMultiRegionScalingAllowed = value
+                    }
+                    break
+                case "allowedRegionList":
+                    if (value instanceof List && value.every { it instanceof CharSequence }) {
+                        if (!value.isEmpty()) {
+                            resourceConfig.allowedRegionList = value.collect { it.toString() }
+                        }
+                    } else {
+                        log.warn "[FOVUS] Ignoring ext.allowedRegionList of process ${processName} " +
+                                 "because it is not a list of text"
                     }
                     break
                 case "walltimeHours":
