@@ -145,4 +145,76 @@ class FovusJobConfigTest extends Specification {
         then:
         config.storageConnectors == []
     }
+
+    def 'resolveAllowedRegionList should let the process list win and keep its order'() {
+        expect:
+        FovusJobConfig.resolveAllowedRegionList(['us-west-2', 'us-east-1'], ['eu-west-1'] as List<String>) ==
+                ['us-west-2', 'us-east-1']
+    }
+
+    def 'resolveAllowedRegionList should fall back to the default when the process list is null or empty'() {
+        expect:
+        FovusJobConfig.resolveAllowedRegionList(extensionValue, defaultList) == defaultList
+
+        where:
+        extensionValue | defaultList
+        null           | ['eu-west-1'] as List<String>
+        []             | ['eu-west-1'] as List<String>
+        null           | null
+        []             | null
+    }
+
+    def 'resolveAllowedRegionList should turn GString entries into strings'() {
+        given:
+        def region = 'us-east-1'
+
+        when:
+        def resolved = FovusJobConfig.resolveAllowedRegionList(["${region}"], null)
+
+        then:
+        resolved == ['us-east-1']
+        resolved[0] instanceof String
+    }
+
+    def 'resolveAllowedRegionList should throw naming the attribute for #description'() {
+        when:
+        FovusJobConfig.resolveAllowedRegionList(extensionValue, null)
+
+        then:
+        def error = thrown(Error)
+        error.message.startsWith('[Fovus]')
+        error.message.contains('ext.allowedRegionList')
+
+        where:
+        description              | extensionValue
+        'a string value'         | 'us-east-1'
+        'a list holding a number' | ['us-east-1', 5]
+    }
+
+    def 'the payload should carry allowedRegionList under jobConstraints'() {
+        given:
+        def config = new FovusJobConfig()
+        config.constraints = new Constraints(jobConstraints: new JobConstraints(allowedRegionList: ['us-east-1', 'us-west-2']))
+
+        expect:
+        payload(config).constraints.jobConstraints.allowedRegionList == ['us-east-1', 'us-west-2']
+    }
+
+    def 'the payload should leave out allowedRegionList when it is null'() {
+        given:
+        def config = new FovusJobConfig()
+        config.constraints = new Constraints(jobConstraints: new JobConstraints())
+
+        expect:
+        !payload(config).constraints.jobConstraints.containsKey('allowedRegionList')
+    }
+
+    def 'a job config JSON string should bind allowedRegionList'() {
+        when:
+        def config = FovusJobConfigBuilder.fromJsonString(
+                '{"constraints":{"jobConstraints":{"allowedRegionList":["us-east-1","us-west-2"]}}}')
+
+        then:
+        config.constraints.jobConstraints.allowedRegionList == ['us-east-1', 'us-west-2']
+    }
 }
