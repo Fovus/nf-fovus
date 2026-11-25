@@ -49,6 +49,49 @@ class FovusTraceObserverTest extends Specification {
         configuration.isMultiRegionScalingAllowed == null
     }
 
+    def 'parseExtensionObject should carry the allowed regions of the ext in order'() {
+        given:
+        def region = 'us-west-2'
+
+        when:
+        def configuration = FovusTraceObserver.parseExtensionObject(
+                [benchmarkingProfileName: 'A', allowedRegionList: ['us-east-1', "${region}"]], 'p')
+
+        then:
+        configuration.allowedRegionList == ['us-east-1', 'us-west-2']
+        configuration.allowedRegionList.every { it instanceof String }
+    }
+
+    def 'parseExtensionObject should leave the allowed regions null for #description'() {
+        when:
+        def configuration = FovusTraceObserver.parseExtensionObject(
+                [benchmarkingProfileName: 'A'] + extra, 'p')
+
+        then:
+        configuration.allowedRegionList == null
+
+        where:
+        description              | extra
+        'a text value'           | [allowedRegionList: 'us-east-1']
+        'an empty list'          | [allowedRegionList: []]
+        'a list holding a number'| [allowedRegionList: ['us-east-1', 5]]
+        'a null allowedRegionList'| [allowedRegionList: null]
+        'no allowedRegionList'   | [:]
+    }
+
+    def 'resolveFirstAttemptExt should carry allowed regions computed from params'() {
+        given:
+        def process = processWithExt(
+                [benchmarkingProfileName: 'A', allowedRegionList: { [params.region] }], [region: 'eu-west-1'])
+
+        when:
+        def configuration = FovusTraceObserver.parseExtensionObject(
+                FovusTraceObserver.resolveFirstAttemptExt(process), 'alignReads')
+
+        then:
+        configuration.allowedRegionList == ['eu-west-1']
+    }
+
     def 'parseExtensionObject should return null when the ext has no benchmarking profile'() {
         expect:
         FovusTraceObserver.parseExtensionObject([maxvCpu: 64], 'p') == null
@@ -87,6 +130,27 @@ class FovusTraceObserverTest extends Specification {
 
         expect:
         FovusTraceObserver.parseExtensionObject(ext, 'alignReads').storageConnectors == ['from-process']
+    }
+
+    def 'parseExtensionObject should carry the allowed regions of a JSON job config file'() {
+        given:
+        def ext = [benchmarkingProfileName: 'global-profile',
+                   jobConfigFile          : jobConfigFile(
+                           '{"constraints": {"jobConstraints": {"allowedRegionList": ["us-east-1", "us-west-2"]}}}')]
+
+        expect:
+        FovusTraceObserver.parseExtensionObject(ext, 'alignReads').allowedRegionList == ['us-east-1', 'us-west-2']
+    }
+
+    def 'parseExtensionObject should let ext.allowedRegionList override the JSON job config file'() {
+        given:
+        def ext = [benchmarkingProfileName: 'global-profile',
+                   jobConfigFile          : jobConfigFile(
+                           '{"constraints": {"jobConstraints": {"allowedRegionList": ["us-east-1"]}}}'),
+                   allowedRegionList      : ['eu-west-1']]
+
+        expect:
+        FovusTraceObserver.parseExtensionObject(ext, 'alignReads').allowedRegionList == ['eu-west-1']
     }
 
     def 'parseExtensionObject should ignore a missing JSON job config file'() {

@@ -223,7 +223,8 @@ class FovusJobConfig {
                         : defaultJobConstraints.isMemoryAutoRetryEnabled,
                 isMemoryCheckpointingEnabled: (extension?.isMemoryCheckpointingEnabled !== null)
                         ? extension.isMemoryCheckpointingEnabled
-                        : defaultJobConstraints.isMemoryCheckpointingEnabled
+                        : defaultJobConstraints.isMemoryCheckpointingEnabled,
+                allowedRegionList: resolveAllowedRegionList(extension?.allowedRegionList, defaultJobConstraints.allowedRegionList)
         )
     }
 
@@ -439,6 +440,23 @@ class FovusJobConfig {
     }
 
     /**
+     * Region names are not checked here; the CLI checks them against the cost center. A value that
+     * is set but unusable fails the job rather than letting it run in every region.
+     */
+    static List<String> resolveAllowedRegionList(Object extensionValue, List<String> defaultList) {
+        if (extensionValue == null) {
+            return defaultList
+        }
+        if (!(extensionValue instanceof List) || (extensionValue as List).any { !(it instanceof CharSequence) }) {
+            throw new Error("[Fovus] ext.allowedRegionList must be a list of region name strings")
+        }
+        if ((extensionValue as List).isEmpty()) {
+            return defaultList
+        }
+        return (extensionValue as List).collect { it.toString() } as List<String>
+    }
+
+    /**
      * Check the name shape of every storage connector and fail fast on the first offending entry.
      */
     protected static List<String> validateStorageConnectors(List connectors) {
@@ -541,6 +559,7 @@ class JobConstraints {
     boolean isSubjectToLicenseAvailability = false
     boolean isMemoryAutoRetryEnabled = false
     boolean isMemoryCheckpointingEnabled = false
+    List<String> allowedRegionList
 }
 
 @Canonical

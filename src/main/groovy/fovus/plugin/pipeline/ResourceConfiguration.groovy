@@ -25,6 +25,7 @@ class ResourceConfiguration {
     Boolean isResumableWorkload
     Boolean isHybridStrategyAllowed
     Boolean isMultiRegionScalingAllowed
+    List<String> allowedRegionList
     Number walltimeHours
     Number storageGiB
     Boolean isMemoryAutoRetryEnabled
